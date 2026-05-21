@@ -1,0 +1,41 @@
+[project]
+name = "receipt-tracker"
+version = "1.0.0"
+description = "FastAPI receipt OCR tracker using local Ollama LLM"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.104,<1.0",
+    "uvicorn[standard]>=0.24,<1.0",
+    "python-multipart>=0.0.6",
+    "pillow>=10.1",
+    "pillow-heif>=0.13",
+    "pandas>=2.1",
+    "openpyxl>=3.1",
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.1",
+    "ollama>=0.1.6",
+    "watchdog>=3.0",
+    "beautifulsoup4>=4.12",
+    "google-auth>=2.27",
+    "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.117",
+    "weasyprint>=60",
+    "opencv-python-headless>=4.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"

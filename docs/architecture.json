@@ -1,0 +1,260 @@
+{
+  "name": "receipt-tracker",
+  "tagline": "FastAPI receipt OCR + Gmail ingest + statement reconciliation",
+  "generated_at": "2026-05-15",
+  "stack": [
+    "Python 3.9", "FastAPI", "Uvicorn", "SQLite",
+    "Ollama (vision + text LLMs)", "Apple Vision (pyobjc)",
+    "Pillow", "OpenCV", "pandas", "openpyxl",
+    "Gmail API (google-auth-oauthlib)", "WeasyPrint",
+    "Vanilla JS + HTML + CSS"
+  ],
+  "entry_point": {
+    "file": "src/main.py",
+    "purpose": "FastAPI app: lifespan + router registration only"
+  },
+  "config": {
+    "file": "src/config.py",
+    "source": ".env (pydantic-settings)",
+    "key_settings": [
+      { "name": "OCR_BACKEND", "default": "ollama_vision", "choices": ["ollama_vision", "apple_vision"] },
+      { "name": "OLLAMA_MODEL", "default": "glm-ocr:latest", "note": "vision model when backend=ollama_vision" },
+      { "name": "OCR_TEXT_MODEL", "default": "llama3.2:3b", "note": "structuring LLM when backend=apple_vision" },
+      { "name": "OCR_MAX_MODEL_GB", "default": 6.0, "note": "safety cap to prevent loading huge models" },
+      { "name": "GMAIL_QUERY", "default": "from:(noreply@uber.com OR receipts@uber.com)" },
+      { "name": "GMAIL_PROCESSED_LABEL", "default": "rt-processed" }
+    ]
+  },
+  "layers": [
+    {
+      "id": "frontend",
+      "title": "Frontend (single-page app)",
+      "files": [
+        { "path": "static/index.html", "role": "shell + tables + modals" },
+        { "path": "static/css/app.css", "role": "stylesheet, no framework" },
+        { "path": "static/js/app.js", "role": "all client logic — uploads, table, lightbox, bbox editor, Gmail flow" }
+      ],
+      "notes": "No build step. Cache-busters on bundles (?v=N) bumped on each release."
+    },
+    {
+      "id": "routers",
+      "title": "Routers (FastAPI)",
+      "files": [
+        { "path": "src/routers/receipts.py", "purpose": "core receipt CRUD, OCR pipeline, dedup, backfill" },
+        { "path": "src/routers/statements.py", "purpose": "CSV statement upload + listing" },
+        { "path": "src/routers/uber.py", "purpose": "Uber CSV bulk import" },
+        { "path": "src/routers/gmail.py", "purpose": "Gmail OAuth + sync + render" },
+        { "path": "src/routers/matches.py", "purpose": "matching engine + stats" },
+        { "path": "src/routers/reports.py", "purpose": "Excel reports + simple HTML report" },
+        { "path": "src/routers/preview.py", "purpose": "serve uploaded files / generated previews" },
+        { "path": "src/routers/fx.py", "purpose": "FX rates lookup" },
+        { "path": "src/routers/watch.py", "purpose": "watch-folder status" }
+      ]
+    },
+    {
+      "id": "services",
+      "title": "Services (business logic)",
+      "files": [
+        { "path": "src/services/llm_processor.py", "purpose": "OCR orchestration: model picker, segmenter call, vision-or-apple-vision branch, normalisation, post-process fallbacks" },
+        { "path": "src/services/apple_vision_ocr.py", "purpose": "pyobjc wrapper around VNRecognizeTextRequest" },
+        { "path": "src/services/text_to_receipt.py", "purpose": "structure raw OCR text → metadata JSON via small Ollama text model" },
+        { "path": "src/services/receipt_segmenter.py", "purpose": "OpenCV-based multi-receipt splitter (Otsu + fixed-threshold)" },
+        { "path": "src/services/uber_csv.py", "purpose": "parse Uber trip-history CSV → receipt rows" },
+        { "path": "src/services/gmail_ingest.py", "purpose": "OAuth, fetch matching emails, attach PDFs to existing rides" },
+        { "path": "src/services/receipt_pdf.py", "purpose": "WeasyPrint HTML→PDF for Gmail receipt rendering" },
+        { "path": "src/services/statement_parser.py", "purpose": "CSV parsing for corporate card statements" },
+        { "path": "src/services/matching_engine.py", "purpose": "fuzzy receipt↔statement match scoring" },
+        { "path": "src/services/report_generator.py", "purpose": "Excel report writer (openpyxl)" },
+        { "path": "src/services/fx_fetcher.py", "purpose": "FX rates via openexchangerates with sqlite cache" },
+        { "path": "src/services/folder_watcher.py", "purpose": "watch a folder and auto-import new files" }
+      ]
+    },
+    {
+      "id": "db",
+      "title": "Persistence",
+      "files": [
+        { "path": "src/db/database.py", "purpose": "sqlite3 helpers; schema bootstrap" }
+      ],
+      "tables": [
+        {
+          "name": "receipts",
+          "columns": ["id", "filename", "filepath", "metadata (JSON)", "description", "match_status", "expense_type", "created_at"],
+          "notes": "metadata is the LLM-extracted JSON (vendor, date, total_amount, currency, country, city, items, …)"
+        },
+        {
+          "name": "statements",
+          "columns": ["id", "filename", "filepath", "transactions (JSON)", "uploaded_at"]
+        },
+        {
+          "name": "matches",
+          "columns": ["id", "receipt_id (FK)", "statement_id (FK)", "transaction_data (JSON)", "match_score", "matched_at"]
+        },
+        {
+          "name": "expense_reports",
+          "columns": ["id", "name", "report_type", "target_currency", "period_start", "period_end", "generated_at"]
+        },
+        {
+          "name": "fx_rates",
+          "columns": ["id", "date", "from_currency", "to_currency", "rate"],
+          "notes": "UNIQUE(date, from_currency, to_currency)"
+        }
+      ]
+    },
+    {
+      "id": "schemas",
+      "title": "Pydantic request / response models",
+      "files": [
+        { "path": "src/schemas/receipts.py" },
+        { "path": "src/schemas/reports.py" }
+      ]
+    },
+    {
+      "id": "tests",
+      "title": "Tests (pytest)",
+      "files": [
+        { "path": "tests/test_llm_processor.py", "note": "model picker safety, normalisation, post-process fallbacks (currency, country, date, total, category)" },
+        { "path": "tests/test_receipt_segmenter.py", "note": "segmenter + rotate endpoint" },
+        { "path": "tests/test_text_to_receipt.py" },
+        { "path": "tests/test_apple_vision_ocr.py" },
+        { "path": "tests/test_uber_csv.py" },
+        { "path": "tests/test_gmail_parse.py" },
+        { "path": "tests/test_cross_source_dedup.py" },
+        { "path": "tests/test_matching_engine.py" },
+        { "path": "tests/test_statement_parser.py" },
+        { "path": "tests/test_fx_fetcher.py" },
+        { "path": "tests/test_receipt_pdf.py" }
+      ],
+      "current_total": 170
+    }
+  ],
+  "endpoints": [
+    { "method": "POST", "path": "/api/upload/receipt/preview", "router": "receipts", "purpose": "Upload + segmenter (no OCR). Returns filename + bboxes for the editor." },
+    { "method": "POST", "path": "/api/upload/receipt/commit", "router": "receipts", "purpose": "OCR the saved file using user-confirmed bboxes; persist rows." },
+    { "method": "POST", "path": "/api/upload/receipt", "router": "receipts", "purpose": "One-shot single-file upload (legacy path)." },
+    { "method": "GET",  "path": "/api/receipts", "router": "receipts", "purpose": "List all receipts." },
+    { "method": "DELETE", "path": "/api/receipts/{id}", "router": "receipts" },
+    { "method": "POST", "path": "/api/receipts/{id}/rotate", "router": "receipts", "purpose": "Rotate stored image ±90/180/270°." },
+    { "method": "POST", "path": "/api/receipts/{id}/reocr", "router": "receipts" },
+    { "method": "POST", "path": "/api/receipts/dedupe", "router": "receipts" },
+    { "method": "POST", "path": "/api/receipts/dedupe-uber", "router": "receipts" },
+    { "method": "POST", "path": "/api/receipts/backfill-country", "router": "receipts", "purpose": "One-shot: infer country from state/city/address for rows missing it." },
+    { "method": "POST", "path": "/api/receipts/strip-times", "router": "receipts", "purpose": "One-shot: chop clock-time tails from date fields." },
+    { "method": "POST", "path": "/api/receipts/bulk-delete", "router": "receipts" },
+    { "method": "PATCH", "path": "/api/receipts/{id}", "router": "receipts" },
+    { "method": "PATCH", "path": "/api/receipts/{id}/expense-type", "router": "receipts" },
+    { "method": "POST", "path": "/api/upload/statement", "router": "statements" },
+    { "method": "GET",  "path": "/api/statements", "router": "statements" },
+    { "method": "DELETE", "path": "/api/statements/{id}", "router": "statements" },
+    { "method": "POST", "path": "/api/upload/uber-csv", "router": "uber" },
+    { "method": "GET",  "path": "/api/gmail/status", "router": "gmail" },
+    { "method": "POST", "path": "/api/gmail/credentials", "router": "gmail" },
+    { "method": "POST", "path": "/api/gmail/auth/start", "router": "gmail" },
+    { "method": "POST", "path": "/api/gmail/sync", "router": "gmail" },
+    { "method": "GET",  "path": "/api/gmail/debug", "router": "gmail" },
+    { "method": "POST", "path": "/api/gmail/render-pdfs", "router": "gmail" },
+    { "method": "POST", "path": "/api/gmail/reset", "router": "gmail" },
+    { "method": "POST", "path": "/api/match", "router": "matches" },
+    { "method": "GET",  "path": "/api/matches", "router": "matches" },
+    { "method": "GET",  "path": "/api/stats", "router": "matches" },
+    { "method": "GET",  "path": "/api/report", "router": "reports" },
+    { "method": "POST", "path": "/api/reports/expense", "router": "reports" },
+    { "method": "GET",  "path": "/api/reports/expense", "router": "reports" },
+    { "method": "GET",  "path": "/api/preview/{filename}", "router": "preview" },
+    { "method": "GET",  "path": "/api/fx/rates", "router": "fx" },
+    { "method": "GET",  "path": "/api/watch-folder/status", "router": "watch" }
+  ],
+  "data_flows": [
+    {
+      "id": "upload-image",
+      "name": "Single image upload → receipt row",
+      "steps": [
+        { "from": "browser", "to": "POST /api/upload/receipt/preview", "note": "multipart file" },
+        { "from": "receipts router", "to": "receipt_segmenter", "note": "split multi-receipt photos" },
+        { "from": "browser", "to": "bbox editor modal (if >1 region)" },
+        { "from": "browser", "to": "POST /api/upload/receipt/commit", "note": "confirmed bboxes" },
+        { "from": "receipts router", "to": "llm_processor.process_with_segments" },
+        { "from": "llm_processor", "to": "OCR backend", "branch": ["ollama_vision (vision LLM)", "apple_vision → text_to_receipt (Ollama text LLM)"] },
+        { "from": "llm_processor", "to": "_post_process_with_ocr_text", "note": "date / currency / total / category fallbacks" },
+        { "from": "llm_processor", "to": "_normalize_one_receipt", "note": "ISO-2 country, currency refinement, time-stripping, item clean" },
+        { "from": "receipts router", "to": "db.create_receipt" }
+      ]
+    },
+    {
+      "id": "upload-bulk",
+      "name": "Bulk upload",
+      "steps": [
+        { "from": "browser", "to": "JS queue runner", "note": "iterate N files" },
+        { "from": "JS", "to": "POST /api/upload/receipt/preview", "loop": true },
+        { "from": "JS", "to": "POST /api/upload/receipt/commit", "note": "auto-commit (skips bbox editor)" }
+      ]
+    },
+    {
+      "id": "uber-csv",
+      "name": "Uber CSV import",
+      "steps": [
+        { "from": "browser", "to": "POST /api/upload/uber-csv" },
+        { "from": "uber router", "to": "uber_csv.parse_uber_csv" },
+        { "from": "uber router", "to": "db.create_receipt", "note": "one row per ride, dedup against existing" }
+      ]
+    },
+    {
+      "id": "gmail-attach",
+      "name": "Gmail sync → attach PDFs to existing Uber rides",
+      "steps": [
+        { "from": "browser", "to": "POST /api/gmail/auth/start", "note": "one-time OAuth dance" },
+        { "from": "browser", "to": "POST /api/gmail/sync" },
+        { "from": "gmail router", "to": "gmail_ingest.sync" },
+        { "from": "gmail_ingest", "to": "Gmail API", "note": "list + fetch matching threads" },
+        { "from": "gmail_ingest", "to": "receipt_pdf.render", "note": "HTML email → PDF" },
+        { "from": "gmail_ingest", "to": "db (match-or-attach to existing Uber row by date+amount+currency)" }
+      ]
+    },
+    {
+      "id": "match",
+      "name": "Statement reconciliation",
+      "steps": [
+        { "from": "browser", "to": "POST /api/upload/statement", "note": "CSV" },
+        { "from": "statements router", "to": "statement_parser.parse" },
+        { "from": "browser", "to": "POST /api/match" },
+        { "from": "matches router", "to": "matching_engine.match_all" },
+        { "from": "matching_engine", "to": "db.matches table" }
+      ]
+    }
+  ],
+  "ocr_pipeline_detail": {
+    "model_safety": {
+      "picker": "_pick_model in llm_processor",
+      "rules": [
+        "Configured model must be installed and ≤ OCR_MAX_MODEL_GB",
+        "Fallback only to allowlisted vision families",
+        "Never silently pick a text-only model",
+        "Loud error if Ollama unreachable"
+      ],
+      "allowlist": ["glm-ocr", "llava", "llava-llama3", "llava-phi3", "bakllava", "moondream", "minicpm-v", "qwen2-vl", "qwen2.5-vl", "llama3.2-vision", "gemma3", "gemma4"]
+    },
+    "two_backends": {
+      "ollama_vision": "Whole image → vision LLM → JSON in one call",
+      "apple_vision": "Apple Vision OCR → text → small Ollama text model → JSON (faster, better on printed receipts on macOS)"
+    },
+    "post_process_fallbacks": [
+      "Date: regex scan when LLM emits null",
+      "Currency: explicit token (CAD$, R$, …) wins over LLM guess",
+      "Total: largest amount on a VENTA/TOTAL CAD/Amount Due line beats subtotal/item picks",
+      "Category: keyword inference rescues 'other'",
+      "Country normalisation: full name / subdivision code / city → ISO-2",
+      "Currency refinement: country can override a bare-$ misread (Vancouver $ → CAD)",
+      "Time stripping: '10-Mar-2026 1:44:53p.m.' → '10-Mar-2026'"
+    ]
+  },
+  "frontend_features": [
+    "Side panel: Add Receipt (bulk upload), Monthly Statement, Uber CSV, Uber via Gmail, Watch Folder",
+    "Receipts table: Date, Vendor, Amount, Currency, Country, Location, Category, Description, Status, Type",
+    "Multi-select + bulk delete",
+    "Inline edit modal per row",
+    "Lightbox with rotate-left / rotate-right / download toolbar",
+    "Per-row Re-OCR",
+    "BBox editor for multi-receipt photos (SVG, drag handles)",
+    "Stats cards + month filter",
+    "Gmail card with status / Sync receipts / disclosure for options"
+  ]
+}

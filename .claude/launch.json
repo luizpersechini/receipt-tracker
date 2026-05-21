@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "uvicorn", "src.main:app", "--reload", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "docs",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8766", "--directory", "docs"],
+      "port": 8766
+    }
+  ]
+}

@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Receipt Tracker · Architecture</title>
+<style>
+  :root {
+    --bg: #0e1014;
+    --panel: #161a21;
+    --panel-2: #1d2230;
+    --border: #262c3a;
+    --text: #e7ebf3;
+    --text-2: #a4adbf;
+    --text-3: #6b7488;
+    --accent: #7ea6ff;
+    --accent-2: #5d8cff;
+    --ok: #6ddc8b;
+    --warn: #f5c163;
+    --err: #f08383;
+    --tag-bg: #232936;
+    --shadow: 0 4px 20px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    font-size: 14px; line-height: 1.55;
+    padding: 28px;
+  }
+  h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0 0 12px; color: var(--text); letter-spacing: .02em; text-transform: uppercase; }
+  h3 { font-size: 13px; font-weight: 600; margin: 0 0 6px; color: var(--text); }
+  .tagline { color: var(--text-2); margin: 0 0 24px; }
+  .meta { color: var(--text-3); font-size: 12px; margin-bottom: 28px; }
+  .grid { display: grid; gap: 20px; }
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 900px) { .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+  .stack-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 24px; }
+  .tag {
+    background: var(--tag-bg); color: var(--text-2);
+    border-radius: 999px; padding: 3px 10px; font-size: 12px;
+    border: 1px solid var(--border);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+  th { font-weight: 600; color: var(--text-2); text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: none; }
+  code { font-family: "SF Mono", ui-monospace, monospace; color: var(--accent); font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 4px; font-family: "SF Mono", ui-monospace, monospace; font-size: 11px; font-weight: 600; }
+  .pill.get { background: rgba(126,166,255,.15); color: var(--accent); }
+  .pill.post { background: rgba(109,220,139,.15); color: var(--ok); }
+  .pill.patch { background: rgba(245,193,99,.15); color: var(--warn); }
+  .pill.delete { background: rgba(240,131,131,.15); color: var(--err); }
+  .layer-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .layer-card h3 { margin-bottom: 2px; color: var(--accent); font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; }
+  .layer-card p { margin: 0; color: var(--text-2); font-size: 12px; }
+  .columns { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .flow {
+    background: var(--panel-2);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+  }
+  .flow-step {
+    display: flex; align-items: flex-start; gap: 8px;
+    margin: 6px 0; font-size: 12.5px; color: var(--text-2);
+  }
+  .flow-step .arrow { color: var(--text-3); flex-shrink: 0; }
+  .flow-step .from { color: var(--text); font-weight: 500; }
+  .flow-step .to { color: var(--accent); font-family: "SF Mono", ui-monospace, monospace; }
+  .flow-step .note { color: var(--text-3); font-style: italic; }
+  ul { padding-left: 18px; margin: 6px 0 0; color: var(--text-2); }
+  ul li { margin: 3px 0; font-size: 12.5px; }
+  details summary {
+    cursor: pointer; padding: 4px 0; color: var(--text-2);
+    list-style: none;
+  }
+  details summary::before { content: "▸ "; color: var(--text-3); }
+  details[open] summary::before { content: "▾ "; }
+  details summary:hover { color: var(--text); }
+  .schema-cols { color: var(--text-3); font-family: "SF Mono", ui-monospace, monospace; font-size: 11.5px; }
+  .branch { color: var(--warn); font-family: "SF Mono", ui-monospace, monospace; font-size: 11.5px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 30px 0; }
+  .footnote { color: var(--text-3); font-size: 11px; text-align: center; margin-top: 30px; }
+</style>
+</head>
+<body>
+<h1 id="title">Receipt Tracker · Architecture</h1>
+<p class="tagline" id="tagline">Loading…</p>
+<div class="meta" id="meta"></div>
+
+<div class="stack-tags" id="stack"></div>
+
+<div class="grid cols-2">
+  <div class="panel">
+    <h2>Entry point + config</h2>
+    <div id="entry"></div>
+  </div>
+  <div class="panel">
+    <h2>Layers</h2>
+    <div id="layers"></div>
+  </div>
+</div>
+
+<hr>
+
+<div class="panel">
+  <h2>Endpoints</h2>
+  <table id="endpoints">
+    <thead><tr><th>Method</th><th>Path</th><th>Router</th><th>Purpose</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<hr>
+
+<div class="panel">
+  <h2>Database schema</h2>
+  <div id="tables"></div>
+</div>
+
+<hr>
+
+<div class="panel">
+  <h2>Data flows</h2>
+  <div id="flows"></div>
+</div>
+
+<hr>
+
+<div class="grid cols-2">
+  <div class="panel">
+    <h2>OCR pipeline</h2>
+    <div id="ocr"></div>
+  </div>
+  <div class="panel">
+    <h2>Frontend features</h2>
+    <ul id="frontend"></ul>
+  </div>
+</div>
+
+<hr>
+
+<div class="panel">
+  <h2>Tests</h2>
+  <div id="tests"></div>
+</div>
+
+<p class="footnote">Static visualization — refresh after editing <code>architecture.json</code></p>
+
+<script>
+async function load() {
+  const r = await fetch('architecture.json');
+  const j = await r.json();
+
+  document.getElementById('title').textContent = `${j.name} · Architecture`;
+  document.getElementById('tagline').textContent = j.tagline;
+  document.getElementById('meta').textContent = `Generated ${j.generated_at}`;
+
+  document.getElementById('stack').innerHTML =
+    j.stack.map(s => `<span class="tag">${s}</span>`).join('');
+
+  // Entry + config
+  const cfg = j.config.key_settings.map(s =>
+    `<div class="layer-card">
+      <h3>${s.name}</h3>
+      <p>default <code>${s.default}</code>${s.note ? ' · ' + s.note : ''}${s.choices ? ' · choices: ' + s.choices.join(', ') : ''}</p>
+    </div>`
+  ).join('');
+  document.getElementById('entry').innerHTML = `
+    <div class="layer-card">
+      <h3>${j.entry_point.file}</h3>
+      <p>${j.entry_point.purpose}</p>
+    </div>
+    <div class="layer-card">
+      <h3>${j.config.file}</h3>
+      <p>Loaded from ${j.config.source}</p>
+    </div>
+    <details><summary>Key settings (${j.config.key_settings.length})</summary>${cfg}</details>
+  `;
+
+  // Layers
+  document.getElementById('layers').innerHTML = j.layers.map(L => {
+    const files = L.files.map(f =>
+      `<div class="layer-card"><h3>${f.path}</h3><p>${f.role || f.purpose || f.note || ''}</p></div>`
+    ).join('');
+    return `<details ${L.id === 'routers' || L.id === 'services' ? 'open' : ''}>
+      <summary><strong>${L.title}</strong> (${L.files.length})</summary>
+      ${L.notes ? `<p style="color:var(--text-3);font-size:12px;margin:6px 0 8px">${L.notes}</p>` : ''}
+      ${files}
+    </details>`;
+  }).join('');
+
+  // Endpoints
+  document.querySelector('#endpoints tbody').innerHTML =
+    j.endpoints.map(e =>
+      `<tr>
+        <td><span class="pill ${e.method.toLowerCase()}">${e.method}</span></td>
+        <td><code>${e.path}</code></td>
+        <td style="color:var(--text-2)">${e.router}</td>
+        <td style="color:var(--text-2)">${e.purpose || ''}</td>
+      </tr>`
+    ).join('');
+
+  // Tables
+  const dbLayer = j.layers.find(L => L.id === 'db');
+  document.getElementById('tables').innerHTML = dbLayer.tables.map(t =>
+    `<div class="layer-card">
+      <h3>${t.name}</h3>
+      <p class="schema-cols">${t.columns.join(' · ')}</p>
+      ${t.notes ? `<p style="margin-top:6px">${t.notes}</p>` : ''}
+    </div>`
+  ).join('');
+
+  // Flows
+  document.getElementById('flows').innerHTML = j.data_flows.map(f => {
+    const steps = f.steps.map(s => {
+      const branch = s.branch ? `<div class="branch" style="margin-left:24px">↳ ${s.branch.join('   |   ')}</div>` : '';
+      const noteSpan = s.note ? `<span class="note">— ${s.note}</span>` : '';
+      const loop = s.loop ? ' <span class="note">(loop)</span>' : '';
+      return `<div class="flow-step">
+        <span class="from">${s.from}</span>
+        <span class="arrow">→</span>
+        <span class="to">${s.to}</span>${loop}
+        ${noteSpan}
+      </div>${branch}`;
+    }).join('');
+    return `<div class="flow">
+      <h3>${f.name}</h3>
+      ${steps}
+    </div>`;
+  }).join('');
+
+  // OCR
+  const ocr = j.ocr_pipeline_detail;
+  document.getElementById('ocr').innerHTML = `
+    <h3>Model safety</h3>
+    <ul>${ocr.model_safety.rules.map(r => `<li>${r}</li>`).join('')}</ul>
+    <p style="color:var(--text-3);font-size:12px;margin-top:6px">Allowlist: ${ocr.model_safety.allowlist.map(a => `<code>${a}</code>`).join(' · ')}</p>
+    <h3 style="margin-top:14px">Two backends</h3>
+    <div class="layer-card"><h3>ollama_vision</h3><p>${ocr.two_backends.ollama_vision}</p></div>
+    <div class="layer-card"><h3>apple_vision</h3><p>${ocr.two_backends.apple_vision}</p></div>
+    <h3 style="margin-top:14px">Post-process fallbacks</h3>
+    <ul>${ocr.post_process_fallbacks.map(f => `<li>${f}</li>`).join('')}</ul>
+  `;
+
+  // Frontend
+  document.getElementById('frontend').innerHTML =
+    j.frontend_features.map(f => `<li>${f}</li>`).join('');
+
+  // Tests
+  const t = j.layers.find(L => L.id === 'tests');
+  document.getElementById('tests').innerHTML = `
+    <p style="color:var(--text-2)">${t.current_total} passing across ${t.files.length} files</p>
+    <div class="columns">
+      ${t.files.map(f => `<div class="layer-card"><h3>${f.path}</h3>${f.note ? `<p>${f.note}</p>` : ''}</div>`).join('')}
+    </div>`;
+}
+
+load().catch(e => {
+  document.getElementById('tagline').textContent = 'Error loading architecture.json: ' + e.message;
+});
+</script>
+</body>
+</html>

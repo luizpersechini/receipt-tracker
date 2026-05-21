@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Receipt Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/css/app.css?v=5" />
+  </head>
+  <body>
+    <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
+    <nav class="nav">
+      <div class="nav-logo">
+        <div class="nav-logo-mark">
+          <div class="nav-logo-icon">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#fff"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+              />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+          </div>
+          <div>
+            <div class="nav-logo-text">Receipt Tracker</div>
+            <div class="nav-logo-sub">v1.0 · Local AI</div>
+          </div>
+        </div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-label">Workspace</div>
+        <button class="nav-item active" data-tab="receipts">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <rect x="2" y="3" width="20" height="14" rx="2" />
+            <line x1="8" y1="21" x2="16" y2="21" />
+            <line x1="12" y1="17" x2="12" y2="21" />
+          </svg>
+          <span>Receipts</span>
+          <span class="nav-badge" id="navReceiptCount">0</span>
+        </button>
+        <button class="nav-item" data-tab="reconcile">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+          <span>Reconcile</span>
+        </button>
+        <button class="nav-item" data-tab="statements">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+            />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <span>Statements</span>
+          <span class="nav-badge" id="navStmtCount">0</span>
+        </button>
+      </div>
+      <div class="nav-footer">
+        <div
+          style="
+            font-size: 11px;
+            color: oklch(38% 0.012 255);
+            padding: 0 8px;
+            line-height: 1.6;
+          "
+        >
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              gap: 5px;
+              margin-bottom: 3px;
+            "
+          >
+            <div
+              id="ollamaIndicator"
+              style="
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                background: oklch(65% 0.01 255);
+                flex-shrink: 0;
+              "
+            ></div>
+            <span id="ollamaLabel">Ollama · checking…</span>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- ── MAIN ────────────────────────────────────────────────────────────────── -->
+    <div class="main">
+      <!-- Topbar -->
+      <div class="topbar">
+        <span class="topbar-title" id="topbarTitle">Receipts</span>
+        <div class="month-pick">
+          <select id="monthSelect">
+            <option value="all">All time</option>
+          </select>
+        </div>
+        <div class="topbar-stats">
+          <div class="tstat">
+            <span class="tstat-label">Pending</span
+            ><span class="tstat-val" id="hPending">—</span>
+          </div>
+          <div class="tstat">
+            <span class="tstat-label">Matched</span
+            ><span class="tstat-val" id="hMatched">—</span>
+          </div>
+          <div class="tstat">
+            <span class="tstat-label">Unmatched</span
+            ><span class="tstat-val" id="hUnmatched">—</span>
+          </div>
+          <div class="tstat">
+            <span class="tstat-label">Total</span
+            ><span class="tstat-val" id="hAmount">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Progress strip -->
+      <div class="progress-strip" id="progressStrip">
+        <span class="ps-label"
+          >Reconciliation · <strong id="progressMonth">—</strong></span
+        >
+        <div class="ps-track">
+          <div class="ps-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+        <span class="ps-label" id="progressText">—</span>
+        <div class="ps-chips" id="progressChips"></div>
+      </div>
+
+      <!-- Content -->
+      <div class="content">
+        <!-- Side upload panel -->
+        <div class="side-panel" id="sidePanelEl">
+          <!-- Upload Receipt -->
+          <div class="card">
+            <div class="card-head">Add Receipt</div>
+            <div class="drop-zone" id="receiptDrop">
+              <input
+                type="file"
+                id="receiptFile"
+                accept="image/*,.pdf,.heic,.heif"
+                multiple
+              />
+              <div class="drop-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="16 16 12 12 8 16" />
+                  <line x1="12" y1="12" x2="12" y2="21" />
+                  <path
+                    d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"
+                  />
+                </svg>
+              </div>
+              <div class="drop-hint">
+                <strong>Click or drag</strong> · one or many<br />JPG · PNG ·
+                HEIC · PDF
+              </div>
+              <div class="drop-filename" id="receiptFilename"></div>
+            </div>
+            <label class="field-lbl"
+              >Description
+              <span style="color: var(--text-3); font-weight: 400"
+                >(optional, applied to every file)</span
+              ></label
+            >
+            <textarea
+              class="desc"
+              id="receiptDesc"
+              placeholder="e.g. team lunch, client dinner"
+            ></textarea>
+            <button class="btn btn-primary" id="uploadReceiptBtn" disabled>
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              Upload &amp; Process
+            </button>
+            <div class="status-msg" id="receiptStatus"></div>
+          </div>
+
+          <!-- Upload Statement -->
+          <div class="card">
+            <div class="card-head">Monthly Statement</div>
+            <div class="drop-zone" id="statementDrop">
+              <input type="file" id="statementFile" accept=".csv" />
+              <div class="drop-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+                  />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                </svg>
+              </div>
+              <div class="drop-hint">
+                <strong>Click or drag</strong><br />Corporate card CSV
+              </div>
+              <div class="drop-filename" id="statementFilename"></div>
+            </div>
+            <button class="btn btn-primary" id="uploadStatementBtn" disabled>
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              Upload Statement
+            </button>
+            <div class="status-msg" id="statementStatus"></div>
+          </div>
+
+          <!-- Upload Uber rides -->
+          <div class="card">
+            <div class="card-head">Uber rides</div>
+            <div class="drop-zone" id="uberDrop">
+              <input type="file" id="uberFile" accept=".csv" />
+              <div class="drop-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="7" cy="17" r="2" />
+                  <circle cx="17" cy="17" r="2" />
+                  <path d="M5 17H3v-6l2-5h11l4 5v6h-2" />
+                  <path d="M5 11h14" />
+                </svg>
+              </div>
+              <div class="drop-hint">
+                <strong>Drop your Uber CSV</strong><br />or click to choose
+              </div>
+              <div class="drop-filename" id="uberFilename"></div>
+            </div>
+            <button
+              class="btn btn-primary"
+              id="uploadUberBtn"
+              disabled
+              style="margin-top: 10px"
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              Import rides
+            </button>
+            <div class="status-msg" id="uberStatus"></div>
+            <details class="disclosure">
+              <summary>Options</summary>
+              <label class="opt-check">
+                <input type="checkbox" id="uberBusinessOnly" />
+                Business rides only
+              </label>
+              <div class="opt-dates">
+                <label>From<input type="date" id="uberAfter" /></label>
+                <label>To<input type="date" id="uberBefore" /></label>
+              </div>
+              <button
+                class="btn btn-outline btn-sm"
+                id="dedupeUberBtn"
+                style="width: 100%; margin-top: 8px"
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <rect x="9" y="10" width="6" height="6" rx="1" />
+                </svg>
+                Find duplicates
+              </button>
+            </details>
+          </div>
+
+          <!-- Uber receipts from Gmail (Phase B) -->
+          <div class="card" id="gmailCard" style="display: none">
+            <div
+              class="card-head"
+              style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+              "
+            >
+              Gmail
+              <span class="badge badge-gray" id="gmailStatusBadge">—</span>
+            </div>
+            <div
+              style="
+                font-size: 12px;
+                color: var(--text-3);
+                line-height: 1.5;
+                margin-bottom: 10px;
+              "
+              id="gmailHint"
+            >
+              Sign in to attach PDF receipts to your Uber rides.
+            </div>
+            <button
+              class="btn btn-primary"
+              id="gmailConnectBtn"
+              style="display: none"
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
+                />
+                <polyline points="22,6 12,13 2,6" />
+              </svg>
+              Connect Gmail
+            </button>
+            <div id="gmailConnectedGroup" style="display: none">
+              <button class="btn btn-primary" id="gmailSyncBtn">
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="23 4 23 10 17 10" />
+                  <polyline points="1 20 1 14 7 14" />
+                  <path
+                    d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"
+                  />
+                </svg>
+                Sync receipts
+              </button>
+              <div id="gmailLastSync" class="last-sync"></div>
+              <details class="disclosure">
+                <summary>Options</summary>
+                <label class="opt-check">
+                  <input type="checkbox" id="gmailBusinessOnly" checked />
+                  Business rides only
+                </label>
+                <label class="opt-check">
+                  <input type="checkbox" id="gmailAddNewRows" />
+                  Add new rows for unmatched
+                </label>
+                <div class="opt-dates">
+                  <label>From<input type="date" id="gmailAfter" /></label>
+                  <label>To<input type="date" id="gmailBefore" /></label>
+                </div>
+                <button
+                  class="btn btn-outline btn-sm"
+                  id="gmailReconnectBtn"
+                  style="width: 100%; margin-top: 8px"
+                >
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="23 4 23 10 17 10" />
+                    <polyline points="1 20 1 14 7 14" />
+                    <path
+                      d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"
+                    />
+                  </svg>
+                  Reconnect Gmail
+                </button>
+                <label
+                  class="btn btn-outline btn-sm"
+                  id="gmailReplaceCredsBtn"
+                  style="width: 100%; margin-top: 6px; cursor: pointer"
+                >
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                  Replace credentials.json
+                  <input
+                    type="file"
+                    id="gmailCredsFile"
+                    accept="application/json,.json"
+                    style="display: none"
+                  />
+                </label>
+              </details>
+            </div>
+            <div class="status-msg" id="gmailStatus"></div>
+          </div>
+
+          <!-- Folder scan -->
+          <div class="card" id="watchFolderCard" style="display: none">
+            <div
+              class="card-head"
+              style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+              "
+            >
+              Folder scan
+              <span class="badge badge-gray" id="watchPendingBadge"
+                >0 pending</span
+              >
+            </div>
+            <div
+              style="font-size: 12px; color: var(--text-3); margin-bottom: 8px"
+            >
+              Drop receipts (images or PDFs) into this folder, then scan.
+            </div>
+            <div
+              style="
+                font-size: 11px;
+                color: var(--text-3);
+                margin-bottom: 10px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-family: var(--mono, monospace);
+              "
+              id="watchFolderPath"
+              title=""
+            ></div>
+            <button class="btn btn-primary" id="scanFolderBtn">
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2" />
+                <path d="M3 7h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                <circle cx="12" cy="13" r="2.5" />
+              </svg>
+              Scan folder now
+            </button>
+            <div class="status-msg" id="scanStatus"></div>
+            <div id="watchLogList" style="margin-top: 10px"></div>
+          </div>
+        </div>
+
+        <!-- Tab panels -->
+        <div class="main-panel">
+          <!-- ══ Receipts ══ -->
+          <div id="tab-receipts">
+            <div class="card">
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width: 32px">
+                        <input
+                          type="checkbox"
+                          id="selectAllReceipts"
+                          title="Select all on this page"
+                        />
+                      </th>
+                      <th style="width: 46px"></th>
+                      <th>Date</th>
+                      <th>Vendor</th>
+                      <th>Amount</th>
+                      <th>Currency</th>
+                      <th>Country</th>
+                      <th>Location</th>
+                      <th>Category</th>
+                      <th>Description</th>
+                      <th>Status</th>
+                      <th>Type</th>
+                      <th style="width: 40px"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="receiptsTbody">
+                    <tr class="empty">
+                      <td colspan="12">
+                        <div class="empty-state">
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path
+                              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+                            />
+                            <polyline points="14 2 14 8 20 8" />
+                            <line x1="16" y1="13" x2="8" y2="13" />
+                            <line x1="16" y1="17" x2="8" y2="17" />
+                          </svg>
+                          <h3>No receipts yet</h3>
+                          <p>
+                            Upload a receipt image or PDF<br />to get started
+                            with AI extraction.
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- ══ Reconcile ══ -->
+          <div id="tab-reconcile" style="display: none">
+            <div class="reconcile-header">
+              <button class="btn btn-green" id="matchBtn">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                </svg>
+                Run Matching
+              </button>
+              <span
+                style="font-size: 13px; color: var(--text-2)"
+                id="matchMsg"
+              ></span>
+            </div>
+
+            <!-- Report generator -->
+            <div class="report-panel">
+              <div class="report-field">
+                <label>Report Type</label>
+                <select id="reportType">
+                  <option value="all">All Receipts</option>
+                  <option value="corp_card">Corp Card</option>
+                  <option value="reimbursement">Reimbursement</option>
+                </select>
+              </div>
+              <div class="report-field">
+                <label>From</label>
+                <input type="date" id="reportFrom" />
+              </div>
+              <div class="report-field">
+                <label>To</label>
+                <input type="date" id="reportTo" />
+              </div>
+              <div class="report-field">
+                <label>Currency</label>
+                <select id="reportCurrency">
+                  <option value="BRL">BRL</option>
+                </select>
+                <div class="fx-line" id="fxRatesLine"></div>
+              </div>
+              <div class="report-field" style="justify-content: flex-end">
+                <button class="btn btn-outline" id="reportBtn">
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  Export Report
+                </button>
+              </div>
+            </div>
+
+            <div id="reconcileContent">
+              <div class="alert alert-gray">
+                Upload a statement and click <strong>Run Matching</strong> to
+                reconcile receipts.
+              </div>
+            </div>
+          </div>
+
+          <!-- ══ Statements ══ -->
+          <div id="tab-statements" style="display: none">
+            <div class="card">
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>File</th>
+                      <th>Transactions</th>
+                      <th>Uploaded</th>
+                      <th style="width: 60px"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="statementsTbody">
+                    <tr class="empty">
+                      <td colspan="5">
+                        <div class="empty-state">
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path
+                              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+                            />
+                            <polyline points="14 2 14 8 20 8" />
+                          </svg>
+                          <h3>No statements yet</h3>
+                          <p>
+                            Upload a corporate card CSV<br />to begin
+                            reconciliation.
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── AI PROCESSING MODAL ─────────────────────────────────────────────────── -->
+    <div class="modal-overlay" id="aiModal">
+      <div class="modal-box">
+        <div class="modal-title" id="aiModalTitle">Processing Receipt</div>
+        <div class="modal-sub" id="aiModalSub">
+          AI is extracting data from your image…
+        </div>
+        <div class="ai-steps">
+          <div class="ai-step" id="aiStep0">
+            <div class="ai-step-icon">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="16 16 12 12 8 16" />
+                <line x1="12" y1="12" x2="12" y2="21" />
+                <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
+              </svg>
+            </div>
+            <div class="ai-step-body">
+              <div class="ai-step-label">Uploading image</div>
+              <div class="ai-step-detail" id="aiStep0Detail">
+                Preparing file…
+              </div>
+            </div>
+          </div>
+          <div class="ai-step" id="aiStep1">
+            <div class="ai-step-icon">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 8v4l3 3" />
+              </svg>
+            </div>
+            <div class="ai-step-body">
+              <div class="ai-step-label">OCR &amp; AI extraction</div>
+              <div class="ai-step-detail" id="aiStep1Detail">Waiting…</div>
+            </div>
+          </div>
+          <div class="ai-step" id="aiStep2">
+            <div class="ai-step-icon">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="9 11 12 14 22 4" />
+                <path
+                  d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"
+                />
+              </svg>
+            </div>
+            <div class="ai-step-body">
+              <div class="ai-step-label">Parsing &amp; saving</div>
+              <div class="ai-step-detail" id="aiStep2Detail">Waiting…</div>
+            </div>
+          </div>
+        </div>
+        <div class="ai-result" id="aiResult">
+          <div class="ai-result-row">
+            <span class="ai-result-key">Vendor</span
+            ><span class="ai-result-value" id="arVendor">—</span>
+          </div>
+          <div class="ai-result-row">
+            <span class="ai-result-key">Date</span
+            ><span class="ai-result-value" id="arDate">—</span>
+          </div>
+          <div class="ai-result-row">
+            <span class="ai-result-key">Amount</span
+            ><span class="ai-result-value" id="arAmount">—</span>
+          </div>
+          <div class="ai-result-row">
+            <span class="ai-result-key">Category</span
+            ><span class="ai-result-value" id="arCat">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── BULK ACTION BAR (appears when ≥1 receipt selected) ─────────────────── -->
+    <!-- Critical positioning is inlined so the bar stays glued to the bottom-
+     centre even if the stylesheet failed to load or is cached stale. -->
+    <div
+      id="bulkBar"
+      class="bulk-bar"
+      style="
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        z-index: 200;
+        background: #fff;
+        border: 1px solid #e4e6ea;
+        border-radius: 999px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.14);
+        padding: 8px 14px;
+        align-items: center;
+        gap: 10px;
+      "
+    >
+      <span
+        class="bulk-count"
+        id="bulkCount"
+        style="
+          font-size: 13px;
+          font-weight: 600;
+          padding-right: 12px;
+          border-right: 1px solid #e4e6ea;
+        "
+        >0 selected</span
+      >
+      <button class="btn btn-outline btn-sm" id="bulkClearBtn">Clear</button>
+      <button class="btn btn-ghost btn-sm" id="bulkDeleteBtn">
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+          <path d="M10 11v6" />
+          <path d="M14 11v6" />
+          <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+        </svg>
+        Delete selected
+      </button>
+    </div>
+
+    <!-- ── BBOX EDITOR MODAL (review segmentation before OCR) ──────────────────── -->
+    <div class="modal-overlay" id="bboxModal">
+      <div class="modal-box bbox-box">
+        <div class="modal-title">Review receipts</div>
+        <div class="modal-sub" id="bboxSub">
+          Drag boxes to adjust, drag corners to resize, × to delete, Add to draw
+          a new one.
+        </div>
+
+        <div class="bbox-canvas-wrap" id="bboxCanvasWrap">
+          <img id="bboxImg" alt="Upload preview" />
+          <svg id="bboxSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+
+        <div class="bbox-actions">
+          <span class="bbox-count" id="bboxCount">0 boxes</span>
+          <button class="btn btn-outline btn-sm" id="bboxAddBtn">
+            + Add box
+          </button>
+          <button class="btn btn-outline btn-sm" id="bboxResetBtn">
+            Reset to auto
+          </button>
+          <span style="flex: 1"></span>
+          <button class="btn btn-outline" id="bboxCancelBtn">Cancel</button>
+          <button
+            class="btn btn-primary"
+            id="bboxCommitBtn"
+            style="width: auto; margin: 0"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            Run OCR
+          </button>
+        </div>
+        <div class="status-msg" id="bboxStatus"></div>
+      </div>
+    </div>
+
+    <!-- ── EDIT RECEIPT MODAL ──────────────────────────────────────────────────── -->
+    <div class="modal-overlay" id="editModal">
+      <div class="modal-box" style="width: 520px; max-width: 92vw">
+        <div class="modal-title">Edit Receipt</div>
+        <div class="modal-sub" id="editModalSub">—</div>
+
+        <div class="edit-grid">
+          <label class="full"
+            >Vendor
+            <input type="text" id="editVendor" autocomplete="off" />
+          </label>
+
+          <label
+            >Date
+            <input type="date" id="editDate" />
+          </label>
+          <label
+            >Category
+            <select id="editCategory">
+              <option value="meals">Meals</option>
+              <option value="travel">Travel</option>
+              <option value="transportation">Transportation</option>
+              <option value="lodging">Lodging</option>
+              <option value="office_supplies">Office Supplies</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+
+          <label
+            >Amount
+            <input type="number" step="0.01" min="0" id="editAmount" />
+          </label>
+          <label
+            >Currency
+            <input
+              type="text"
+              id="editCurrency"
+              maxlength="3"
+              placeholder="USD"
+              style="text-transform: uppercase"
+            />
+          </label>
+
+          <label
+            >City
+            <input type="text" id="editCity" autocomplete="off" />
+          </label>
+          <label
+            >State / Region
+            <input type="text" id="editState" autocomplete="off" />
+          </label>
+
+          <label
+            >Country (ISO-2)
+            <input
+              type="text"
+              id="editCountry"
+              maxlength="2"
+              placeholder="CA"
+              style="text-transform: uppercase"
+            />
+          </label>
+          <label
+            >Expense Type
+            <select id="editExpenseType">
+              <option value="corp_card">Corp Card</option>
+              <option value="reimbursement">Reimbursement</option>
+            </select>
+          </label>
+
+          <label class="full"
+            >Description
+            <textarea id="editDescription" rows="2"></textarea>
+          </label>
+        </div>
+
+        <div class="edit-actions">
+          <button class="btn btn-outline" id="editCancelBtn">Cancel</button>
+          <button
+            class="btn btn-primary"
+            id="editSaveBtn"
+            style="width: auto; margin-top: 0"
+          >
+            Save changes
+          </button>
+        </div>
+        <div class="status-msg" id="editStatus"></div>
+      </div>
+    </div>
+
+    <!-- ── LIGHTBOX ────────────────────────────────────────────────────────────── -->
+    <div id="lightbox" onclick="closeLightbox(event)">
+      <div id="lbToolbar" onclick="event.stopPropagation()">
+        <button class="lb-tool" id="lbRotateLeft" title="Rotate left">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+        </button>
+        <button class="lb-tool" id="lbRotateRight" title="Rotate right">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" />
+          </svg>
+        </button>
+        <button class="lb-tool" id="lbDownload" title="Download">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
+      </div>
+      <button id="lbClose" onclick="closeLightbox()">&#x2715;</button>
+      <div id="lbSpin">
+        <div class="spin"></div>
+        <span style="font-size: 13px">Converting…</span>
+      </div>
+      <img id="lbImg" alt="Receipt" style="display: none" />
+    </div>
+
+    <script src="/static/js/app.js?v=18"></script>
+  </body>
+</html>

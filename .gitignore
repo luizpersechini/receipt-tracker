@@ -1,0 +1,48 @@
+# Environment
+.env
+.env.local
+
+# Data (live database, uploads, generated reports)
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+
+# Backups / stray
+*.bak
+*.orig
+
+# Claude Code local state
+.claude/settings.local.json
+
+# OAuth secrets (already covered by data/, but listed explicitly so they
+# don't get committed if someone moves the files outside data/)
+credentials.json
+token.json
+*credentials*.json
+*token*.json
