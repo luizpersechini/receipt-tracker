@@ -32,10 +32,15 @@ Thumbs.db
 *.swo
 *~
 .idea/
+.vscode/
 
 # Backups / stray
 *.bak
 *.orig
+
+# Local scratch / sample receipt photos kept in the repo root for manual
+# testing (not part of the codebase)
+/recibos teste.jpg
 
 # Claude Code local state
 .claude/settings.local.json
