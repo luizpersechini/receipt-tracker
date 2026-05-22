@@ -65,6 +65,15 @@ URL="http://localhost:\${PORT}/"
 PY="/usr/bin/python3"
 LOG="\$PROJECT/data/app_launcher.log"
 
+# Finder/LaunchServices may start this app under x86_64 (Rosetta). The
+# installed Python packages are built for the native arch, so force the
+# matching slice of the universal python3 binary or imports like
+# pydantic_core fail with an "incompatible architecture" error.
+ARCH_PREFIX=""
+if [ "\$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+  ARCH_PREFIX="arch -arm64"
+fi
+
 cd "\$PROJECT" 2>/dev/null || {
   osascript -e 'display alert "Receipt Tracker" message "Project folder not found:\n'"\$PROJECT"'"'
   exit 1
@@ -84,7 +93,7 @@ if curl -sf "\$URL" -o /dev/null 2>&1; then
 fi
 
 mkdir -p "\$PROJECT/data"
-"\$PY" -m uvicorn src.main:app --host 127.0.0.1 --port "\$PORT" >"\$LOG" 2>&1 &
+\$ARCH_PREFIX "\$PY" -m uvicorn src.main:app --host 127.0.0.1 --port "\$PORT" >"\$LOG" 2>&1 &
 SERVER_PID=\$!
 # When this app quits (Dock → Quit) or is interrupted, stop the server too.
 trap 'kill \$SERVER_PID 2>/dev/null' EXIT INT TERM
