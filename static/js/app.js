@@ -958,6 +958,10 @@ const Reconcile = (() => {
     txns: [], // working copy from /statements/{id}/transactions
     receipts: [], // all receipts (with `matched` flag derived locally)
     showMatched: false,
+    // Default: hide matched transactions so the left pane mirrors the
+    // right pane (unmatched-only). Tick the checkbox to bring matched
+    // rows back into view alongside the unmatched ones.
+    showMatchedTxns: false,
     txnFilter: _loadFilter("rt.recon.txnFilter"),
     rcptFilter: _loadFilter("rt.recon.receiptFilter"),
     dragging: null,
@@ -1215,9 +1219,12 @@ const Reconcile = (() => {
 
   function _renderTxnList() {
     const host = $("reconTxnList");
-    const filtered = reconState.txns.filter((t) =>
-      _matchesTxnFilter(t, reconState.txnFilter),
-    );
+    // Two-stage filter: drop matched rows when the toggle is off (lets the
+    // user focus on what still needs pairing), then apply the per-pane
+    // search / date / amount filters.
+    const filtered = reconState.txns
+      .filter((t) => (reconState.showMatchedTxns ? true : !t.match))
+      .filter((t) => _matchesTxnFilter(t, reconState.txnFilter));
     if (!reconState.txns.length) {
       host.innerHTML = `
         <div class="recon-empty">
@@ -1226,6 +1233,21 @@ const Reconcile = (() => {
           <p>Upload a monthly statement on the Statements tab — we'll bring you back here with its transactions parsed.</p>
         </div>`;
       _updateCountChip("reconTxnCount", 0, 0);
+      return;
+    }
+    // Special-case the empty state when EVERYTHING matched and the user is
+    // hiding matched rows — celebrate it instead of saying "no results".
+    if (
+      !filtered.length &&
+      !reconState.showMatchedTxns &&
+      reconState.txns.every((t) => t.match)
+    ) {
+      host.innerHTML = `
+        <div class="recon-empty-small recon-all-matched">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          All transactions are matched.
+        </div>`;
+      _updateCountChip("reconTxnCount", 0, reconState.txns.length);
       return;
     }
     if (!filtered.length) {
@@ -1425,6 +1447,10 @@ const Reconcile = (() => {
     $("reconShowMatched").addEventListener("change", (e) => {
       reconState.showMatched = e.target.checked;
       _renderReceiptList();
+    });
+    $("reconShowMatchedTxns").addEventListener("change", (e) => {
+      reconState.showMatchedTxns = e.target.checked;
+      _renderTxnList();
     });
   }
 
