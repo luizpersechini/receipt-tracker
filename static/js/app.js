@@ -1108,6 +1108,7 @@ const Reconcile = (() => {
         })();
         return {
           id: r.id,
+          filename: r.filename || "",
           vendor: m.vendor_name || "Unknown",
           amount: m.total_amount != null ? parseFloat(m.total_amount) : null,
           currency: m.currency || null,
@@ -1366,7 +1367,7 @@ const Reconcile = (() => {
           <span class="recon-amount">${_fmt.money(r.amount, r.currency)}</span>
         </div>
         <div class="recon-rcpt-bot">
-          <div class="recon-thumb"></div>
+          ${_renderThumb(r)}
           ${r.category ? `<span class="badge badge-gray">${_fmt.cat(r.category)}</span>` : ""}
           ${r.currency ? `<span class="badge badge-accent recon-cur">${_esc(r.currency)}</span>` : ""}
           ${matchedLine}
@@ -1374,6 +1375,45 @@ const Reconcile = (() => {
         </div>
       </div>
     `;
+  }
+
+  // Pick the right thumbnail strategy based on file extension. Mirrors the
+  // logic in `renderReceipts` for consistency — images use the static mount,
+  // HEIC routes through /api/preview/ (server-side conversion), PDFs get a
+  // small badge (browsers can't render PDF as an <img>), uber_ synth rows
+  // get a car-glyph placeholder, and anything else falls back to the
+  // striped CSS placeholder.
+  function _renderThumb(r) {
+    const name = r.filename || "";
+    const ext = name.split(".").pop().toLowerCase();
+    const viewable = ["jpg", "jpeg", "png", "gif", "webp"].includes(ext);
+    const isHeic = ext === "heic" || ext === "heif";
+    const isPdf = name.toLowerCase().endsWith(".pdf");
+    const isUber = name.startsWith("uber_");
+    const enc = encodeURIComponent(name);
+    // Lightbox needs the URL the user can actually see; for HEIC that's the
+    // preview URL (browser can't render the raw file), for everything else
+    // the static mount is fine.
+    const lbSrc = isHeic ? `/api/preview/${enc}` : `/receipts/${name}`;
+    const clickAttr =
+      !isUber && name
+        ? ` onclick="event.stopPropagation(); openLightbox('${lbSrc}', ${r.id})"`
+        : "";
+
+    if (viewable) {
+      return `<div class="recon-thumb"${clickAttr}><img src="/receipts/${name}" loading="lazy" alt="" onerror="this.parentNode.classList.add('recon-thumb-fail'); this.remove()"></div>`;
+    }
+    if (isHeic) {
+      return `<div class="recon-thumb"${clickAttr}><img src="/api/preview/${enc}" loading="lazy" alt="" onerror="this.parentNode.classList.add('recon-thumb-fail'); this.remove()"></div>`;
+    }
+    if (isPdf) {
+      // Open in a new tab via the preview route (Content-Type: application/pdf).
+      return `<a class="recon-thumb recon-thumb-pdf" href="/api/preview/${enc}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open receipt PDF"><span>PDF</span></a>`;
+    }
+    if (isUber) {
+      return `<div class="recon-thumb recon-thumb-uber" title="Imported from Uber CSV"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M5 17H3v-6l2-5h11l4 5v6h-2"/><path d="M5 11h14"/></svg></div>`;
+    }
+    return `<div class="recon-thumb"></div>`;
   }
 
   // ── Bindings ─────────────────────────────────────────────────────────
@@ -1611,6 +1651,7 @@ const Reconcile = (() => {
         })();
         return {
           id: r.id,
+          filename: r.filename || "",
           vendor: m.vendor_name || "Unknown",
           amount: m.total_amount != null ? parseFloat(m.total_amount) : null,
           currency: m.currency || null,
