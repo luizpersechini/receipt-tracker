@@ -7,28 +7,67 @@ when the auto-matcher gets it wrong.
 
 The Reconcile tab is a two-pane workspace. Pick a statement from the
 dropdown at the top; the left pane fills with that statement's parsed
-transactions, the right pane lists every unmatched receipt in your
+transactions, the right pane lists corp-card receipts from your
 library.
 
 ```
-┌─ Statement dropdown ─┐  [⚡ Auto-match]  74 / 98 paired  ☐ Show matched
-├──────────────────────┴────────────┬────────────────────────────────┐
-│  STATEMENT TRANSACTIONS (98)      │  RECEIPTS (UNMATCHED · 59)     │
-│  [🔍 search] [date] [amount]      │  [🔍 search] [date] [amount]   │
-│                                   │                                │
-│  Mar 06  TWIST T1 -CT    CAD 35.92│  Mar 06  Twist Toronto         │
-│                          R$148.31 │           CAD 35.92    [thumb] │
-│  ✓ matched ↔ Twist 35.92          │                                │
-│                                   │  Mar 10  Trees Coffee          │
-│  Mar 09  PARKCHAMP PRK   CAD 29.12│           CAD 13.97    [thumb] │
-│                          R$117.98 │                                │
-│  ↳ drop a receipt here            │                                │
-└───────────────────────────────────┴────────────────────────────────┘
+┌─ Statement dropdown ─┐  [⚡ Auto-match]  75 / 98 paired ·  ☐ Show matched txns  ☐ Show matched receipts
+├──────────────────────┴────────────┬────────────────────────────────────┐
+│  STATEMENT TRANSACTIONS  23 of 98 │  RECEIPTS (UNMATCHED)  47           │
+│  [🔍] [date] [ccy] [amount]       │  [🔍] [date] [ccy] [amount]         │
+│                                   │                                    │
+│  Mar 06  TWIST T1 -CT    CAD 35.92│  Mar 06  Twist Toronto              │
+│                          R$148.31 │     [🖼]  CAD 35.92    CAD          │
+│  ↳ drop a receipt here            │                                    │
+│                                   │  Mar 10  Trees Coffee               │
+│  Mar 09  PARKCHAMP PRK   CAD 29.12│     [🖼]  CAD 13.97    CAD          │
+│                          R$117.98 │                                    │
+│  ↳ drop a receipt here            │                                    │
+└───────────────────────────────────┴────────────────────────────────────┘
 ```
 
 Both panes sort by date ascending so a receipt's natural position
 lines up with the corresponding transaction (makes drag targeting
 easier on long statements).
+
+## Filters & toggles
+
+Each pane has its own filter strip. Both strips share the same
+controls — they apply to their own column only.
+
+- **Search box** — substring match across description / city / vendor
+- **Date range** — From / To, applied to the transaction or receipt date
+- **Currency dropdown** — options are derived from data actually
+  present (no point listing JPY if no row uses it). Receipt-pane uses
+  the receipt's stored currency; txn-pane uses
+  `original_currency` for international rows and `BRL` for domestic.
+- **Amount range** — Min / Max in BRL for txns, native currency for receipts
+
+Filter values persist to `localStorage` under `rt.recon.txnFilter` and
+`rt.recon.receiptFilter`.
+
+Two **header-level toggles** control which rows are even eligible to
+appear:
+
+- ☐ **Show matched transactions** — default off. Hides the
+  transactions you've already paired so the left pane focuses on
+  what still needs work (23 of 98 in the screenshot).
+- ☐ **Show matched receipts** — default off. Hides paired receipts
+  on the right.
+
+The "paired" counter in the header always reflects the whole
+statement, not the filtered subset.
+
+## What's hidden by default (and why)
+
+- **Reimbursement receipts** never appear on the right pane. The
+  Reconcile tab is corp-card only — a reimbursement receipt is a
+  personal-spend item that won't show up on a corp-card statement,
+  so listing them would just add noise. The Receipts tab still
+  shows everything; flip a row's expense type there if you want it
+  considered.
+- **Matched rows on both sides** are hidden by default (see toggles
+  above). Tick the checkboxes to bring them back.
 
 ## Pairing modes
 
@@ -37,15 +76,17 @@ There are three ways a match gets created:
 ### 1. Auto-match
 
 Click the **Auto-match** button. The matching engine
-(`src/services/matching_engine.py`) walks every unmatched receipt and
-scores it against every unmatched transaction using:
+(`src/services/matching_engine.py`) walks every unmatched corp-card
+receipt and scores it against every unmatched transaction using:
 
 ```
 score = amount_score × 0.50  +  date_score × 0.30  +  vendor_score × 0.20
 ```
 
 Best score above 0.5 wins. Matches are persisted with
-`match_kind = "auto"` and the raw score in `match_score`.
+`match_kind = "auto"`, the raw score in `match_score`, and a
+**`transaction_index`** that pins the match to a specific row in the
+statement — without it the reconcile board can't display the match.
 
 **Amount scoring is currency-aware.** For an Itaú statement
 transaction with `raw_data.original_currency = "CAD"` and
@@ -77,10 +118,10 @@ Manual matches have `match_kind = "manual"` and `match_score = null`.
 
 ### 3. Pre-existing
 
-Matches created before the drag-drop board went in still show up — a
+Matches created before the drag-drop board landed still show up — a
 backfill in `git history` repaired their `transaction_index` so they
-render alongside new matches. They display the original
-`match_score` from when auto-match created them.
+render alongside new matches. They display the original `match_score`
+from when auto-match created them.
 
 ## Visual states
 
@@ -98,6 +139,16 @@ render alongside new matches. They display the original
 - _Pending_ — clickable / draggable, grip-dot affordance on hover.
 - _Matched_ — opacity 0.55, dashed border, grayscale thumbnail. Only
   visible when "Show matched receipts" is ticked.
+
+**Receipt thumbnails:** the 40×40 box on each receipt card now shows
+the actual image. Click it to open the lightbox. By file type:
+
+- `jpg / png / webp / gif` → image from `/receipts/<filename>`
+- `heic / heif` → routed through `/api/preview/<filename>` so the
+  server can JPEG-convert on the fly (browsers can't render HEIC)
+- `pdf` → small "PDF" chip that opens the PDF in a new tab
+- Uber-CSV synth rows (no physical file) → car-glyph placeholder
+- Anything else → existing striped CSS placeholder
 
 **International transactions** show the native amount as the
 headline (e.g. `CAD 35.92`) with the BRL bill total underneath
@@ -120,11 +171,12 @@ until the last reference is gone.
 
 Common false-positive patterns:
 
-| Pattern                              | Cause                                                                                                                                     | Fix                                                                    |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Score = 0.5 exactly, amounts way off | Vendor name overlapped (e.g. "Uber" matched any UBER row) but amounts didn't fit any tolerance bracket — matcher fell back to vendor-only | Unlink, look for the actual receipt later                              |
-| Cross-currency pair                  | Pre-fix matches from before currency awareness was added                                                                                  | Run Auto-match again with `POST /api/match` (clears old matches first) |
-| Two receipts on same date+amount     | Genuine ambiguity (e.g. two coffee runs at the same shop)                                                                                 | Unlink the wrong one, drag the right one onto the txn                  |
+| Pattern                                                          | Cause                                                                                                                                     | Fix                                                                                                                              |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Score = 0.5 exactly, amounts way off                             | Vendor name overlapped (e.g. "Uber" matched any UBER row) but amounts didn't fit any tolerance bracket — matcher fell back to vendor-only | Unlink, look for the actual receipt later                                                                                        |
+| Cross-currency pair                                              | Pre-fix matches from before currency awareness was added                                                                                  | Run Auto-match again with `POST /api/match` (clears old matches first)                                                           |
+| Two receipts on same date+amount                                 | Genuine ambiguity (e.g. two coffee runs at the same shop)                                                                                 | Unlink the wrong one, drag the right one onto the txn                                                                            |
+| Reconcile board shows 0 paired but receipts table says N matched | Match rows missing `transaction_index` (legacy data from before that column existed)                                                      | Fixed in c152b85; legacy rows backfilled by a one-shot SQL script. If it recurs, the engine now writes the index on every match. |
 
 The audit-trail approach: run Auto-match, scan the board for any
 matches with `score < 0.7` (visible in the score chip), and verify
@@ -137,11 +189,16 @@ manually. Real matches are usually 0.8+.
   table alone. Since `transaction_index` is stable across re-parses
   (provided the parser produces rows in the same order), manual
   matches survive.
-- **Reimbursement receipts skip auto-match.** Only receipts with
-  `expense_type = "corp_card"` are considered. Flip a row's expense
-  type if you want it included.
+- **Reimbursement receipts skip auto-match AND don't show on the
+  board.** Only receipts with `expense_type = "corp_card"` are
+  considered. Flip a row's expense type on the Receipts tab if you
+  want it included.
 - **Statements you don't want to match against can be deleted** —
   there's no "soft-disable" for a statement. Deletion is destructive
   but the file stays on disk so you can re-upload.
 - **The Auto-match button always clears existing auto-matches first**
   on its targeted statements. Manual matches survive.
+- **The currency dropdown only lists currencies present in data.**
+  After uploading a new statement or adding receipts in a new
+  currency, switch tabs or reload the Reconcile page to refresh the
+  options.

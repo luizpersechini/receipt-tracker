@@ -15,10 +15,13 @@ optional add-ons.
   Itaú-style PT-BR PDF. The PDF parser handles two-column layouts and
   preserves native-currency amounts on international transactions.
 - **Drag-and-drop reconciliation** — Reconcile tab shows transactions
-  (left) and unmatched receipts (right). Drag a receipt onto its
-  transaction to pair them; smart-match ribbon hints at good
+  (left) and unmatched corp-card receipts (right). Drag a receipt
+  onto its transaction to pair them; smart-match ribbon hints at good
   candidates. Currency-aware: a CAD 21.88 Uber receipt lines up with
-  the CAD 21.88 leg of a CAD/BRL international transaction.
+  the CAD 21.88 leg of a CAD/BRL international transaction. Per-pane
+  filters (search, date, amount, currency) and toggles to hide
+  matched rows on either side. Reimbursement receipts are excluded
+  automatically.
 - **Folder-scan inbox** — drop receipts in `data/inbox/` and hit "Scan
   folder now" for batch processing. PDFs are rasterised page-by-page,
   one receipt per page.

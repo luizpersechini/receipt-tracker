@@ -123,6 +123,14 @@ Either kind sets the receipt's `match_status` to `matched`. Unlinking
 via `DELETE /api/matches/{id}` flips it back to `pending` (only if no
 other matches across statements reference it).
 
+**Critical:** every match row must carry a `transaction_index`. The
+reconcile board groups matches by index to render them; rows with
+`transaction_index=NULL` are invisible on the board even though
+their linked receipt shows `matched`. The auto-matcher persists the
+index alongside the score and snapshot; manual matches always have
+it (the drop target supplies it). If you ever see a paired count
+mismatch between the receipts table and the board, look here first.
+
 ## Frontend conventions
 
 - Single `app.js`, no framework, no build. Closures group related
