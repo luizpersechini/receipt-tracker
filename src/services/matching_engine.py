@@ -18,8 +18,17 @@ def match_receipts_to_statements(receipts: list, statements: list) -> dict:
     """
     all_transactions = []
     for statement in statements:
-        for txn in statement.get("transactions", []):
-            all_transactions.append({**txn, "_statement_id": statement["id"]})
+        # Preserve the txn's position inside its parent statement so the
+        # match row can persist `transaction_index`. Without it, the
+        # reconcile board can't anchor a match to a specific row.
+        for txn_index, txn in enumerate(statement.get("transactions", [])):
+            all_transactions.append(
+                {
+                    **txn,
+                    "_statement_id": statement["id"],
+                    "_txn_index": txn_index,
+                }
+            )
 
     matched_receipt_ids: set = set()
     matched_txn_indices: set = set()
@@ -56,11 +65,14 @@ def match_receipts_to_statements(receipts: list, statements: list) -> dict:
                     "receipt_vendor": meta.get("vendor_name", ""),
                     "receipt_amount": meta.get("total_amount"),
                     "statement_id": txn["_statement_id"],
+                    "transaction_index": txn["_txn_index"],
                     "transaction_date": txn.get("date"),
                     "transaction_description": txn.get("description", ""),
                     "transaction_amount": txn.get("amount"),
                     "match_score": round(best_score, 3),
-                    "transaction_data": {k: v for k, v in txn.items() if k != "_statement_id"},
+                    "transaction_data": {
+                        k: v for k, v in txn.items() if k not in ("_statement_id", "_txn_index")
+                    },
                 }
             )
 

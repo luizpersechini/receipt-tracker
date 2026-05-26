@@ -44,12 +44,17 @@ async def run_match():
         result = await asyncio.to_thread(match_receipts_to_statements, receipts, statements)
 
         for match in result["matches"]:
+            # Pass `transaction_index` so the reconcile board can anchor
+            # this match to a specific row in the statement (otherwise it
+            # renders as if nothing is paired — see audit notes).
             await asyncio.to_thread(
                 db.save_match,
                 match["receipt_id"],
                 match["statement_id"],
                 match["transaction_data"],
                 match["match_score"],
+                match_kind="auto",
+                transaction_index=match.get("transaction_index"),
             )
             await asyncio.to_thread(db.update_receipt_match_status, match["receipt_id"], "matched")
 

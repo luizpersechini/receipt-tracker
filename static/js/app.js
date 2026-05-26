@@ -1119,6 +1119,7 @@ const Reconcile = (() => {
           date: m.date || (r.created_at || "").slice(0, 10),
           category: m.category || null,
           matched: r.match_status === "matched",
+          expense_type: r.expense_type || "corp_card",
         };
       });
       // Ascending by date — pairs visually with the txns pane.
@@ -1177,6 +1178,7 @@ const Reconcile = (() => {
 
   function _render() {
     _renderHeaderCounts();
+    _populateCurrencyDropdowns();
     _renderTxnList();
     _renderReceiptList();
   }
@@ -1187,6 +1189,13 @@ const Reconcile = (() => {
     $("reconPairedNum").textContent = matched;
     $("reconPairedTotal").textContent = total;
     $("reconPairedLeft").textContent = Math.max(0, total - matched);
+  }
+
+  // Effective currency for filter purposes: an int'l txn carries the
+  // native ccy in `original_currency`; everything else is BRL (the bill
+  // amount the statement actually charges).
+  function _txnCurrency(t) {
+    return (t.original_currency || "BRL").toUpperCase();
   }
 
   function _matchesTxnFilter(t, f) {
@@ -1202,6 +1211,8 @@ const Reconcile = (() => {
     if (f.dateTo && t.date && t.date > f.dateTo) return false;
     if (f.amtMin != null && t.amount < f.amtMin) return false;
     if (f.amtMax != null && t.amount > f.amtMax) return false;
+    if (f.currency && _txnCurrency(t) !== f.currency.toUpperCase())
+      return false;
     return true;
   }
 
@@ -1214,6 +1225,11 @@ const Reconcile = (() => {
     if (f.dateTo && r.date && r.date > f.dateTo) return false;
     if (f.amtMin != null && r.amount < f.amtMin) return false;
     if (f.amtMax != null && r.amount > f.amtMax) return false;
+    if (
+      f.currency &&
+      (r.currency || "").toUpperCase() !== f.currency.toUpperCase()
+    )
+      return false;
     return true;
   }
 
@@ -1330,19 +1346,27 @@ const Reconcile = (() => {
 
   function _renderReceiptList() {
     const host = $("reconReceiptList");
-    let visible = reconState.receipts.filter((r) =>
+    // Reconcile is corp-card only — reimbursement receipts are personal
+    // and never appear on a corp-card statement, so they'd just clutter
+    // the right pane without ever being pairable.
+    const corp = reconState.receipts.filter(
+      (r) => r.expense_type !== "reimbursement",
+    );
+    let visible = corp.filter((r) =>
       reconState.showMatched ? true : !r.matched,
     );
     visible = visible.filter((r) =>
       _matchesRcptFilter(r, reconState.rcptFilter),
     );
 
-    if (!reconState.receipts.length) {
-      host.innerHTML = `<div class="recon-empty-small">No receipts in your library.</div>`;
+    const corpUnmatched = corp.filter((r) => !r.matched).length;
+
+    if (!corp.length) {
+      host.innerHTML = `<div class="recon-empty-small">No corp-card receipts in your library.</div>`;
       _updateCountChip("reconRcptCount", 0, 0);
       return;
     }
-    if (!visible.length && !reconState.receipts.some((r) => !r.matched)) {
+    if (!visible.length && !corp.some((r) => !r.matched)) {
       host.innerHTML = `
         <div class="recon-empty-small recon-all-matched">
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -1353,20 +1377,12 @@ const Reconcile = (() => {
     }
     if (!visible.length) {
       host.innerHTML = `<div class="recon-empty-small">No receipts match your filters.</div>`;
-      _updateCountChip(
-        "reconRcptCount",
-        0,
-        reconState.receipts.filter((r) => !r.matched).length,
-      );
+      _updateCountChip("reconRcptCount", 0, corpUnmatched);
       return;
     }
     host.innerHTML = visible.map(_renderReceiptCard).join("");
     _bindReceiptCards();
-    _updateCountChip(
-      "reconRcptCount",
-      visible.length,
-      reconState.receipts.filter((r) => !r.matched).length,
-    );
+    _updateCountChip("reconRcptCount", visible.length, corpUnmatched);
   }
 
   function _renderReceiptCard(r) {
@@ -1472,13 +1488,30 @@ const Reconcile = (() => {
       ["reconRcptTo", "dateTo", "rcptFilter", "rt.recon.receiptFilter", false],
       ["reconRcptMin", "amtMin", "rcptFilter", "rt.recon.receiptFilter", true],
       ["reconRcptMax", "amtMax", "rcptFilter", "rt.recon.receiptFilter", true],
+      [
+        "reconTxnCurrency",
+        "currency",
+        "txnFilter",
+        "rt.recon.txnFilter",
+        false,
+      ],
+      [
+        "reconRcptCurrency",
+        "currency",
+        "rcptFilter",
+        "rt.recon.receiptFilter",
+        false,
+      ],
     ];
     fields.forEach(([id, key, stateKey, storeKey, isNum]) => {
       const el = $(id);
       if (!el) return;
       const cur = reconState[stateKey][key];
       el.value = cur == null ? "" : cur;
-      el.addEventListener("input", () => {
+      // `change` fires on <select>, `input` fires on text/number/date. Bind
+      // both so this loop covers every control without a per-field switch.
+      const evt = el.tagName === "SELECT" ? "change" : "input";
+      el.addEventListener(evt, () => {
         let v = el.value;
         if (v === "") v = null;
         else if (isNum) v = parseFloat(v);
@@ -1488,6 +1521,48 @@ const Reconcile = (() => {
         else _renderReceiptList();
       });
     });
+  }
+
+  // Populate the two currency dropdowns from whatever currencies are
+  // actually present in the data. Re-runs after `_refreshAll` so a newly
+  // ingested international row makes its currency appear immediately.
+  function _populateCurrencyDropdowns() {
+    const txnCcys = new Set();
+    reconState.txns.forEach((t) => txnCcys.add(_txnCurrency(t)));
+    const rcptCcys = new Set();
+    reconState.receipts.forEach((r) => {
+      const c = (r.currency || "").toUpperCase();
+      if (c) rcptCcys.add(c);
+    });
+
+    const sync = (sel, set, key, stateKey) => {
+      if (!sel) return;
+      const current = reconState[stateKey][key] || "";
+      const want = new Set(set);
+      // Drop options that no longer apply (except the empty "Any ccy").
+      [...sel.options].forEach((o) => {
+        if (o.value && !want.has(o.value)) sel.removeChild(o);
+        else if (o.value) want.delete(o.value);
+      });
+      // Add any new currencies, sorted alphabetically.
+      [...want].sort().forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = c;
+        opt.textContent = c;
+        sel.appendChild(opt);
+      });
+      // Restore selection if it still exists.
+      if (current && [...sel.options].some((o) => o.value === current)) {
+        sel.value = current;
+      } else if (current) {
+        // Stored currency no longer present — clear the filter.
+        reconState[stateKey][key] = null;
+        sel.value = "";
+      }
+    };
+
+    sync($("reconTxnCurrency"), txnCcys, "currency", "txnFilter");
+    sync($("reconRcptCurrency"), rcptCcys, "currency", "rcptFilter");
   }
 
   function _bindReceiptCards() {
@@ -1684,6 +1759,7 @@ const Reconcile = (() => {
           date: m.date || (r.created_at || "").slice(0, 10),
           category: m.category || null,
           matched: r.match_status === "matched",
+          expense_type: r.expense_type || "corp_card",
         };
       });
       reconState.receipts.sort((a, b) =>
