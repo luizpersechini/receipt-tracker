@@ -34,7 +34,19 @@ const fmt = {
   },
   date: (v) => {
     if (!v) return "—";
-    // Try to parse common formats and display nicely
+    // ISO YYYY-MM-DD — build the Date from local-time components, NOT via
+    // `new Date(string)`. The string form gets parsed as UTC midnight and
+    // shifts back a day for users in negative UTC offsets (e.g. BRT, PST).
+    const iso = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) {
+      const d = new Date(+iso[1], +iso[2] - 1, +iso[3]);
+      return d.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    }
+    // Other formats (e.g. dd/mm/yyyy): rewrite to ISO and recurse via Date.
     const d = new Date(v.replace(/(\d{2})\/(\d{2})\/(\d{4})/, "$3-$2-$1"));
     if (!isNaN(d))
       return d.toLocaleDateString("en-GB", {
@@ -146,9 +158,203 @@ function filterByMonth(receipts) {
   });
 }
 
+// ─── Receipts filter + sort state ────────────────────────────────────────────
+// Stored in localStorage so it survives page reloads. The filter UI lives in
+// `#receiptFilterBar` (HTML) — wiring is in _wireReceiptFilters() at file end.
+const _FILTER_DEFAULTS = {
+  q: "",
+  from: "",
+  to: "",
+  min: "",
+  max: "",
+  status: "",
+  category: "",
+  currency: "",
+};
+let receiptFilters = (() => {
+  try {
+    return {
+      ..._FILTER_DEFAULTS,
+      ...JSON.parse(localStorage.getItem("rt.filter.receipts") || "{}"),
+    };
+  } catch {
+    return { ..._FILTER_DEFAULTS };
+  }
+})();
+let receiptSort = (() => {
+  try {
+    return (
+      JSON.parse(localStorage.getItem("rt.sort.receipts") || "null") || {
+        col: "date",
+        dir: "desc",
+      }
+    );
+  } catch {
+    return { col: "date", dir: "desc" };
+  }
+})();
+let matchSort = (() => {
+  try {
+    return (
+      JSON.parse(localStorage.getItem("rt.sort.matches") || "null") || {
+        col: "score",
+        dir: "desc",
+      }
+    );
+  } catch {
+    return { col: "score", dir: "desc" };
+  }
+})();
+
+function _saveReceiptFilters() {
+  localStorage.setItem("rt.filter.receipts", JSON.stringify(receiptFilters));
+}
+function _saveSort(key, state) {
+  localStorage.setItem(`rt.sort.${key}`, JSON.stringify(state));
+}
+
+function applyReceiptFilters(receipts) {
+  const f = receiptFilters;
+  return receipts.filter((r) => {
+    const m = (() => {
+      try {
+        return JSON.parse(r.metadata || "{}");
+      } catch {
+        return {};
+      }
+    })();
+    if (f.q) {
+      const q = f.q.toLowerCase();
+      const hay = [
+        m.vendor_name || "",
+        r.description || "",
+        m.city || "",
+        m.state || "",
+        m.country || "",
+        m.vendor_address || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    const date = (m.date || "").slice(0, 10);
+    if (f.from && date && date < f.from) return false;
+    if (f.to && date && date > f.to) return false;
+    if (f.from && !date) return false; // can't include rows without a date when a date filter is on
+    if (f.to && !date) return false;
+    const amt = parseFloat(m.total_amount);
+    if (f.min !== "") {
+      const min = parseFloat(f.min);
+      if (isNaN(amt) || amt < min) return false;
+    }
+    if (f.max !== "") {
+      const max = parseFloat(f.max);
+      if (isNaN(amt) || amt > max) return false;
+    }
+    if (f.status && (r.match_status || "pending") !== f.status) return false;
+    if (f.category && (m.category || "other") !== f.category) return false;
+    if (f.currency && (m.currency || "") !== f.currency) return false;
+    return true;
+  });
+}
+
+function sortReceiptList(receipts, sort) {
+  const { col, dir } = sort;
+  const mult = dir === "desc" ? -1 : 1;
+  const get = (r) => {
+    const m = (() => {
+      try {
+        return JSON.parse(r.metadata || "{}");
+      } catch {
+        return {};
+      }
+    })();
+    switch (col) {
+      case "date":
+        return m.date || "";
+      case "vendor":
+        return (m.vendor_name || "").toLowerCase();
+      case "amount":
+        return parseFloat(m.total_amount) || 0;
+      case "category":
+        return m.category || "";
+      case "status":
+        return r.match_status || "pending";
+      default:
+        return "";
+    }
+  };
+  return [...receipts].sort((a, b) => {
+    const va = get(a),
+      vb = get(b);
+    if (va < vb) return -1 * mult;
+    if (va > vb) return 1 * mult;
+    return 0;
+  });
+}
+
+function _refreshSortIndicators(tableKey, sort) {
+  document
+    .querySelectorAll(`table.sortable[data-table="${tableKey}"] th[data-sort]`)
+    .forEach((th) => {
+      th.classList.remove("sort-asc", "sort-desc");
+      if (th.dataset.sort === sort.col) th.classList.add(`sort-${sort.dir}`);
+    });
+}
+
+function _updateFilterBadge() {
+  const f = receiptFilters;
+  // Count populated filter fields (anything non-empty counts as 1 active).
+  const count = Object.values(f).filter((v) => v !== "" && v != null).length;
+  const badge = $("rfActiveCount");
+  const clear = $("rfClearBtn");
+  if (!badge || !clear) return;
+  if (count > 0) {
+    badge.textContent = `${count} active`;
+    badge.style.display = "inline-flex";
+    clear.style.display = "inline-flex";
+  } else {
+    badge.style.display = "none";
+    clear.style.display = "none";
+  }
+}
+
+function populateCurrencyFilter(receipts) {
+  // Build the currency dropdown from whatever currencies the user actually
+  // has in their data — no point listing AUD if no row uses it.
+  const sel = $("rfCurrency");
+  if (!sel) return;
+  const seen = new Set();
+  receipts.forEach((r) => {
+    try {
+      const c = JSON.parse(r.metadata || "{}").currency;
+      if (c) seen.add(c);
+    } catch {}
+  });
+  const existing = new Set([...sel.options].map((o) => o.value));
+  [...seen].sort().forEach((c) => {
+    if (!existing.has(c)) {
+      const opt = document.createElement("option");
+      opt.value = c;
+      opt.textContent = c;
+      sel.appendChild(opt);
+    }
+  });
+  // Restore the persisted selection now that the option exists.
+  if (
+    receiptFilters.currency &&
+    [...sel.options].some((o) => o.value === receiptFilters.currency)
+  ) {
+    sel.value = receiptFilters.currency;
+  }
+}
+
 // ─── Progress strip ───────────────────────────────────────────────────────────
 function updateProgress(receipts) {
-  const filtered = filterByMonth(receipts);
+  // Progress chip reflects whatever's currently visible — month + filters.
+  // Keeping these in sync avoids confusion when the user narrows to e.g.
+  // "category=meals" and the chip would otherwise show all-category counts.
+  const filtered = applyReceiptFilters(filterByMonth(receipts));
   const strip = $("progressStrip");
   if (!filtered.length) {
     strip.classList.remove("visible");
@@ -236,7 +442,12 @@ function clearSelection() {
 
 // ─── Receipts ─────────────────────────────────────────────────────────────────
 function renderReceipts(receipts) {
-  const filtered = filterByMonth(receipts);
+  // Pipeline: month filter → filter-bar filters → sort. All three are
+  // pure client-side over `allReceipts` so the response shape from the API
+  // hasn't changed and the existing edit / delete / bulk paths still work.
+  let filtered = filterByMonth(receipts);
+  filtered = applyReceiptFilters(filtered);
+  filtered = sortReceiptList(filtered, receiptSort);
   const tbody = $("receiptsTbody");
   $("navReceiptCount").textContent = filtered.length;
 
@@ -377,6 +588,7 @@ async function loadReceipts() {
     const { receipts } = await api("GET", "/api/receipts");
     allReceipts = receipts;
     populateMonths(receipts);
+    populateCurrencyFilter(receipts);
     renderReceipts(receipts);
     updateProgress(receipts);
   } catch {}
@@ -394,30 +606,83 @@ async function deleteReceipt(id) {
 // ─── Statements ───────────────────────────────────────────────────────────────
 async function loadStatements() {
   let statements = [];
+  let matches = [];
   try {
-    ({ statements } = await api("GET", "/api/statements"));
+    // Fetch statements + matches in parallel so each row can show how many
+    // of its transactions have already been paired.
+    const [sRes, mRes] = await Promise.all([
+      api("GET", "/api/statements"),
+      api("GET", "/api/matches").catch(() => ({ matches: [] })),
+    ]);
+    statements = sRes.statements || [];
+    matches = mRes.matches || [];
   } catch {}
   $("navStmtCount").textContent = statements.length;
+
+  // Count matches per statement_id in one pass.
+  const matchedCount = {};
+  matches.forEach((m) => {
+    matchedCount[m.statement_id] = (matchedCount[m.statement_id] || 0) + 1;
+  });
+
   const tbody = $("statementsTbody");
   if (!statements.length) {
-    tbody.innerHTML = `<tr class="empty"><td colspan="5">
+    tbody.innerHTML = `<tr class="empty"><td colspan="8">
       <div class="empty-state">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        <h3>No statements yet</h3><p>Upload a corporate card CSV to begin reconciliation.</p>
+        <h3>No statements yet</h3><p>Upload a corporate card CSV or PDF to begin reconciliation.</p>
       </div>
     </td></tr>`;
     return;
   }
+
   tbody.innerHTML = statements
-    .map(
-      (s) => `<tr class="data-row">
+    .map((s) => {
+      // `transactions` arrives as a JSON string on the wire.
+      let txns = s.transactions || [];
+      if (typeof txns === "string") {
+        try {
+          txns = JSON.parse(txns);
+        } catch {
+          txns = [];
+        }
+      }
+      // The statement bill is always in BRL (Itaú), and international rows
+      // already roll up into a BRL amount. So a plain sum of `amount`
+      // gives the user the bill total they'd recognise.
+      let total = 0;
+      const dates = [];
+      txns.forEach((t) => {
+        const amt = parseFloat(t.amount);
+        if (!isNaN(amt)) total += amt;
+        if (t.date) dates.push(t.date);
+      });
+      const period =
+        dates.length === 0
+          ? "—"
+          : `${fmt.date(dates.reduce((a, b) => (a < b ? a : b)))} → ${fmt.date(
+              dates.reduce((a, b) => (a > b ? a : b)),
+            )}`;
+      const totalLabel = txns.length ? fmt.currency(total, "BRL") : "—";
+      const matched = matchedCount[s.id] || 0;
+      const matchedChip =
+        matched === 0
+          ? `<span class="badge badge-gray">0 / ${txns.length}</span>`
+          : matched >= txns.length
+            ? `<span class="badge badge-green">${matched} / ${txns.length}</span>`
+            : `<span class="badge badge-amber">${matched} / ${txns.length}</span>`;
+
+      return `<tr class="data-row clickable" onclick="openStatementDetail(${s.id})">
     <td style="color:var(--text-3);font-family:'DM Mono',monospace;font-size:12px">#${s.id}</td>
     <td class="fname" title="${s.filename}" style="font-weight:500">${fmt.file(s.filename)}</td>
-    <td><span class="badge badge-gray">${(s.transactions || []).length} txns</span></td>
+    <td><span class="badge badge-gray">${txns.length} txns</span></td>
+    <td style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap">${totalLabel}</td>
+    <td style="color:var(--text-2);font-size:12px;white-space:nowrap">${period}</td>
+    <td>${matchedChip}</td>
     <td style="color:var(--text-2);font-size:12px">${(s.uploaded_at || "").slice(0, 16).replace("T", " ")}</td>
-    <td><button class="btn btn-ghost btn-sm" onclick="deleteStatement(${s.id})">Del</button></td>
-  </tr>`,
-    )
+    <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteStatement(${s.id})">Del</button></td>
+  </tr>`;
+    })
     .join("");
 }
 
@@ -427,12 +692,153 @@ async function deleteStatement(id) {
   loadStatements();
   loadReceipts();
   loadStats();
-  $("reconcileContent").innerHTML =
-    '<div class="alert alert-gray">Statement removed. Upload a new one to reconcile.</div>';
+  // The Reconcile board pulls its own data when the tab opens, so no
+  // imperative refresh needed here — it picks up the change next visit.
 }
 
-// ─── Reconcile ────────────────────────────────────────────────────────────────
-function renderReconcile(result) {
+// ─── Statement detail modal (clicking a row on the Statements tab) ──────────
+let _stmtDetailRows = []; // working copy filtered by the search box
+let _stmtDetailAll = []; // full transactions array — search filters against this
+
+async function openStatementDetail(id) {
+  $("stmtDetailModal").classList.add("open");
+  $("stmtDetailTitle").textContent = "Statement";
+  $("stmtDetailSub").textContent = "Loading…";
+  $("stmtDetailTbody").innerHTML = "";
+  $("stmtDetailSum").textContent = "—";
+  $("stmtDetailQ").value = "";
+
+  try {
+    const res = await api("GET", `/api/statements/${id}/transactions`);
+    const s = res.statement || {};
+    _stmtDetailAll = res.transactions || [];
+    _stmtDetailRows = _stmtDetailAll;
+
+    $("stmtDetailTitle").textContent = s.filename || `Statement #${id}`;
+    $("stmtDetailSub").textContent = `${_stmtDetailAll.length} transactions`;
+    _renderStmtDetail();
+  } catch (e) {
+    $("stmtDetailSub").innerHTML =
+      `<span class="status-msg err">Failed to load: ${e.message}</span>`;
+  }
+}
+
+function _renderStmtDetail() {
+  const tbody = $("stmtDetailTbody");
+  if (!_stmtDetailRows.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="stmt-detail-empty">No transactions match your search.</td></tr>`;
+    $("stmtDetailSum").textContent = "—";
+    return;
+  }
+  tbody.innerHTML = _stmtDetailRows
+    .map((t) => {
+      const isIntl =
+        t.original_currency &&
+        t.original_amount != null &&
+        t.original_currency !== "BRL";
+      const matched = !!t.match;
+      const matchLabel = matched
+        ? `<span class="col-match matched" title="${_esc(t.match.receipt_vendor || "receipt")} · ${fmt.currency(t.match.receipt_amount, t.match.receipt_currency)}">✓ ${_esc(t.match.receipt_vendor || "matched")}</span>`
+        : `<span class="col-match unmatched">—</span>`;
+      // Headline shows native for international rows (receipts always come
+      // in native currency), with the BRL bill total under it. Tooltip
+      // exposes the FX rate so the user can sanity-check the conversion.
+      const amountCell = isIntl
+        ? `<div class="col-amount intl" title="FX: R$ ${(t.fx_to_brl || 0).toFixed(2)} / USD">
+             <div>${fmt.currency(t.original_amount, t.original_currency)}</div>
+             <div class="col-amount-sub">${fmt.currency(t.amount, "BRL")}</div>
+           </div>`
+        : `<div class="col-amount">${fmt.currency(t.amount, t.currency || "BRL")}</div>`;
+      return `<tr>
+        <td class="col-date">${fmt.date(t.date)}</td>
+        <td class="col-desc" title="${_esc(t.description)}">${_esc(t.description)}</td>
+        <td>${amountCell}</td>
+        <td>${t.category ? `<span class="badge badge-gray">${_esc(t.category)}</span>` : '<span style="color:var(--text-3)">—</span>'}</td>
+        <td class="col-city">${t.city ? _esc(t.city) : "—"}</td>
+        <td>${matchLabel}</td>
+      </tr>`;
+    })
+    .join("");
+
+  // Sum line: BRL bill total (that's what the user owes) + foreign-currency
+  // totals derived from `original_*` so the user sees "R$ 22,250 · CAD
+  // 1,260 · USD 145" for a Brazilian statement with international rows.
+  let brlTotal = 0;
+  const foreignTotals = {};
+  _stmtDetailRows.forEach((t) => {
+    brlTotal += parseFloat(t.amount) || 0;
+    if (
+      t.original_currency &&
+      t.original_currency !== "BRL" &&
+      t.original_amount != null
+    ) {
+      foreignTotals[t.original_currency] =
+        (foreignTotals[t.original_currency] || 0) +
+        (parseFloat(t.original_amount) || 0);
+    }
+  });
+  const parts = [`<strong>${fmt.currency(brlTotal, "BRL")}</strong>`];
+  Object.entries(foreignTotals).forEach(([cur, sum]) => {
+    parts.push(`<strong>${fmt.currency(sum, cur)}</strong>`);
+  });
+  $("stmtDetailSum").innerHTML =
+    `${_stmtDetailRows.length} shown · ${parts.join(" · ")}`;
+}
+
+function closeStatementDetail() {
+  $("stmtDetailModal").classList.remove("open");
+  _stmtDetailAll = [];
+  _stmtDetailRows = [];
+}
+
+// Small local escape helper — `_esc` exists inside the Reconcile module
+// closure but isn't reachable here. Define a sibling for this module.
+function _esc(s) {
+  return String(s == null ? "" : s).replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c],
+  );
+}
+
+// Wire the search box + dismiss handlers once.
+(function _wireStmtDetailModal() {
+  const q = $("stmtDetailQ");
+  if (!q) return;
+  q.addEventListener("input", () => {
+    const term = q.value.trim().toLowerCase();
+    if (!term) {
+      _stmtDetailRows = _stmtDetailAll;
+    } else {
+      _stmtDetailRows = _stmtDetailAll.filter(
+        (t) =>
+          (t.description || "").toLowerCase().includes(term) ||
+          (t.city || "").toLowerCase().includes(term) ||
+          (t.category || "").toLowerCase().includes(term),
+      );
+    }
+    _renderStmtDetail();
+  });
+  $("stmtDetailModal").addEventListener("click", (e) => {
+    if (e.target === $("stmtDetailModal")) closeStatementDetail();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("stmtDetailModal").classList.contains("open")) {
+      closeStatementDetail();
+    }
+  });
+})();
+
+// ─── Reconcile (legacy renderer — superseded by the Reconcile module below) ──
+// Kept around briefly to avoid runtime errors if any old code path still
+// references `renderReconcile`. New flow is the drag-drop board.
+function _renderReconcileLegacyUnused(result) {
   const { matches, unmatched_receipts, unmatched_transactions } = result;
   let html = "";
 
@@ -536,32 +942,711 @@ function renderReconcile(result) {
     </div>`;
   }
 
-  $("reconcileContent").innerHTML = html;
+  // Legacy renderer end — not wired anywhere now.
+  return html;
 }
 
-$("matchBtn").addEventListener("click", async () => {
-  const btn = $("matchBtn");
-  const msg = $("matchMsg");
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spin"></span> Running…';
-  msg.textContent = "";
-  try {
-    const res = await api("POST", "/api/match");
-    if (res.success) {
-      renderReconcile(res);
-      msg.innerHTML = `<strong>${res.total_matched}</strong> matched · <strong>${res.total_unmatched_receipts}</strong> unmatched`;
-      loadReceipts();
-      loadStats();
-    } else {
-      msg.textContent = res.message;
+// ─── Reconcile board ────────────────────────────────────────────────────────
+// Drag-and-drop reconciliation: pair a receipt (right pane) with a statement
+// transaction (left pane) by dragging. Auto-match runs the legacy engine and
+// pre-populates the board. Manual matches POST /api/matches; unlink hits
+// DELETE /api/matches/{id}.
+const Reconcile = (() => {
+  const reconState = {
+    statementId: null,
+    statements: [], // [{id, filename, transaction_count}]
+    txns: [], // working copy from /statements/{id}/transactions
+    receipts: [], // all receipts (with `matched` flag derived locally)
+    showMatched: false,
+    txnFilter: _loadFilter("rt.recon.txnFilter"),
+    rcptFilter: _loadFilter("rt.recon.receiptFilter"),
+    dragging: null,
+    initialized: false,
+    autoMatchRunning: false,
+  };
+
+  function _loadFilter(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key)) || {};
+    } catch {
+      return {};
     }
-  } catch (e) {
-    msg.textContent = "Error: " + e.message;
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Run Matching`;
   }
-});
+  function _saveFilter(key, val) {
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch {}
+  }
+
+  const _fmt = {
+    money(v, cur) {
+      if (v == null) return "—";
+      const sym =
+        cur === "BRL" ? "R$" : cur === "EUR" ? "€" : cur === "GBP" ? "£" : "$";
+      return `${sym} ${parseFloat(v).toFixed(2)}`;
+    },
+    date(s) {
+      if (!s) return "—";
+      const iso = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      const d = iso
+        ? new Date(+iso[1], +iso[2] - 1, +iso[3])
+        : new Date(s + "T12:00:00");
+      if (isNaN(d)) return s;
+      const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+      return `${months[d.getMonth()]} ${d.getDate().toString().padStart(2, "0")}`;
+    },
+    cat(c) {
+      if (!c) return "";
+      return c.replace(/_/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+    },
+  };
+
+  function _dateDiffDays(a, b) {
+    if (!a || !b) return 999;
+    const da = new Date(a + "T12:00:00"),
+      db = new Date(b + "T12:00:00");
+    return Math.abs(Math.round((da - db) / 86400000));
+  }
+
+  function _esc(s) {
+    return String(s == null ? "" : s).replace(
+      /[&<>"']/g,
+      (c) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[c],
+    );
+  }
+
+  function _isGoodMatch(rcpt, txn) {
+    // Pick the right side of the txn to compare against the receipt:
+    //   receipt is CAD, txn carries CAD as original_currency → compare CAD↔CAD
+    //   otherwise fall back to BRL bill total ↔ receipt amount
+    let txnAmt = txn.amount;
+    const rcptCur = (rcpt.currency || "").toUpperCase();
+    const nativeCur = (txn.original_currency || "").toUpperCase();
+    if (
+      rcptCur &&
+      nativeCur &&
+      rcptCur === nativeCur &&
+      txn.original_amount != null
+    ) {
+      txnAmt = txn.original_amount;
+    }
+    return (
+      Math.abs((rcpt.amount || 0) - (txnAmt || 0)) < 0.5 &&
+      _dateDiffDays(rcpt.date, txn.date) <= 3
+    );
+  }
+
+  // ── Bootstrap: only runs when the user lands on the Reconcile tab ────
+  async function init() {
+    if (reconState.initialized) {
+      // Re-load receipts (and a fresh transactions list) every time the
+      // tab is opened so newly added receipts show up.
+      await _refreshAll();
+      return;
+    }
+    reconState.initialized = true;
+    _bindHeader();
+    _bindFilters();
+    await _refreshAll();
+  }
+
+  async function _refreshAll() {
+    try {
+      const [stmts, rcpts] = await Promise.all([
+        api("GET", "/api/statements"),
+        api("GET", "/api/receipts"),
+      ]);
+      reconState.statements = (stmts.statements || []).map((s) => {
+        // The /statements API returns `transactions` already parsed into
+        // a JS array (the backend deserialises before sending). Support
+        // either shape just in case, and only fall back to 0 when the
+        // payload is truly empty.
+        let n = s.transaction_count;
+        if (n == null) {
+          if (Array.isArray(s.transactions)) {
+            n = s.transactions.length;
+          } else if (typeof s.transactions === "string") {
+            try {
+              n = JSON.parse(s.transactions || "[]").length;
+            } catch {
+              n = 0;
+            }
+          } else {
+            n = 0;
+          }
+        }
+        return { id: s.id, filename: s.filename, transaction_count: n };
+      });
+      // Normalise receipts for board use: pull amount/date/vendor out of metadata.
+      reconState.receipts = (rcpts.receipts || []).map((r) => {
+        const m = (() => {
+          try {
+            return JSON.parse(r.metadata || "{}");
+          } catch {
+            return {};
+          }
+        })();
+        return {
+          id: r.id,
+          vendor: m.vendor_name || "Unknown",
+          amount: m.total_amount != null ? parseFloat(m.total_amount) : null,
+          currency: m.currency || null,
+          date: m.date || (r.created_at || "").slice(0, 10),
+          category: m.category || null,
+          matched: r.match_status === "matched",
+        };
+      });
+      // Ascending by date — pairs visually with the txns pane.
+      reconState.receipts.sort((a, b) =>
+        (a.date || "").localeCompare(b.date || ""),
+      );
+    } catch (e) {
+      _flash("err", "Failed to load reconcile data: " + e.message);
+      return;
+    }
+    _renderStatementSelect();
+    // Default to the most recent statement if none picked yet.
+    if (reconState.statementId == null && reconState.statements.length) {
+      reconState.statementId = reconState.statements[0].id;
+    }
+    if (reconState.statementId != null) {
+      await _selectStatement(reconState.statementId);
+    } else {
+      reconState.txns = [];
+      _render();
+    }
+  }
+
+  function _renderStatementSelect() {
+    const sel = $("reconStatement");
+    if (!reconState.statements.length) {
+      sel.innerHTML = `<option value="">No statements uploaded yet</option>`;
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    sel.innerHTML = reconState.statements
+      .map(
+        (s) =>
+          `<option value="${s.id}">${_esc(s.filename)} · ${s.transaction_count} txns</option>`,
+      )
+      .join("");
+    if (reconState.statementId != null) sel.value = reconState.statementId;
+  }
+
+  async function _selectStatement(id) {
+    reconState.statementId = id;
+    try {
+      const res = await api("GET", `/api/statements/${id}/transactions`);
+      // Sort ascending by date so receipts and txns line up chronologically
+      // (makes drag-drop targeting much easier on long statements).
+      reconState.txns = (res.transactions || [])
+        .map((t) => ({ ...t }))
+        .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    } catch (e) {
+      _flash("err", `Failed to load transactions: ${e.message}`);
+      reconState.txns = [];
+    }
+    _render();
+  }
+
+  function _render() {
+    _renderHeaderCounts();
+    _renderTxnList();
+    _renderReceiptList();
+  }
+
+  function _renderHeaderCounts() {
+    const total = reconState.txns.length;
+    const matched = reconState.txns.filter((t) => t.match).length;
+    $("reconPairedNum").textContent = matched;
+    $("reconPairedTotal").textContent = total;
+    $("reconPairedLeft").textContent = Math.max(0, total - matched);
+  }
+
+  function _matchesTxnFilter(t, f) {
+    if (f.q) {
+      const q = f.q.toLowerCase();
+      if (
+        !(t.description || "").toLowerCase().includes(q) &&
+        !(t.city || "").toLowerCase().includes(q)
+      )
+        return false;
+    }
+    if (f.dateFrom && t.date && t.date < f.dateFrom) return false;
+    if (f.dateTo && t.date && t.date > f.dateTo) return false;
+    if (f.amtMin != null && t.amount < f.amtMin) return false;
+    if (f.amtMax != null && t.amount > f.amtMax) return false;
+    return true;
+  }
+
+  function _matchesRcptFilter(r, f) {
+    if (f.q) {
+      const q = f.q.toLowerCase();
+      if (!(r.vendor || "").toLowerCase().includes(q)) return false;
+    }
+    if (f.dateFrom && r.date && r.date < f.dateFrom) return false;
+    if (f.dateTo && r.date && r.date > f.dateTo) return false;
+    if (f.amtMin != null && r.amount < f.amtMin) return false;
+    if (f.amtMax != null && r.amount > f.amtMax) return false;
+    return true;
+  }
+
+  function _renderTxnList() {
+    const host = $("reconTxnList");
+    const filtered = reconState.txns.filter((t) =>
+      _matchesTxnFilter(t, reconState.txnFilter),
+    );
+    if (!reconState.txns.length) {
+      host.innerHTML = `
+        <div class="recon-empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <h3>Pick a statement to start reconciling</h3>
+          <p>Upload a monthly statement on the Statements tab — we'll bring you back here with its transactions parsed.</p>
+        </div>`;
+      _updateCountChip("reconTxnCount", 0, 0);
+      return;
+    }
+    if (!filtered.length) {
+      host.innerHTML = `<div class="recon-empty-small">No transactions match your filters.</div>`;
+      _updateCountChip("reconTxnCount", 0, reconState.txns.length);
+      return;
+    }
+    host.innerHTML = filtered.map(_renderTxnCard).join("");
+    _bindTxnCards();
+    _updateCountChip("reconTxnCount", filtered.length, reconState.txns.length);
+  }
+
+  function _renderTxnCard(t) {
+    const isMatched = !!t.match;
+    const cls = ["recon-txn", isMatched ? "matched" : ""].join(" ");
+    // International rows: show the native amount as the headline (matches
+    // what the user's receipt shows) and the BRL bill total as a smaller
+    // secondary line. Domestic rows stay single-line BRL.
+    const isIntl =
+      t.original_currency &&
+      t.original_amount != null &&
+      t.original_currency !== "BRL";
+    const headlineAmt = isIntl
+      ? _fmt.money(t.original_amount, t.original_currency)
+      : _fmt.money(t.amount, t.currency || "BRL");
+    const subAmt = isIntl
+      ? `<span class="recon-amount-sub">${_fmt.money(t.amount, "BRL")}</span>`
+      : "";
+    return `
+      <div class="${cls}" data-index="${t.index}" draggable="false">
+        <div class="recon-txn-top">
+          <span class="recon-date">${_fmt.date(t.date)}</span>
+          <span class="recon-desc" title="${_esc(t.description)}">${_esc(t.description)}</span>
+          <span class="recon-amount-stack">
+            <span class="recon-amount">${headlineAmt}</span>
+            ${subAmt}
+          </span>
+        </div>
+        <div class="recon-txn-bot">
+          ${t.category ? `<span class="badge badge-gray">${_fmt.cat(t.category)}</span>` : ""}
+          ${t.city ? `<span class="recon-city">${_esc(t.city)}</span>` : ""}
+          ${isIntl ? `<span class="badge badge-accent recon-cur">${_esc(t.original_currency)}</span>` : ""}
+        </div>
+        ${isMatched ? _renderMatchTag(t.match) : ""}
+      </div>
+    `;
+  }
+
+  function _renderMatchTag(m) {
+    const kindIcon =
+      m.kind === "auto"
+        ? `<svg class="recon-kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/></svg>`
+        : `<svg class="recon-kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`;
+    const scoreHtml =
+      m.score != null
+        ? `<span class="recon-score">${Math.round(m.score * 100)}%</span>`
+        : "";
+    return `
+      <div class="recon-match-tag">
+        ${kindIcon}
+        <span class="badge badge-green">
+          <span class="recon-match-vendor">${_esc(m.receipt_vendor || "receipt")}</span>
+          <span class="recon-match-amt">${_fmt.money(m.receipt_amount, m.receipt_currency)}</span>
+        </span>
+        ${scoreHtml}
+        <button class="btn btn-ghost btn-sm recon-unlink" data-match="${m.id}" title="Unlink this match">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+    `;
+  }
+
+  function _renderDropArea() {
+    return `
+      <div class="recon-drop" data-target="txn">
+        <span class="recon-drop-text">Drop a receipt here</span>
+      </div>
+    `;
+  }
+
+  function _renderReceiptList() {
+    const host = $("reconReceiptList");
+    let visible = reconState.receipts.filter((r) =>
+      reconState.showMatched ? true : !r.matched,
+    );
+    visible = visible.filter((r) =>
+      _matchesRcptFilter(r, reconState.rcptFilter),
+    );
+
+    if (!reconState.receipts.length) {
+      host.innerHTML = `<div class="recon-empty-small">No receipts in your library.</div>`;
+      _updateCountChip("reconRcptCount", 0, 0);
+      return;
+    }
+    if (!visible.length && !reconState.receipts.some((r) => !r.matched)) {
+      host.innerHTML = `
+        <div class="recon-empty-small recon-all-matched">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          All receipts are matched.
+        </div>`;
+      _updateCountChip("reconRcptCount", 0, 0);
+      return;
+    }
+    if (!visible.length) {
+      host.innerHTML = `<div class="recon-empty-small">No receipts match your filters.</div>`;
+      _updateCountChip(
+        "reconRcptCount",
+        0,
+        reconState.receipts.filter((r) => !r.matched).length,
+      );
+      return;
+    }
+    host.innerHTML = visible.map(_renderReceiptCard).join("");
+    _bindReceiptCards();
+    _updateCountChip(
+      "reconRcptCount",
+      visible.length,
+      reconState.receipts.filter((r) => !r.matched).length,
+    );
+  }
+
+  function _renderReceiptCard(r) {
+    const isMatched = r.matched;
+    const cls = ["recon-rcpt", isMatched ? "matched" : ""].join(" ");
+    const matchedTxn = isMatched
+      ? reconState.txns.find((t) => t.match && t.match.receipt_id === r.id)
+      : null;
+    const matchedLine = matchedTxn
+      ? `<span class="recon-rcpt-matched-line">
+           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+           Matched to <strong>${_esc(matchedTxn.description)}</strong>
+         </span>`
+      : "";
+    return `
+      <div class="${cls}" data-rid="${r.id}" draggable="${!isMatched}">
+        <div class="recon-rcpt-top">
+          <span class="recon-date">${_fmt.date(r.date)}</span>
+          <span class="recon-desc" title="${_esc(r.vendor)}">${_esc(r.vendor)}</span>
+          <span class="recon-amount">${_fmt.money(r.amount, r.currency)}</span>
+        </div>
+        <div class="recon-rcpt-bot">
+          <div class="recon-thumb"></div>
+          ${r.category ? `<span class="badge badge-gray">${_fmt.cat(r.category)}</span>` : ""}
+          ${r.currency ? `<span class="badge badge-accent recon-cur">${_esc(r.currency)}</span>` : ""}
+          ${matchedLine}
+          ${!isMatched ? `<span class="recon-grip" aria-hidden="true"></span>` : ""}
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Bindings ─────────────────────────────────────────────────────────
+  function _bindHeader() {
+    $("reconStatement").addEventListener("change", (e) => {
+      if (e.target.value) _selectStatement(+e.target.value);
+    });
+    $("reconAutoBtn").addEventListener("click", _onAutoMatch);
+    $("reconShowMatched").addEventListener("change", (e) => {
+      reconState.showMatched = e.target.checked;
+      _renderReceiptList();
+    });
+  }
+
+  function _bindFilters() {
+    const fields = [
+      ["reconTxnQ", "q", "txnFilter", "rt.recon.txnFilter", false],
+      ["reconTxnFrom", "dateFrom", "txnFilter", "rt.recon.txnFilter", false],
+      ["reconTxnTo", "dateTo", "txnFilter", "rt.recon.txnFilter", false],
+      ["reconTxnMin", "amtMin", "txnFilter", "rt.recon.txnFilter", true],
+      ["reconTxnMax", "amtMax", "txnFilter", "rt.recon.txnFilter", true],
+      ["reconRcptQ", "q", "rcptFilter", "rt.recon.receiptFilter", false],
+      [
+        "reconRcptFrom",
+        "dateFrom",
+        "rcptFilter",
+        "rt.recon.receiptFilter",
+        false,
+      ],
+      ["reconRcptTo", "dateTo", "rcptFilter", "rt.recon.receiptFilter", false],
+      ["reconRcptMin", "amtMin", "rcptFilter", "rt.recon.receiptFilter", true],
+      ["reconRcptMax", "amtMax", "rcptFilter", "rt.recon.receiptFilter", true],
+    ];
+    fields.forEach(([id, key, stateKey, storeKey, isNum]) => {
+      const el = $(id);
+      if (!el) return;
+      const cur = reconState[stateKey][key];
+      el.value = cur == null ? "" : cur;
+      el.addEventListener("input", () => {
+        let v = el.value;
+        if (v === "") v = null;
+        else if (isNum) v = parseFloat(v);
+        reconState[stateKey][key] = v;
+        _saveFilter(storeKey, reconState[stateKey]);
+        if (stateKey === "txnFilter") _renderTxnList();
+        else _renderReceiptList();
+      });
+    });
+  }
+
+  function _bindReceiptCards() {
+    document.querySelectorAll(".recon-rcpt").forEach((el) => {
+      if (el.classList.contains("matched")) return;
+      el.addEventListener("dragstart", _onDragStart);
+      el.addEventListener("dragend", _onDragEnd);
+    });
+  }
+
+  function _bindTxnCards() {
+    document.querySelectorAll(".recon-txn").forEach((el) => {
+      if (el.classList.contains("matched")) return;
+      el.addEventListener("dragover", _onDragOver);
+      el.addEventListener("dragenter", _onDragEnter);
+      el.addEventListener("dragleave", _onDragLeave);
+      el.addEventListener("drop", _onDrop);
+    });
+    document.querySelectorAll(".recon-unlink").forEach((el) => {
+      el.addEventListener("click", () => _onUnlink(+el.dataset.match));
+    });
+  }
+
+  function _onDragStart(e) {
+    const id = +e.currentTarget.dataset.rid;
+    const receipt = reconState.receipts.find((r) => r.id === id);
+    if (!receipt || receipt.matched) {
+      e.preventDefault();
+      return;
+    }
+    reconState.dragging = receipt;
+    e.currentTarget.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    try {
+      e.dataTransfer.setData("text/plain", String(id));
+    } catch {}
+    document.body.classList.add("recon-drag-in-flight");
+    document.querySelectorAll(".recon-txn:not(.matched)").forEach((tEl) => {
+      tEl.classList.add("droppable");
+      const txn = reconState.txns.find((t) => t.index === +tEl.dataset.index);
+      if (txn && _isGoodMatch(receipt, txn)) tEl.classList.add("good-match");
+    });
+  }
+
+  function _onDragEnd(e) {
+    e.currentTarget.classList.remove("dragging");
+    reconState.dragging = null;
+    document.body.classList.remove("recon-drag-in-flight");
+    document.querySelectorAll(".recon-txn").forEach((t) => {
+      t.classList.remove("droppable", "good-match", "drop-hover");
+    });
+  }
+
+  function _onDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+  function _onDragEnter(e) {
+    e.currentTarget.classList.add("drop-hover");
+  }
+  function _onDragLeave(e) {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    e.currentTarget.classList.remove("drop-hover");
+  }
+
+  async function _onDrop(e) {
+    e.preventDefault();
+    const txnEl = e.currentTarget;
+    txnEl.classList.remove("drop-hover");
+    const txnIndex = +txnEl.dataset.index;
+    const receipt = reconState.dragging;
+    if (!receipt) return;
+    await _pair(receipt.id, txnIndex);
+  }
+
+  async function _pair(receiptId, txnIndex) {
+    const receipt = reconState.receipts.find((r) => r.id === receiptId);
+    const txn = reconState.txns.find((t) => t.index === txnIndex);
+    if (!receipt || !txn || txn.match) return;
+
+    // Optimistic update
+    const snapshot = {
+      matched: receipt.matched,
+      txnMatch: txn.match,
+    };
+    receipt.matched = true;
+    txn.match = {
+      id: -1,
+      receipt_id: receipt.id,
+      receipt_vendor: receipt.vendor,
+      receipt_amount: receipt.amount,
+      receipt_currency: receipt.currency,
+      score: null,
+      kind: "manual",
+    };
+    _render();
+    _flash("ok", `Matched ${receipt.vendor} → ${txn.description}`);
+
+    try {
+      const res = await api("POST", "/api/matches", {
+        receipt_id: receipt.id,
+        statement_id: reconState.statementId,
+        transaction_index: txnIndex,
+      });
+      txn.match.id = res.id;
+    } catch (e) {
+      receipt.matched = snapshot.matched;
+      txn.match = snapshot.txnMatch;
+      _render();
+      _flash("err", `Failed to save match: ${e.message}`);
+    }
+    // Refresh the global stats / receipts table so the change shows up there too.
+    if (typeof loadStats === "function") loadStats();
+  }
+
+  async function _onUnlink(matchId) {
+    const txn = reconState.txns.find((t) => t.match && t.match.id === matchId);
+    if (!txn) return;
+    const receiptId = txn.match.receipt_id;
+    const receipt = reconState.receipts.find((r) => r.id === receiptId);
+
+    const snapshot = {
+      match: txn.match,
+      matched: receipt ? receipt.matched : null,
+    };
+    txn.match = null;
+    if (receipt) receipt.matched = false;
+    _render();
+    _flash("ok", `Unlinked from ${txn.description}`);
+
+    try {
+      await api("DELETE", `/api/matches/${matchId}`);
+    } catch (e) {
+      txn.match = snapshot.match;
+      if (receipt && snapshot.matched != null)
+        receipt.matched = snapshot.matched;
+      _render();
+      _flash("err", `Failed to unlink: ${e.message}`);
+    }
+    if (typeof loadStats === "function") loadStats();
+  }
+
+  async function _onAutoMatch() {
+    if (reconState.autoMatchRunning) return;
+    reconState.autoMatchRunning = true;
+    const btn = $("reconAutoBtn");
+    const label = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spin"></span> Matching…`;
+    try {
+      const res = await api("POST", "/api/match");
+      if (res.success) {
+        // Re-pull the statement transactions to pick up the new auto-matches
+        // (the engine wrote them straight to DB).
+        if (reconState.statementId != null) {
+          await _selectStatement(reconState.statementId);
+        }
+        // Refresh receipt match flags.
+        await _refreshReceiptsOnly();
+        _flash(
+          "ok",
+          `Auto-matched ${res.total_matched} of ${res.total_matched + res.total_unmatched_receipts} receipt${res.total_matched === 1 ? "" : "s"}.`,
+        );
+      } else {
+        _flash("err", res.message || "Auto-match returned no result.");
+      }
+    } catch (e) {
+      _flash("err", `Auto-match failed: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = label;
+      reconState.autoMatchRunning = false;
+      if (typeof loadStats === "function") loadStats();
+    }
+  }
+
+  async function _refreshReceiptsOnly() {
+    try {
+      const rcpts = await api("GET", "/api/receipts");
+      reconState.receipts = (rcpts.receipts || []).map((r) => {
+        const m = (() => {
+          try {
+            return JSON.parse(r.metadata || "{}");
+          } catch {
+            return {};
+          }
+        })();
+        return {
+          id: r.id,
+          vendor: m.vendor_name || "Unknown",
+          amount: m.total_amount != null ? parseFloat(m.total_amount) : null,
+          currency: m.currency || null,
+          date: m.date || (r.created_at || "").slice(0, 10),
+          category: m.category || null,
+          matched: r.match_status === "matched",
+        };
+      });
+      reconState.receipts.sort((a, b) =>
+        (a.date || "").localeCompare(b.date || ""),
+      );
+      _renderReceiptList();
+    } catch {}
+  }
+
+  function _updateCountChip(elId, shown, total) {
+    const el = $(elId);
+    if (!el) return;
+    el.textContent = shown === total ? `${total}` : `${shown} of ${total}`;
+  }
+
+  let _flashTimer = null;
+  function _flash(kind, msg) {
+    const el = $("reconFlash");
+    if (!el) return;
+    el.className = `status-msg ${kind}`;
+    el.textContent = msg;
+    clearTimeout(_flashTimer);
+    _flashTimer = setTimeout(() => {
+      el.textContent = "";
+      el.className = "status-msg";
+    }, 3000);
+  }
+
+  return { init };
+})();
 
 // ─── Expense type toggle ──────────────────────────────────────────────────────
 async function toggleExpenseType(id, current) {
@@ -685,31 +1770,387 @@ $("scanFolderBtn").addEventListener("click", async () => {
   const original = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span> Scanning…';
-  status.textContent = "Scanning folder — OCR can take a few seconds per file…";
-  status.className = "status-msg load";
+  // Read the pending count straight from the side-panel badge so the modal
+  // opens with the right "Processing N files…" copy before the POST returns.
+  const pendingTxt = ($("watchPendingBadge")?.textContent || "").match(/\d+/);
+  const pending = pendingTxt ? parseInt(pendingTxt[0], 10) : null;
+  openScanModal(pending);
+  status.textContent = "";
   try {
     const res = await api("POST", "/api/watch-folder/scan");
     if (res.scanned === 0) {
-      status.textContent =
-        "Folder is empty — drop some receipts in and scan again.";
-      status.className = "status-msg";
+      // Empty inbox — collapse the modal to a quick message and bail out.
+      $("scanTitle").textContent = "Inbox is empty";
+      $("scanModalSub").textContent =
+        "Drop receipts in the folder and scan again.";
+      $("scanBar").className = "scan-bar";
+      $("scanBarFill").className = "scan-bar-fill done";
+      $("scanProgressRow").style.display = "none";
+      $("scanFootMsg").className = "scan-foot-msg";
+      $("scanFootMsg").textContent = "";
+      $("scanCloseBtn").disabled = false;
     } else {
-      const bits = [
-        `${res.imported_receipts} receipt${res.imported_receipts === 1 ? "" : "s"} from ${res.files_ok} file${res.files_ok === 1 ? "" : "s"}`,
-      ];
-      if (res.files_failed) bits.push(`${res.files_failed} failed`);
-      status.textContent = bits.join(" · ");
-      status.className = "status-msg " + (res.files_failed ? "err" : "ok");
+      renderScanResults(res);
     }
     loadReceipts();
     loadStats();
     loadWatchFolder();
   } catch (e) {
-    status.textContent = "Error: " + e.message;
-    status.className = "status-msg err";
+    $("scanTitle").textContent = "Scan failed";
+    $("scanModalSub").textContent = e.message || "Unknown error";
+    $("scanBar").className = "scan-bar";
+    $("scanBarFill").className = "scan-bar-fill";
+    $("scanBarFill").style.background = "var(--red)";
+    $("scanBarFill").style.width = "100%";
+    $("scanProgressRow").style.display = "none";
+    $("scanFootMsg").className = "scan-foot-msg err";
+    $("scanFootMsg").textContent = "Error: " + e.message;
+    $("scanCloseBtn").disabled = false;
   } finally {
     btn.disabled = false;
     btn.innerHTML = original;
+  }
+});
+
+// ─── Folder-scan modal (progress + results) ────────────────────────────────
+let _scanAutoCloseTimer = null;
+let _scanCountdownTimer = null;
+let _scanResultsCache = null; // last results object — needed by detail modal
+let _scanDetailFile = null; // filename being edited
+let _scanDetailReceipts = []; // working copy in the secondary modal
+
+function openScanModal(pending) {
+  _clearScanTimers();
+  $("scanModal").classList.add("open");
+
+  $("scanTitle").textContent = "Scanning inbox";
+  $("scanModalSub").textContent = "Looking for new receipts…";
+  $("scanBar").className = "scan-bar indeterminate";
+  $("scanBarFill").className = "scan-bar-fill";
+  $("scanBarFill").style.width = "0%";
+  $("scanBarFill").style.background = "";
+
+  $("scanProgressRow").style.display = "flex";
+  $("scanPending").textContent = pending ?? "…";
+
+  $("scanSummary").style.display = "none";
+  $("scanSummary").innerHTML = "";
+  $("scanResults").style.display = "none";
+  $("scanResults").innerHTML = "";
+
+  $("scanFootMsg").className = "scan-foot-msg";
+  $("scanFootMsg").textContent = "This won't take long.";
+  $("scanCloseBtn").disabled = true;
+}
+
+function renderScanResults(res) {
+  _clearScanTimers();
+  _scanResultsCache = res;
+  const failed = res.files_failed || 0;
+  const ok = res.files_ok || 0;
+  const imported = res.imported_receipts || 0;
+  const scanned = res.scanned || ok + failed;
+  const allOk = failed === 0;
+
+  $("scanTitle").textContent = allOk
+    ? "Scan complete"
+    : `Scan finished — ${failed} failed`;
+  $("scanModalSub").textContent =
+    `${scanned} file${scanned === 1 ? "" : "s"} processed`;
+  $("scanBar").className = "scan-bar";
+  $("scanBarFill").className = "scan-bar-fill done";
+  $("scanBarFill").style.background = allOk ? "" : "var(--amber)";
+
+  $("scanProgressRow").style.display = "none";
+
+  const summary = $("scanSummary");
+  summary.style.display = "flex";
+  if (allOk) {
+    summary.innerHTML = `
+      <span class="scan-summary-main">${imported} receipt${imported === 1 ? "" : "s"}</span>
+      <span style="color:var(--text-3)">from ${scanned} file${scanned === 1 ? "" : "s"}</span>
+      <span style="flex:1"></span>
+      <span class="badge badge-green">${ok} ok</span>`;
+  } else {
+    summary.innerHTML = `
+      <span class="scan-summary-main">${ok} ok</span>
+      <span style="color:var(--text-3)">·</span>
+      <span style="color:var(--red);font-weight:600">${failed} failed</span>
+      <span style="flex:1"></span>
+      <span class="badge badge-amber">review</span>`;
+  }
+
+  const list = $("scanResults");
+  list.style.display = "block";
+  list.innerHTML = (res.results || [])
+    .map((r, idx) => {
+      const okRow = r.status === "ok";
+      const name = _escape(r.filename || "(unnamed)");
+      const countPill =
+        r.count && r.count > 1
+          ? `<span class="scan-count-pill">×${r.count}</span>`
+          : "";
+
+      let meta = "";
+      if (okRow) {
+        if (r.vendor && r.amount != null) {
+          meta = `<span class="scan-vendor">${_escape(r.vendor)}</span>${fmt.currency(r.amount, r.currency)}`;
+        } else if (r.count && r.count > 1) {
+          meta = `${r.count} receipts`;
+        } else meta = "saved";
+      } else {
+        meta = _escape(r.error || "failed");
+      }
+
+      const clickable = okRow ? "clickable" : "";
+      const editAffordance = okRow
+        ? `<span class="scan-row-edit" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></span>`
+        : "";
+      const onClick = okRow ? `onclick="openScanDetail(${idx})"` : "";
+      const title = okRow ? "Click to edit receipts in this file" : name;
+
+      return `
+      <div class="scan-row ${okRow ? "" : "err"} ${clickable}" ${onClick} title="${title}">
+        <span class="wl-dot ${okRow ? "ok" : "err"}"></span>
+        <span class="scan-row-name">${name}${countPill}</span>
+        <span class="scan-row-meta">${meta}</span>
+        ${editAffordance}
+      </div>`;
+    })
+    .join("");
+
+  $("scanCloseBtn").disabled = false;
+  if (allOk) {
+    let n = 4;
+    $("scanFootMsg").className = "scan-foot-msg ok";
+    $("scanFootMsg").innerHTML =
+      `Closing in <span class="scan-countdown">${n}</span>…`;
+    _scanCountdownTimer = setInterval(() => {
+      n -= 1;
+      const cd = $("scanFootMsg").querySelector(".scan-countdown");
+      if (cd) cd.textContent = n;
+      if (n <= 0) _clearScanTimers();
+    }, 1000);
+    _scanAutoCloseTimer = setTimeout(closeScanModal, 4000);
+  } else {
+    $("scanFootMsg").className = "scan-foot-msg err";
+    $("scanFootMsg").textContent = "Some files failed — close when ready.";
+  }
+}
+
+function closeScanModal() {
+  _clearScanTimers();
+  $("scanModal").classList.remove("open");
+}
+
+function _clearScanTimers() {
+  if (_scanAutoCloseTimer) {
+    clearTimeout(_scanAutoCloseTimer);
+    _scanAutoCloseTimer = null;
+  }
+  if (_scanCountdownTimer) {
+    clearInterval(_scanCountdownTimer);
+    _scanCountdownTimer = null;
+  }
+}
+
+function _escape(s) {
+  return String(s).replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c],
+  );
+}
+
+// ─── Secondary modal: edit receipts inside a scanned file ──────────────────
+function openScanDetail(idx) {
+  if (!_scanResultsCache) return;
+  const fileResult = _scanResultsCache.results[idx];
+  if (!fileResult || fileResult.status !== "ok") return;
+
+  // Pause auto-close on primary while editing.
+  _clearScanTimers();
+  $("scanFootMsg").className = "scan-foot-msg";
+  $("scanFootMsg").textContent = "Editing — close when ready.";
+
+  _scanDetailFile = fileResult.filename;
+
+  // Build working copy from existing receipts; synthesise empty rows if the
+  // backend didn't return per-receipt detail.
+  if (Array.isArray(fileResult.receipts) && fileResult.receipts.length) {
+    _scanDetailReceipts = fileResult.receipts.map((r) => ({
+      vendor: r.vendor || (r.metadata && r.metadata.vendor_name) || "",
+      amount: r.amount ?? (r.metadata && r.metadata.total_amount) ?? "",
+      currency:
+        r.currency ||
+        (r.metadata && r.metadata.currency) ||
+        fileResult.currency ||
+        "USD",
+      page: r.page || 1,
+    }));
+  } else {
+    const n = Math.max(1, fileResult.count || 1);
+    _scanDetailReceipts = [];
+    for (let i = 0; i < n; i++) {
+      _scanDetailReceipts.push({
+        vendor: i === 0 ? fileResult.vendor || "" : "",
+        amount: i === 0 ? (fileResult.amount ?? "") : "",
+        currency: fileResult.currency || "USD",
+        page: 1,
+      });
+    }
+  }
+
+  $("scanDetailFile").textContent = _scanDetailFile;
+  $("scanDetailFile").title = _scanDetailFile;
+  renderScanDetailList();
+  $("scanDetailModal").classList.add("open");
+}
+
+function renderScanDetailList() {
+  const list = $("scanDetailList");
+  list.innerHTML = _scanDetailReceipts
+    .map((r, i) => {
+      const amountDisplay =
+        r.amount === "" || r.amount == null
+          ? ""
+          : typeof r.amount === "number"
+            ? r.amount.toFixed(2)
+            : r.amount;
+      return `
+      <div class="scan-detail-card">
+        <div class="scan-detail-card-h">
+          <label class="scan-detail-page" title="Page number">
+            Page <input type="number" min="1" value="${r.page}" data-idx="${i}" data-field="page" />
+          </label>
+          <span class="scan-detail-num">Receipt ${i + 1}</span>
+          <button class="scan-detail-remove" title="Remove this receipt" data-remove="${i}"
+                  ${_scanDetailReceipts.length === 1 ? 'disabled style="opacity:0.3;cursor:not-allowed"' : ""}>
+            ×
+          </button>
+        </div>
+        <div class="scan-detail-fields">
+          <input class="scan-detail-input" placeholder="Vendor" value="${_escape(r.vendor || "")}"
+                 data-idx="${i}" data-field="vendor" />
+          <input class="scan-detail-input amount" placeholder="0.00" inputmode="decimal"
+                 value="${amountDisplay}"
+                 data-idx="${i}" data-field="amount" />
+        </div>
+      </div>
+    `;
+    })
+    .join("");
+
+  list.querySelectorAll("input[data-field]").forEach((el) => {
+    el.addEventListener("input", (e) => {
+      const i = +e.target.dataset.idx;
+      const f = e.target.dataset.field;
+      _scanDetailReceipts[i][f] =
+        f === "page" ? parseInt(e.target.value, 10) || 1 : e.target.value;
+    });
+  });
+  list.querySelectorAll("[data-remove]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      const i = +e.currentTarget.dataset.remove;
+      if (_scanDetailReceipts.length > 1) {
+        _scanDetailReceipts.splice(i, 1);
+        renderScanDetailList();
+        _refreshDetailTotal();
+      }
+    });
+  });
+
+  _refreshDetailTotal();
+}
+
+function _refreshDetailTotal() {
+  const n = _scanDetailReceipts.length;
+  $("scanDetailCount").textContent = n;
+  $("scanDetailCountS").textContent = n === 1 ? "" : "s";
+}
+
+function addReceiptRow() {
+  const last = _scanDetailReceipts[_scanDetailReceipts.length - 1] || {};
+  _scanDetailReceipts.push({
+    vendor: "",
+    amount: "",
+    currency: last.currency || "USD",
+    page: last.page || 1,
+  });
+  renderScanDetailList();
+}
+
+function saveScanDetail() {
+  if (!_scanResultsCache || !_scanDetailFile) {
+    closeScanDetail();
+    return;
+  }
+  const fileResult = _scanResultsCache.results.find(
+    (r) => r.filename === _scanDetailFile,
+  );
+  if (!fileResult) {
+    closeScanDetail();
+    return;
+  }
+
+  const cleaned = _scanDetailReceipts.map((r) => ({
+    vendor: (r.vendor || "").trim() || null,
+    amount: r.amount === "" || r.amount == null ? null : parseFloat(r.amount),
+    currency: r.currency || null,
+    page: r.page || 1,
+  }));
+
+  fileResult.receipts = cleaned;
+  fileResult.count = cleaned.length;
+  if (cleaned.length === 1) {
+    fileResult.vendor = cleaned[0].vendor;
+    fileResult.amount = cleaned[0].amount;
+    fileResult.currency = cleaned[0].currency;
+  } else {
+    fileResult.vendor = null;
+    fileResult.amount = null;
+  }
+
+  _scanResultsCache.imported_receipts = _scanResultsCache.results.reduce(
+    (sum, r) => (r.status === "ok" ? sum + (r.count || 1) : sum),
+    0,
+  );
+
+  closeScanDetail();
+  renderScanResults(_scanResultsCache);
+}
+
+function closeScanDetail() {
+  $("scanDetailModal").classList.remove("open");
+  _scanDetailFile = null;
+  _scanDetailReceipts = [];
+}
+
+$("scanDetailModal").addEventListener("click", (e) => {
+  if (e.target === $("scanDetailModal")) closeScanDetail();
+});
+
+$("scanModal").addEventListener("click", (e) => {
+  if (e.target === $("scanModal") && !$("scanCloseBtn").disabled)
+    closeScanModal();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if ($("scanDetailModal").classList.contains("open")) {
+      closeScanDetail();
+    } else if (
+      $("scanModal").classList.contains("open") &&
+      !$("scanCloseBtn").disabled
+    ) {
+      closeScanModal();
+    }
   }
 });
 
@@ -1299,6 +2740,7 @@ document.querySelectorAll(".nav-item[data-tab]").forEach((btn) => {
     $("topbarTitle").textContent = tabTitles[name];
     if (name === "receipts") loadReceipts();
     if (name === "statements") loadStatements();
+    if (name === "reconcile") Reconcile.init();
   });
 });
 
@@ -1429,6 +2871,41 @@ async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
 
   try {
     const preview = await api("POST", "/api/upload/receipt/preview", fd);
+
+    // ── PDF fast path ───────────────────────────────────────────────
+    // The /preview endpoint rasterised + OCR'd every page server-side
+    // (one receipt per page, no segmentation). Skip the bbox editor and
+    // jump straight to a "done" state so the user sees the result.
+    if (preview.auto_processed) {
+      setAiStep(
+        0,
+        "done",
+        `PDF received · ${preview.pages} page${preview.pages === 1 ? "" : "s"}`,
+      );
+      setAiStep(
+        1,
+        "done",
+        `Extracted ${preview.count} receipt${preview.count === 1 ? "" : "s"}`,
+      );
+      setAiStep(
+        2,
+        "done",
+        `Saved ${preview.count} row${preview.count === 1 ? "" : "s"}`,
+      );
+      const metas = (preview.receipts || []).map((r) => r.metadata || {});
+      if (!bulk && metas.length) showAiResult(metas);
+      const summary = `${preview.count} receipt${preview.count === 1 ? "" : "s"} from ${preview.pages} page${preview.pages === 1 ? "" : "s"}`;
+      if (!bulk) {
+        $("aiModalSub").textContent = `Done — ${summary}`;
+        $("receiptStatus").textContent = `Saved — ${summary}`;
+        $("receiptStatus").className = "status-msg ok";
+        loadReceipts();
+        loadStats();
+        setTimeout(closeAiModal, 4000);
+      }
+      return { ok: true, deferred: false, count: preview.count, metas };
+    }
+
     setAiStep(
       0,
       "done",
@@ -2068,3 +3545,69 @@ loadWatchFolder().catch(() => {});
 loadGmailStatus().catch(() => {});
 restoreLastSync();
 checkOllama().catch(() => {});
+
+// ─── Filter bar + sortable column wiring (runs once at load) ────────────────
+(function _wireReceiptFiltersAndSort() {
+  // Restore filter UI from persisted state.
+  const fields = [
+    ["rfSearch", "q", "input"],
+    ["rfFromDate", "from", "change"],
+    ["rfToDate", "to", "change"],
+    ["rfMinAmt", "min", "input"],
+    ["rfMaxAmt", "max", "input"],
+    ["rfStatus", "status", "change"],
+    ["rfCategory", "category", "change"],
+    ["rfCurrency", "currency", "change"],
+  ];
+  fields.forEach(([id, key, evt]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = receiptFilters[key] || "";
+    el.addEventListener(evt, () => {
+      receiptFilters[key] = el.value;
+      _saveReceiptFilters();
+      _updateFilterBadge();
+      renderReceipts(allReceipts);
+      updateProgress(allReceipts);
+    });
+  });
+
+  const clearBtn = document.getElementById("rfClearBtn");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      receiptFilters = { ..._FILTER_DEFAULTS };
+      fields.forEach(([id]) => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+      });
+      _saveReceiptFilters();
+      _updateFilterBadge();
+      renderReceipts(allReceipts);
+      updateProgress(allReceipts);
+    });
+  }
+  _updateFilterBadge();
+
+  // Sortable column headers — click a <th data-sort="col">.
+  // Same handler shape works for any sortable table; receipts is the only
+  // one wired to live data right now, matches gets wired when rendered.
+  document
+    .querySelectorAll('table.sortable[data-table="receipts"] th[data-sort]')
+    .forEach((th) => {
+      th.addEventListener("click", () => {
+        const col = th.dataset.sort;
+        if (receiptSort.col === col) {
+          receiptSort.dir = receiptSort.dir === "asc" ? "desc" : "asc";
+        } else {
+          // Default to descending for date/amount (most-recent / largest
+          // first feels natural); ascending for everything text-y.
+          const numeric = col === "date" || col === "amount";
+          receiptSort = { col, dir: numeric ? "desc" : "asc" };
+        }
+        _saveSort("receipts", receiptSort);
+        _refreshSortIndicators("receipts", receiptSort);
+        renderReceipts(allReceipts);
+      });
+    });
+  _refreshSortIndicators("receipts", receiptSort);
+})();

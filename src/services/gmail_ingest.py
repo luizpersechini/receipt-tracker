@@ -325,6 +325,10 @@ def _extract_total(text: str) -> tuple[Optional[float], Optional[str]]:
             if amt is None:
                 continue
             currency = _CURRENCY_SYMBOL_MAP.get(sym)
+            # Bare "$" is ambiguous — HST (Harmonized Sales Tax) is Canada-only,
+            # so its presence is a reliable signal the ride was in CAD.
+            if currency == "USD" and re.search(r"\bHST\b", text):
+                currency = "CAD"
             return amt, currency
     return None, None
 

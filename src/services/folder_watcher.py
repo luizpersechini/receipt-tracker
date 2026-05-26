@@ -204,8 +204,15 @@ def _ingest_file(src: Path) -> dict:
 
     # 1) Materialise the input as one or more image files in receipts_dir.
     #    PDFs are rasterised page-by-page; images are copied verbatim.
+    #
+    # `is_pdf_source` flips the OCR call into "treat the page as a single
+    # receipt" mode below. PDF pages are almost always digital documents
+    # with one receipt per page; running the multi-receipt segmenter on
+    # them tends to shred a single page into many fragments because of
+    # whitespace between text blocks (e.g. hotel folios, invoices).
     image_paths: list = []
-    if is_pdf(str(src)):
+    is_pdf_source = is_pdf(str(src))
+    if is_pdf_source:
         pages = render_pdf_to_images(str(src))  # may raise → caught by caller
         stem = src.stem
         for i, page in enumerate(pages, 1):
@@ -223,7 +230,7 @@ def _ingest_file(src: Path) -> dict:
     all_ids: list = []
     first_meta: Optional[dict] = None
     for img_path in image_paths:
-        items = process_with_segments(str(img_path))
+        items = process_with_segments(str(img_path), skip_segmentation=is_pdf_source)
         if not items:
             items = [
                 {

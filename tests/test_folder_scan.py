@@ -55,7 +55,9 @@ def _stub_segments(monkeypatch, fw, results):
     `results` is a list of (metadata_dict, crop_or_None) tuples."""
     from src.services import llm_processor
 
-    def fake(_path):
+    def fake(_path, **_kwargs):
+        # Swallow kwargs like `skip_segmentation` so the stub stays compatible
+        # with both old and new call signatures.
         return [{"metadata": m, "crop": c} for (m, c) in results]
 
     monkeypatch.setattr(llm_processor, "process_with_segments", fake)
@@ -180,7 +182,7 @@ def test_scan_moves_failed_file_to_failed_dir(scan_env, monkeypatch):
 
     from src.services import llm_processor
 
-    def explode(_path):
+    def explode(_path, **_kwargs):
         raise RuntimeError("ocr blew up")
 
     monkeypatch.setattr(llm_processor, "process_with_segments", explode)
@@ -204,7 +206,7 @@ def test_scan_one_bad_file_does_not_abort_the_batch(scan_env, monkeypatch):
 
     from src.services import llm_processor
 
-    def selective(path):
+    def selective(path, **_kwargs):
         from pathlib import Path as _P
 
         if "explode" in _P(path).name:

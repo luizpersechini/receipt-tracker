@@ -37,7 +37,17 @@ async def upload_receipt_preview(file: UploadFile = File(...)):
     The frontend uses the returned bboxes as the starting point for a manual
     bbox editor. The user can adjust / add / delete boxes before calling
     /commit, which performs the actual OCR.
+
+    Special case: PDF uploads bypass the bbox editor entirely. PDFs get
+    rasterised page-by-page, then each page is OCR'd as a single receipt
+    (skip_segmentation=True) — same logic as the folder scan. The response
+    carries `auto_processed: True` so the frontend can show a direct
+    summary instead of opening the editor.
     """
+    # Local imports keep cold start light and let the PDF path be tested
+    # without dragging cv2 into image-only flows.
+    from ..services.pdf_render import is_pdf, render_pdf_to_images
+
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"receipt_{timestamp}_{file.filename}"
@@ -45,20 +55,58 @@ async def upload_receipt_preview(file: UploadFile = File(...)):
         with open(filepath, "wb") as buf:
             shutil.copyfileobj(file.file, buf)
 
+        # ── PDF path: rasterise → OCR each page as one receipt → save ───
+        if is_pdf(str(filepath)):
+            pages = await asyncio.to_thread(render_pdf_to_images, str(filepath))
+            stem = filepath.stem
+            saved = []
+            for i, page in enumerate(pages, 1):
+                page_name = f"{stem}_p{i}.png"
+                page_path = settings.receipts_dir / page_name
+                await asyncio.to_thread(
+                    lambda p=page, pp=page_path: p.save(str(pp), "PNG", optimize=True)
+                )
+                async with _ocr_semaphore:
+                    items = await asyncio.to_thread(
+                        process_with_segments, str(page_path), skip_segmentation=True
+                    )
+                for item in items:
+                    meta = item.get("metadata") or {}
+                    rid = db.save_receipt(
+                        filename=page_name,
+                        filepath=str(page_path),
+                        metadata=meta,
+                        description=None,
+                    )
+                    saved.append({"id": rid, "metadata": meta})
+            return JSONResponse(
+                {
+                    "success": True,
+                    "filename": filename,
+                    "auto_processed": True,
+                    "count": len(saved),
+                    "receipts": saved,
+                    "pages": len(pages),
+                }
+            )
+
         boxes, (w, h) = await asyncio.to_thread(segment_with_boxes, str(filepath))
         # Route through /api/preview/ instead of the raw static mount so
         # HEIC/HEIF uploads are transparently converted to JPEG on the fly —
         # browsers can't render HEIC natively, and without this the bbox
         # editor shows a broken-image icon.
         from urllib.parse import quote
-        return JSONResponse({
-            "success": True,
-            "filename": filename,
-            "image_url": f"/api/preview/{quote(filename)}",
-            "image_size": {"w": w, "h": h},
-            "bboxes": boxes,
-            "auto_segmented": len(boxes) > 1,
-        })
+
+        return JSONResponse(
+            {
+                "success": True,
+                "filename": filename,
+                "image_url": f"/api/preview/{quote(filename)}",
+                "image_size": {"w": w, "h": h},
+                "bboxes": boxes,
+                "auto_segmented": len(boxes) > 1,
+            }
+        )
     except Exception as e:
         logger.exception("upload_receipt_preview failed")
         raise HTTPException(status_code=500, detail=str(e))
@@ -124,18 +172,23 @@ async def upload_receipt_commit(body: ReceiptCommitRequest):
 
         receipt_id = await asyncio.to_thread(
             db.save_receipt,
-            row_filename, row_filepath_str, meta, body.description,
+            row_filename,
+            row_filepath_str,
+            meta,
+            body.description,
         )
         saved.append({"receipt_id": receipt_id, "filename": row_filename, "metadata": meta})
 
-    return JSONResponse({
-        "success": True,
-        "count": len(saved),
-        "receipts": saved,
-        "receipt_id": saved[0]["receipt_id"] if saved else None,
-        "filename": saved[0]["filename"] if saved else None,
-        "metadata": saved[0]["metadata"] if saved else None,
-    })
+    return JSONResponse(
+        {
+            "success": True,
+            "count": len(saved),
+            "receipts": saved,
+            "receipt_id": saved[0]["receipt_id"] if saved else None,
+            "filename": saved[0]["filename"] if saved else None,
+            "metadata": saved[0]["metadata"] if saved else None,
+        }
+    )
 
 
 @router.post("/upload/receipt")
@@ -155,11 +208,20 @@ async def upload_receipt(file: UploadFile = File(...), description: str = Form(N
         # the image into multiple crops, persist each crop as its own file
         # so the thumbnail shows the right portion of the page.
         if not items:
-            items = [{"metadata": {"vendor_name": "Unknown", "category": "other",
-                                    "error": "no receipt"}, "crop": None}]
+            items = [
+                {
+                    "metadata": {
+                        "vendor_name": "Unknown",
+                        "category": "other",
+                        "error": "no receipt",
+                    },
+                    "crop": None,
+                }
+            ]
 
         # Filename stem without extension, e.g. "receipt_20260513_120000_IMG_1234"
         from pathlib import Path
+
         stem = Path(filename).stem
 
         saved = []
@@ -175,7 +237,10 @@ async def upload_receipt(file: UploadFile = File(...), description: str = Form(N
                 row_filename = f"{stem}_seg{i + 1}.png"
                 row_filepath = settings.receipts_dir / row_filename
                 await asyncio.to_thread(
-                    crop.save, str(row_filepath), "PNG", optimize=True,
+                    crop.save,
+                    str(row_filepath),
+                    "PNG",
+                    optimize=True,
                 )
                 row_filepath_str = str(row_filepath)
             else:
@@ -185,20 +250,25 @@ async def upload_receipt(file: UploadFile = File(...), description: str = Form(N
 
             receipt_id = await asyncio.to_thread(
                 db.save_receipt,
-                row_filename, row_filepath_str, meta, description,
+                row_filename,
+                row_filepath_str,
+                meta,
+                description,
             )
             saved.append({"receipt_id": receipt_id, "filename": row_filename, "metadata": meta})
 
-        return JSONResponse({
-            "success": True,
-            "count": len(saved),
-            "receipts": saved,
-            # Back-compat: surface the first row at the top level so older
-            # frontend code (or external callers) keep working.
-            "receipt_id": saved[0]["receipt_id"],
-            "filename": saved[0]["filename"],
-            "metadata": saved[0]["metadata"],
-        })
+        return JSONResponse(
+            {
+                "success": True,
+                "count": len(saved),
+                "receipts": saved,
+                # Back-compat: surface the first row at the top level so older
+                # frontend code (or external callers) keep working.
+                "receipt_id": saved[0]["receipt_id"],
+                "filename": saved[0]["filename"],
+                "metadata": saved[0]["metadata"],
+            }
+        )
     except Exception as e:
         logger.exception("upload_receipt failed")
         raise HTTPException(status_code=500, detail=str(e))
@@ -312,10 +382,12 @@ async def dedupe_uber():
             groups_with_dupes += 1
             # Prefer the row whose filename ends in .pdf (rendered Gmail
             # receipt). If multiple, prefer the lowest id (earliest import).
-            rows.sort(key=lambda r: (
-                0 if (r.get("filename") or "").endswith(".pdf") else 1,
-                r.get("id") or 0,
-            ))
+            rows.sort(
+                key=lambda r: (
+                    0 if (r.get("filename") or "").endswith(".pdf") else 1,
+                    r.get("id") or 0,
+                )
+            )
             keeper = rows[0]
             for victim in rows[1:]:
                 db.delete_receipt(victim["id"])
@@ -349,7 +421,9 @@ async def backfill_country():
     """
     import json as _json
     from src.services.llm_processor import (
-        _normalize_country, _country_from_city, _refine_currency,
+        _normalize_country,
+        _country_from_city,
+        _refine_currency,
     )
 
     def _do_backfill():
@@ -429,6 +503,51 @@ async def strip_times_from_dates():
         result = await asyncio.to_thread(_do_strip)
     except Exception as e:
         logger.exception("strip_times_from_dates failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse({"success": True, **result})
+
+
+@router.post("/receipts/normalize-dates")
+async def normalize_dates():
+    """
+    Walk every receipt and normalise the `date` field in metadata to ISO
+    YYYY-MM-DD. Useful one-shot after shipping the date normaliser — older
+    rows are still in mixed locale formats ("25/03/2026", "01/abr", etc.).
+
+    Keeps the original printed string when parsing fails, so the column is
+    never silently emptied.
+    """
+    import json as _json
+
+    from src.services.llm_processor import _normalize_date, _strip_time_from_date
+
+    def _do_normalize():
+        receipts = db.get_all_receipts()
+        scanned = 0
+        changed = 0
+        for r in receipts:
+            scanned += 1
+            try:
+                meta = _json.loads(r.get("metadata") or "{}")
+            except _json.JSONDecodeError:
+                continue
+            before = meta.get("date")
+            if not before:
+                continue
+            cleaned = _strip_time_from_date(before)
+            after = _normalize_date(
+                cleaned, language=meta.get("language"), country=meta.get("country")
+            )
+            if not after or after == before:
+                continue
+            db.update_receipt(r["id"], column_patch={}, metadata_patch={"date": after})
+            changed += 1
+        return {"scanned": scanned, "changed": changed}
+
+    try:
+        result = await asyncio.to_thread(_do_normalize)
+    except Exception as e:
+        logger.exception("normalize_dates failed")
         raise HTTPException(status_code=500, detail=str(e))
     return JSONResponse({"success": True, **result})
 
@@ -549,11 +668,13 @@ async def dedupe_all(dry_run: bool = False):
                 amount_f = round(float(amount), 2)
             except (TypeError, ValueError):
                 continue
-            groups[(v_norm, date)].append({
-                "id": r.get("id"),
-                "amount": amount_f,
-                "filename": r.get("filename") or "",
-            })
+            groups[(v_norm, date)].append(
+                {
+                    "id": r.get("id"),
+                    "amount": amount_f,
+                    "filename": r.get("filename") or "",
+                }
+            )
 
         to_remove: list = []
         groups_with_dupes = 0
@@ -603,6 +724,7 @@ async def dedupe_all(dry_run: bool = False):
 @router.post("/receipts/bulk-delete")
 async def bulk_delete(body: BulkDeleteRequest):
     """Delete multiple receipts in one call. Returns the count actually deleted."""
+
     def _delete_all(ids):
         for rid in ids:
             db.delete_receipt(rid)
@@ -640,7 +762,10 @@ async def edit_receipt(receipt_id: int, body: ReceiptEdit):
 
     try:
         ok = await asyncio.to_thread(
-            db.update_receipt, receipt_id, column_patch, metadata_patch,
+            db.update_receipt,
+            receipt_id,
+            column_patch,
+            metadata_patch,
         )
     except Exception as e:
         logger.exception("edit_receipt failed")

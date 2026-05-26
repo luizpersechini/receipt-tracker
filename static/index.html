@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=5" />
+    <link rel="stylesheet" href="/static/css/app.css?v=11" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -236,7 +236,7 @@
           <div class="card">
             <div class="card-head">Monthly Statement</div>
             <div class="drop-zone" id="statementDrop">
-              <input type="file" id="statementFile" accept=".csv" />
+              <input type="file" id="statementFile" accept=".csv,.pdf" />
               <div class="drop-icon">
                 <svg
                   viewBox="0 0 24 24"
@@ -255,7 +255,7 @@
                 </svg>
               </div>
               <div class="drop-hint">
-                <strong>Click or drag</strong><br />Corporate card CSV
+                <strong>Click or drag</strong><br />Corporate card CSV or PDF
               </div>
               <div class="drop-filename" id="statementFilename"></div>
             </div>
@@ -556,9 +556,91 @@
         <div class="main-panel">
           <!-- ══ Receipts ══ -->
           <div id="tab-receipts">
+            <!-- Filter / sort bar — purely client-side over allReceipts. -->
+            <div class="filter-bar" id="receiptFilterBar">
+              <div class="fbar-row">
+                <div class="fbar-search">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <circle cx="11" cy="11" r="7" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <input
+                    type="search"
+                    id="rfSearch"
+                    placeholder="Search vendor, description, location…"
+                  />
+                </div>
+                <label class="fbar-field">
+                  <span>From</span>
+                  <input type="date" id="rfFromDate" />
+                </label>
+                <label class="fbar-field">
+                  <span>To</span>
+                  <input type="date" id="rfToDate" />
+                </label>
+                <label class="fbar-field fbar-amt">
+                  <span>Min</span>
+                  <input
+                    type="number"
+                    id="rfMinAmt"
+                    inputmode="decimal"
+                    placeholder="0"
+                  />
+                </label>
+                <label class="fbar-field fbar-amt">
+                  <span>Max</span>
+                  <input
+                    type="number"
+                    id="rfMaxAmt"
+                    inputmode="decimal"
+                    placeholder="∞"
+                  />
+                </label>
+                <select id="rfStatus" class="fbar-select">
+                  <option value="">All status</option>
+                  <option value="matched">Matched</option>
+                  <option value="unmatched">Unmatched</option>
+                  <option value="pending">Pending</option>
+                </select>
+                <select id="rfCategory" class="fbar-select">
+                  <option value="">Any category</option>
+                  <option value="meals">Meals</option>
+                  <option value="transportation">Transportation</option>
+                  <option value="travel">Travel</option>
+                  <option value="lodging">Lodging</option>
+                  <option value="office_supplies">Office supplies</option>
+                  <option value="other">Other</option>
+                </select>
+                <select id="rfCurrency" class="fbar-select">
+                  <option value="">Any currency</option>
+                </select>
+                <span class="fbar-spacer"></span>
+                <span
+                  class="fbar-active"
+                  id="rfActiveCount"
+                  style="display: none"
+                ></span>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  id="rfClearBtn"
+                  style="display: none"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
             <div class="card">
               <div class="table-wrap">
-                <table>
+                <table class="sortable" data-table="receipts">
                   <thead>
                     <tr>
                       <th style="width: 32px">
@@ -569,15 +651,15 @@
                         />
                       </th>
                       <th style="width: 46px"></th>
-                      <th>Date</th>
-                      <th>Vendor</th>
-                      <th>Amount</th>
+                      <th data-sort="date">Date</th>
+                      <th data-sort="vendor">Vendor</th>
+                      <th data-sort="amount">Amount</th>
                       <th>Currency</th>
                       <th>Country</th>
                       <th>Location</th>
-                      <th>Category</th>
+                      <th data-sort="category">Category</th>
                       <th>Description</th>
-                      <th>Status</th>
+                      <th data-sort="status">Status</th>
                       <th>Type</th>
                       <th style="width: 40px"></th>
                     </tr>
@@ -615,32 +697,175 @@
             </div>
           </div>
 
-          <!-- ══ Reconcile ══ -->
+          <!-- ══ Reconcile (drag-and-drop board) ══ -->
           <div id="tab-reconcile" style="display: none">
-            <div class="reconcile-header">
-              <button class="btn btn-green" id="matchBtn">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                </svg>
-                Run Matching
-              </button>
-              <span
-                style="font-size: 13px; color: var(--text-2)"
-                id="matchMsg"
-              ></span>
+            <div class="recon-page">
+              <!-- Header strip -->
+              <div class="recon-header">
+                <div class="recon-stmt-group">
+                  <label for="reconStatement">Statement</label>
+                  <select
+                    class="recon-stmt-select"
+                    id="reconStatement"
+                  ></select>
+                </div>
+
+                <button class="btn btn-primary" id="reconAutoBtn">
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                  </svg>
+                  Auto-match
+                </button>
+
+                <div class="recon-counts">
+                  <strong id="reconPairedNum">0</strong>
+                  <span class="recon-paired-sep">/</span>
+                  <strong id="reconPairedTotal">0</strong>
+                  <span>paired</span>
+                  <span class="recon-paired-sep">·</span>
+                  <strong id="reconPairedLeft">0</strong>
+                  <span>left to pair</span>
+                </div>
+
+                <div class="recon-header-right">
+                  <label class="recon-show-matched">
+                    <input type="checkbox" id="reconShowMatched" />
+                    <span>Show matched receipts</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="recon-flash">
+                <span class="status-msg" id="reconFlash"></span>
+              </div>
+
+              <!-- Two-pane board -->
+              <div class="recon-board">
+                <!-- Left pane: transactions -->
+                <div class="recon-pane">
+                  <div class="recon-pane-h">
+                    <span class="recon-pane-title">Statement transactions</span>
+                    <span class="recon-pane-count" id="reconTxnCount">0</span>
+                  </div>
+                  <div class="recon-pane-filter">
+                    <div class="filter-bar">
+                      <div class="fbar-row">
+                        <div class="fbar-search">
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                          >
+                            <circle cx="11" cy="11" r="8" />
+                            <path d="m21 21-4.3-4.3" />
+                          </svg>
+                          <input
+                            type="text"
+                            id="reconTxnQ"
+                            placeholder="Search description, city…"
+                          />
+                        </div>
+                      </div>
+                      <div class="fbar-row" style="margin-top: 6px">
+                        <span class="fbar-field"
+                          >Date <input type="date" id="reconTxnFrom"
+                        /></span>
+                        <span class="fbar-field-sep">→</span>
+                        <span class="fbar-field"
+                          ><input type="date" id="reconTxnTo"
+                        /></span>
+                        <span class="fbar-field" style="margin-left: auto"
+                          >R$
+                          <input
+                            type="number"
+                            id="reconTxnMin"
+                            placeholder="min"
+                            step="0.01"
+                          />
+                          <span class="fbar-field-sep">–</span>
+                          <input
+                            type="number"
+                            id="reconTxnMax"
+                            placeholder="max"
+                            step="0.01"
+                          />
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="recon-list" id="reconTxnList"></div>
+                </div>
+
+                <!-- Right pane: receipts -->
+                <div class="recon-pane">
+                  <div class="recon-pane-h">
+                    <span class="recon-pane-title">Receipts (unmatched)</span>
+                    <span class="recon-pane-count" id="reconRcptCount">0</span>
+                  </div>
+                  <div class="recon-pane-filter">
+                    <div class="filter-bar">
+                      <div class="fbar-row">
+                        <div class="fbar-search">
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                          >
+                            <circle cx="11" cy="11" r="8" />
+                            <path d="m21 21-4.3-4.3" />
+                          </svg>
+                          <input
+                            type="text"
+                            id="reconRcptQ"
+                            placeholder="Search vendor…"
+                          />
+                        </div>
+                      </div>
+                      <div class="fbar-row" style="margin-top: 6px">
+                        <span class="fbar-field"
+                          >Date <input type="date" id="reconRcptFrom"
+                        /></span>
+                        <span class="fbar-field-sep">→</span>
+                        <span class="fbar-field"
+                          ><input type="date" id="reconRcptTo"
+                        /></span>
+                        <span class="fbar-field" style="margin-left: auto"
+                          >R$
+                          <input
+                            type="number"
+                            id="reconRcptMin"
+                            placeholder="min"
+                            step="0.01"
+                          />
+                          <span class="fbar-field-sep">–</span>
+                          <input
+                            type="number"
+                            id="reconRcptMax"
+                            placeholder="max"
+                            step="0.01"
+                          />
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="recon-list" id="reconReceiptList"></div>
+                </div>
+              </div>
             </div>
 
-            <!-- Report generator -->
-            <div class="report-panel">
+            <!-- Excel report generator — preserved from the previous reconcile UI. -->
+            <div class="report-panel" style="margin-top: 16px">
               <div class="report-field">
                 <label>Report Type</label>
                 <select id="reportType">
@@ -684,13 +909,6 @@
                 </button>
               </div>
             </div>
-
-            <div id="reconcileContent">
-              <div class="alert alert-gray">
-                Upload a statement and click <strong>Run Matching</strong> to
-                reconcile receipts.
-              </div>
-            </div>
           </div>
 
           <!-- ══ Statements ══ -->
@@ -703,13 +921,16 @@
                       <th>ID</th>
                       <th>File</th>
                       <th>Transactions</th>
+                      <th style="text-align: right">Total</th>
+                      <th>Period</th>
+                      <th>Matched</th>
                       <th>Uploaded</th>
                       <th style="width: 60px"></th>
                     </tr>
                   </thead>
                   <tbody id="statementsTbody">
                     <tr class="empty">
-                      <td colspan="5">
+                      <td colspan="8">
                         <div class="empty-state">
                           <svg
                             viewBox="0 0 24 24"
@@ -835,6 +1056,146 @@
             <span class="ai-result-key">Category</span
             ><span class="ai-result-value" id="arCat">—</span>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── STATEMENT DETAIL MODAL (view all parsed transactions) ────────────── -->
+    <div class="modal-overlay" id="stmtDetailModal">
+      <div class="modal-box stmt-detail-box">
+        <div class="modal-title" id="stmtDetailTitle">Statement</div>
+        <div class="modal-sub" id="stmtDetailSub">—</div>
+
+        <div class="stmt-detail-search">
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            type="text"
+            id="stmtDetailQ"
+            placeholder="Search description, city…"
+          />
+        </div>
+
+        <div class="stmt-detail-wrap">
+          <table class="stmt-detail-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th style="text-align: right">Amount</th>
+                <th>Category</th>
+                <th>City</th>
+                <th>Match</th>
+              </tr>
+            </thead>
+            <tbody id="stmtDetailTbody"></tbody>
+          </table>
+        </div>
+
+        <div class="stmt-detail-foot">
+          <span class="stmt-detail-sum" id="stmtDetailSum">—</span>
+          <button class="btn btn-outline" onclick="closeStatementDetail()">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── FOLDER SCAN MODAL ──────────────────────────────────────────────────── -->
+    <div class="modal-overlay" id="scanModal">
+      <div class="modal-box">
+        <div class="modal-title" id="scanTitle">Scanning inbox</div>
+        <div class="modal-sub" id="scanModalSub">Looking for new receipts…</div>
+
+        <div class="scan-bar indeterminate" id="scanBar">
+          <div class="scan-bar-fill" id="scanBarFill"></div>
+        </div>
+
+        <div class="scan-sub-row" id="scanProgressRow">
+          <span class="spin"></span>
+          <span class="scan-status-text"
+            >Processing
+            <span class="scan-counter" id="scanPending">…</span> files…</span
+          >
+          <span class="scan-hint">OCR can take several seconds per file.</span>
+        </div>
+
+        <div class="scan-summary" id="scanSummary" style="display: none"></div>
+        <div class="scan-results" id="scanResults" style="display: none"></div>
+
+        <div class="scan-foot">
+          <div class="scan-foot-msg" id="scanFootMsg">
+            This won't take long.
+          </div>
+          <button
+            class="btn btn-outline scan-close-btn"
+            id="scanCloseBtn"
+            onclick="closeScanModal()"
+            disabled
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── FOLDER SCAN — secondary modal: edit receipts inside a file ─────────── -->
+    <div class="modal-overlay" id="scanDetailModal">
+      <div class="modal-box scan-detail-box">
+        <div class="modal-title">Edit receipts</div>
+        <div
+          class="modal-sub"
+          id="scanDetailFile"
+          style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
+        ></div>
+
+        <div class="scan-detail-list" id="scanDetailList"></div>
+
+        <button
+          class="scan-detail-add"
+          id="scanDetailAdd"
+          onclick="addReceiptRow()"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Add another receipt on this page
+        </button>
+
+        <div class="scan-detail-total">
+          <span>Total in this file</span>
+          <strong
+            ><span id="scanDetailCount">0</span> receipt<span
+              id="scanDetailCountS"
+              >s</span
+            ></strong
+          >
+        </div>
+
+        <div class="scan-detail-foot">
+          <button class="btn btn-outline" onclick="closeScanDetail()">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveScanDetail()">
+            Save changes
+          </button>
         </div>
       </div>
     </div>
@@ -1090,6 +1451,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=18"></script>
+    <script src="/static/js/app.js?v=27"></script>
   </body>
 </html>

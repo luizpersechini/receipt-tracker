@@ -19,6 +19,7 @@ from ..config import settings
 
 try:
     import pillow_heif
+
     pillow_heif.register_heif_opener()
 except ImportError:
     pass
@@ -44,11 +45,11 @@ KNOWN_VISION_MODELS = {
     "qwen2-vl",
     "qwen2.5-vl",
     "llama3.2-vision",
-    "gemma3",       # Gemma 3 multimodal variants
-    "gemma4",       # explicitly opt-in (still subject to size cap)
+    "gemma3",  # Gemma 3 multimodal variants
+    "gemma4",  # explicitly opt-in (still subject to size cap)
 }
 
-GB = 1024 ** 3
+GB = 1024**3
 
 
 def _model_family(model_name: str) -> str:
@@ -114,7 +115,8 @@ def _pick_model(available: Optional[dict] = None) -> str:
 
     # 2) fall back to allowlisted families, smallest-first
     candidates = [
-        (name, size) for name, size in available.items()
+        (name, size)
+        for name, size in available.items()
         if _is_vision_allowlisted(name) and size <= max_bytes
     ]
     if candidates:
@@ -122,7 +124,8 @@ def _pick_model(available: Optional[dict] = None) -> str:
         chosen = candidates[0][0]
         logger.warning(
             "Configured model %s not installed; falling back to %s",
-            configured, chosen,
+            configured,
+            chosen,
         )
         return chosen
 
@@ -135,6 +138,7 @@ def _pick_model(available: Optional[dict] = None) -> str:
 
 
 # Image loading
+
 
 def _resize_for_ocr(img: Image.Image, max_dim: Optional[int] = None) -> Image.Image:
     """Downsample so the longest edge is ≤ max_dim. No-op if already small."""
@@ -226,6 +230,7 @@ def _image_to_ocr_bytes(img: Image.Image) -> bytes:
 
 # JSON repair
 
+
 def _repair_json(text: str) -> str:
     """Best-effort repair for malformed JSON: bare keys, trailing commas, single quotes."""
     start = text.find("{")
@@ -234,7 +239,7 @@ def _repair_json(text: str) -> str:
         return text
     text = text[start:end]
     text = re.sub(r'(?<!["\w])(\w[\w\s]*)(?=\s*:)', lambda m: f'"{m.group(1).strip()}"', text)
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
     text = text.replace("'", '"')
     return text
 
@@ -242,11 +247,32 @@ def _repair_json(text: str) -> str:
 # Amount / locale handling
 
 _COMMA_DECIMAL_LANGUAGES = {
-    "portuguese", "pt", "pt-br", "pt-pt",
-    "spanish", "es", "french", "fr", "german", "de",
-    "italian", "it", "dutch", "nl", "norwegian", "no",
-    "swedish", "sv", "danish", "da", "finnish", "fi",
-    "polish", "pl", "russian", "ru",
+    "portuguese",
+    "pt",
+    "pt-br",
+    "pt-pt",
+    "spanish",
+    "es",
+    "french",
+    "fr",
+    "german",
+    "de",
+    "italian",
+    "it",
+    "dutch",
+    "nl",
+    "norwegian",
+    "no",
+    "swedish",
+    "sv",
+    "danish",
+    "da",
+    "finnish",
+    "fi",
+    "polish",
+    "pl",
+    "russian",
+    "ru",
 }
 _COMMA_DECIMAL_CURRENCIES = {"BRL", "EUR", "ARS", "CLP", "COP", "PEN", "UYU"}
 
@@ -285,15 +311,24 @@ def _parse_amount(val, comma_decimal: bool) -> Optional[float]:
 # Currency normalisation
 
 _CURRENCY_MAP = {
-    "r$": "BRL", "brl": "BRL",
-    "$":  "USD", "usd": "USD",
-    "€":  "EUR", "eur": "EUR",
-    "£":  "GBP", "gbp": "GBP",
-    "¥":  "JPY", "jpy": "JPY",
-    "a$": "AUD", "aud": "AUD",
-    "c$": "CAD", "cad": "CAD",
-    "mxn": "MXN", "ars": "ARS",
-    "clp": "CLP", "cop": "COP",
+    "r$": "BRL",
+    "brl": "BRL",
+    "$": "USD",
+    "usd": "USD",
+    "€": "EUR",
+    "eur": "EUR",
+    "£": "GBP",
+    "gbp": "GBP",
+    "¥": "JPY",
+    "jpy": "JPY",
+    "a$": "AUD",
+    "aud": "AUD",
+    "c$": "CAD",
+    "cad": "CAD",
+    "mxn": "MXN",
+    "ars": "ARS",
+    "clp": "CLP",
+    "cop": "COP",
 }
 
 
@@ -307,20 +342,67 @@ def _normalize_currency(raw) -> Optional[str]:
 # ISO 3166-1 alpha-2 → ISO 4217 currency code. Used when the receipt text
 # itself doesn't disambiguate (e.g. a bare "$" on a Canadian receipt).
 _COUNTRY_TO_CURRENCY = {
-    "BR": "BRL", "US": "USD", "CA": "CAD", "MX": "MXN",
-    "AR": "ARS", "CL": "CLP", "CO": "COP", "PE": "PEN", "UY": "UYU",
-    "GB": "GBP", "JP": "JPY", "CN": "CNY", "HK": "HKD", "TW": "TWD",
-    "AU": "AUD", "NZ": "NZD", "SG": "SGD", "KR": "KRW",
-    "CH": "CHF", "SE": "SEK", "NO": "NOK", "DK": "DKK", "IS": "ISK",
-    "PL": "PLN", "CZ": "CZK", "HU": "HUF", "RO": "RON", "TR": "TRY",
-    "RU": "RUB", "IN": "INR", "TH": "THB", "ID": "IDR", "PH": "PHP",
-    "MY": "MYR", "VN": "VND", "ZA": "ZAR", "EG": "EGP",
-    "AE": "AED", "SA": "SAR", "IL": "ILS",
+    "BR": "BRL",
+    "US": "USD",
+    "CA": "CAD",
+    "MX": "MXN",
+    "AR": "ARS",
+    "CL": "CLP",
+    "CO": "COP",
+    "PE": "PEN",
+    "UY": "UYU",
+    "GB": "GBP",
+    "JP": "JPY",
+    "CN": "CNY",
+    "HK": "HKD",
+    "TW": "TWD",
+    "AU": "AUD",
+    "NZ": "NZD",
+    "SG": "SGD",
+    "KR": "KRW",
+    "CH": "CHF",
+    "SE": "SEK",
+    "NO": "NOK",
+    "DK": "DKK",
+    "IS": "ISK",
+    "PL": "PLN",
+    "CZ": "CZK",
+    "HU": "HUF",
+    "RO": "RON",
+    "TR": "TRY",
+    "RU": "RUB",
+    "IN": "INR",
+    "TH": "THB",
+    "ID": "IDR",
+    "PH": "PHP",
+    "MY": "MYR",
+    "VN": "VND",
+    "ZA": "ZAR",
+    "EG": "EGP",
+    "AE": "AED",
+    "SA": "SAR",
+    "IL": "ILS",
     # Eurozone
-    "AT": "EUR", "BE": "EUR", "CY": "EUR", "EE": "EUR", "FI": "EUR",
-    "FR": "EUR", "DE": "EUR", "GR": "EUR", "IE": "EUR", "IT": "EUR",
-    "LV": "EUR", "LT": "EUR", "LU": "EUR", "MT": "EUR", "NL": "EUR",
-    "PT": "EUR", "SK": "EUR", "SI": "EUR", "ES": "EUR", "HR": "EUR",
+    "AT": "EUR",
+    "BE": "EUR",
+    "CY": "EUR",
+    "EE": "EUR",
+    "FI": "EUR",
+    "FR": "EUR",
+    "DE": "EUR",
+    "GR": "EUR",
+    "IE": "EUR",
+    "IT": "EUR",
+    "LV": "EUR",
+    "LT": "EUR",
+    "LU": "EUR",
+    "MT": "EUR",
+    "NL": "EUR",
+    "PT": "EUR",
+    "SK": "EUR",
+    "SI": "EUR",
+    "ES": "EUR",
+    "HR": "EUR",
 }
 
 
@@ -328,35 +410,78 @@ _COUNTRY_TO_CURRENCY = {
 # prompt but doesn't always comply (it sometimes returns "Canada", "Brasil",
 # "U.S.A.", etc.), so we normalise before currency refinement.
 _COUNTRY_ALIASES = {
-    "BRAZIL": "BR", "BRASIL": "BR",
-    "UNITED STATES": "US", "UNITED STATES OF AMERICA": "US",
-    "USA": "US", "U.S.A.": "US", "U.S.": "US", "AMERICA": "US",
+    "BRAZIL": "BR",
+    "BRASIL": "BR",
+    "UNITED STATES": "US",
+    "UNITED STATES OF AMERICA": "US",
+    "USA": "US",
+    "U.S.A.": "US",
+    "U.S.": "US",
+    "AMERICA": "US",
     "CANADA": "CA",
-    "MEXICO": "MX", "MÉXICO": "MX",
-    "UNITED KINGDOM": "GB", "UK": "GB", "GREAT BRITAIN": "GB",
-    "ENGLAND": "GB", "SCOTLAND": "GB", "WALES": "GB",
-    "GERMANY": "DE", "DEUTSCHLAND": "DE",
+    "MEXICO": "MX",
+    "MÉXICO": "MX",
+    "UNITED KINGDOM": "GB",
+    "UK": "GB",
+    "GREAT BRITAIN": "GB",
+    "ENGLAND": "GB",
+    "SCOTLAND": "GB",
+    "WALES": "GB",
+    "GERMANY": "DE",
+    "DEUTSCHLAND": "DE",
     "FRANCE": "FR",
-    "SPAIN": "ES", "ESPAÑA": "ES", "ESPANA": "ES",
+    "SPAIN": "ES",
+    "ESPAÑA": "ES",
+    "ESPANA": "ES",
     "PORTUGAL": "PT",
-    "ITALY": "IT", "ITALIA": "IT",
-    "NETHERLANDS": "NL", "HOLLAND": "NL",
-    "BELGIUM": "BE", "AUSTRIA": "AT", "SWITZERLAND": "CH",
-    "SWEDEN": "SE", "NORWAY": "NO", "DENMARK": "DK", "FINLAND": "FI",
-    "IRELAND": "IE", "POLAND": "PL", "CZECHIA": "CZ", "CZECH REPUBLIC": "CZ",
-    "GREECE": "GR", "HUNGARY": "HU", "ROMANIA": "RO", "CROATIA": "HR",
-    "TURKEY": "TR", "RUSSIA": "RU",
-    "JAPAN": "JP", "CHINA": "CN", "HONG KONG": "HK",
-    "TAIWAN": "TW", "KOREA": "KR", "SOUTH KOREA": "KR",
-    "INDIA": "IN", "THAILAND": "TH", "INDONESIA": "ID",
-    "PHILIPPINES": "PH", "MALAYSIA": "MY", "VIETNAM": "VN",
+    "ITALY": "IT",
+    "ITALIA": "IT",
+    "NETHERLANDS": "NL",
+    "HOLLAND": "NL",
+    "BELGIUM": "BE",
+    "AUSTRIA": "AT",
+    "SWITZERLAND": "CH",
+    "SWEDEN": "SE",
+    "NORWAY": "NO",
+    "DENMARK": "DK",
+    "FINLAND": "FI",
+    "IRELAND": "IE",
+    "POLAND": "PL",
+    "CZECHIA": "CZ",
+    "CZECH REPUBLIC": "CZ",
+    "GREECE": "GR",
+    "HUNGARY": "HU",
+    "ROMANIA": "RO",
+    "CROATIA": "HR",
+    "TURKEY": "TR",
+    "RUSSIA": "RU",
+    "JAPAN": "JP",
+    "CHINA": "CN",
+    "HONG KONG": "HK",
+    "TAIWAN": "TW",
+    "KOREA": "KR",
+    "SOUTH KOREA": "KR",
+    "INDIA": "IN",
+    "THAILAND": "TH",
+    "INDONESIA": "ID",
+    "PHILIPPINES": "PH",
+    "MALAYSIA": "MY",
+    "VIETNAM": "VN",
     "SINGAPORE": "SG",
-    "AUSTRALIA": "AU", "NEW ZEALAND": "NZ",
-    "ARGENTINA": "AR", "CHILE": "CL", "COLOMBIA": "CO",
-    "PERU": "PE", "PERÚ": "PE", "URUGUAY": "UY",
-    "SOUTH AFRICA": "ZA", "EGYPT": "EG",
-    "UNITED ARAB EMIRATES": "AE", "UAE": "AE",
-    "SAUDI ARABIA": "SA", "ISRAEL": "IL",
+    "AUSTRALIA": "AU",
+    "NEW ZEALAND": "NZ",
+    "ARGENTINA": "AR",
+    "CHILE": "CL",
+    "COLOMBIA": "CO",
+    "PERU": "PE",
+    "PERÚ": "PE",
+    "URUGUAY": "UY",
+    "SOUTH AFRICA": "ZA",
+    "EGYPT": "EG",
+    "UNITED ARAB EMIRATES": "AE",
+    "UAE": "AE",
+    "SAUDI ARABIA": "SA",
+    "ISRAEL": "IL",
 }
 
 
@@ -365,47 +490,117 @@ _COUNTRY_ALIASES = {
 # stripped. Only well-known unambiguous city names — skip "Springfield" etc.
 _CITY_TO_COUNTRY = {
     # Canada
-    "vancouver": "CA", "toronto": "CA", "montreal": "CA", "calgary": "CA",
-    "edmonton": "CA", "ottawa": "CA", "winnipeg": "CA", "halifax": "CA",
-    "victoria": "CA", "quebec city": "CA", "saskatoon": "CA", "regina": "CA",
-    "whistler": "CA", "banff": "CA", "kelowna": "CA",
+    "vancouver": "CA",
+    "toronto": "CA",
+    "montreal": "CA",
+    "calgary": "CA",
+    "edmonton": "CA",
+    "ottawa": "CA",
+    "winnipeg": "CA",
+    "halifax": "CA",
+    "victoria": "CA",
+    "quebec city": "CA",
+    "saskatoon": "CA",
+    "regina": "CA",
+    "whistler": "CA",
+    "banff": "CA",
+    "kelowna": "CA",
     # Brazil
-    "sao paulo": "BR", "rio de janeiro": "BR", "belo horizonte": "BR",
-    "brasilia": "BR", "salvador": "BR", "fortaleza": "BR", "curitiba": "BR",
-    "porto alegre": "BR", "manaus": "BR", "recife": "BR", "goiania": "BR",
-    "campinas": "BR", "florianopolis": "BR", "vitoria": "BR", "natal": "BR",
-    "macae": "BR", "santos": "BR", "niteroi": "BR",
+    "sao paulo": "BR",
+    "rio de janeiro": "BR",
+    "belo horizonte": "BR",
+    "brasilia": "BR",
+    "salvador": "BR",
+    "fortaleza": "BR",
+    "curitiba": "BR",
+    "porto alegre": "BR",
+    "manaus": "BR",
+    "recife": "BR",
+    "goiania": "BR",
+    "campinas": "BR",
+    "florianopolis": "BR",
+    "vitoria": "BR",
+    "natal": "BR",
+    "macae": "BR",
+    "santos": "BR",
+    "niteroi": "BR",
     # United States
-    "new york": "US", "los angeles": "US", "san francisco": "US",
-    "chicago": "US", "miami": "US", "seattle": "US", "boston": "US",
-    "austin": "US", "denver": "US", "atlanta": "US", "washington": "US",
-    "portland": "US", "dallas": "US", "houston": "US", "philadelphia": "US",
+    "new york": "US",
+    "los angeles": "US",
+    "san francisco": "US",
+    "chicago": "US",
+    "miami": "US",
+    "seattle": "US",
+    "boston": "US",
+    "austin": "US",
+    "denver": "US",
+    "atlanta": "US",
+    "washington": "US",
+    "portland": "US",
+    "dallas": "US",
+    "houston": "US",
+    "philadelphia": "US",
     # UK
-    "london": "GB", "edinburgh": "GB", "manchester": "GB", "birmingham": "GB",
-    "glasgow": "GB", "liverpool": "GB", "leeds": "GB", "oxford": "GB",
+    "london": "GB",
+    "edinburgh": "GB",
+    "manchester": "GB",
+    "birmingham": "GB",
+    "glasgow": "GB",
+    "liverpool": "GB",
+    "leeds": "GB",
+    "oxford": "GB",
     "cambridge": "GB",
     # Eurozone
-    "paris": "FR", "lyon": "FR", "marseille": "FR", "nice": "FR",
-    "berlin": "DE", "munich": "DE", "hamburg": "DE", "frankfurt": "DE",
-    "madrid": "ES", "barcelona": "ES", "seville": "ES",
-    "rome": "IT", "milan": "IT", "florence": "IT", "venice": "IT",
-    "amsterdam": "NL", "rotterdam": "NL",
-    "lisbon": "PT", "porto": "PT",
-    "dublin": "IE", "brussels": "BE", "vienna": "AT", "athens": "GR",
+    "paris": "FR",
+    "lyon": "FR",
+    "marseille": "FR",
+    "nice": "FR",
+    "berlin": "DE",
+    "munich": "DE",
+    "hamburg": "DE",
+    "frankfurt": "DE",
+    "madrid": "ES",
+    "barcelona": "ES",
+    "seville": "ES",
+    "rome": "IT",
+    "milan": "IT",
+    "florence": "IT",
+    "venice": "IT",
+    "amsterdam": "NL",
+    "rotterdam": "NL",
+    "lisbon": "PT",
+    "porto": "PT",
+    "dublin": "IE",
+    "brussels": "BE",
+    "vienna": "AT",
+    "athens": "GR",
     # APAC
-    "tokyo": "JP", "osaka": "JP", "kyoto": "JP",
-    "singapore": "SG", "hong kong": "HK",
-    "sydney": "AU", "melbourne": "AU", "brisbane": "AU", "perth": "AU",
-    "auckland": "NZ", "wellington": "NZ",
+    "tokyo": "JP",
+    "osaka": "JP",
+    "kyoto": "JP",
+    "singapore": "SG",
+    "hong kong": "HK",
+    "sydney": "AU",
+    "melbourne": "AU",
+    "brisbane": "AU",
+    "perth": "AU",
+    "auckland": "NZ",
+    "wellington": "NZ",
     # LatAm
-    "buenos aires": "AR", "mexico city": "MX", "ciudad de mexico": "MX",
-    "santiago": "CL", "lima": "PE", "bogota": "CO", "montevideo": "UY",
+    "buenos aires": "AR",
+    "mexico city": "MX",
+    "ciudad de mexico": "MX",
+    "santiago": "CL",
+    "lima": "PE",
+    "bogota": "CO",
+    "montevideo": "UY",
 }
 
 
 def _strip_accents(s: str) -> str:
     """Lowercase + remove combining marks so 'São Paulo' matches 'sao paulo'."""
     import unicodedata
+
     nfd = unicodedata.normalize("NFD", s.lower())
     return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
@@ -426,17 +621,42 @@ _SUBDIVISION_TO_COUNTRY = {
     # province code in the country slot ("Vancouver BC" → it picks "BC"),
     # walk back to "CA". Excluded: codes that collide with ISO-2 country
     # codes like CA (California vs Canada — too easy to misfire).
-    "BC": "CA", "ON": "CA", "QC": "CA", "AB": "CA", "MB": "CA",
-    "SK": "CA", "NB": "CA", "NS": "CA", "NL": "CA",
-    "YT": "CA", "NU": "CA", "NT": "CA",
+    "BC": "CA",
+    "ON": "CA",
+    "QC": "CA",
+    "AB": "CA",
+    "MB": "CA",
+    "SK": "CA",
+    "NB": "CA",
+    "NS": "CA",
+    "NL": "CA",
+    "YT": "CA",
+    "NU": "CA",
+    "NT": "CA",
     # Brazilian states — same pattern (the user has lots of BR receipts
     # and the model sometimes returns "SP" instead of "BR"). Skipped the
     # codes that conflict with country codes (PE/Peru, ES/Spain) or US
     # states (AL/Alabama, MT/Montana, etc.).
-    "SP": "BR", "RJ": "BR", "MG": "BR", "PR": "BR", "RS": "BR",
-    "BA": "BR", "CE": "BR", "SC": "BR", "GO": "BR", "AM": "BR",
-    "DF": "BR", "MA": "BR", "PB": "BR", "RN": "BR", "PI": "BR",
-    "TO": "BR", "RO": "BR", "AC": "BR", "RR": "BR", "AP": "BR",
+    "SP": "BR",
+    "RJ": "BR",
+    "MG": "BR",
+    "PR": "BR",
+    "RS": "BR",
+    "BA": "BR",
+    "CE": "BR",
+    "SC": "BR",
+    "GO": "BR",
+    "AM": "BR",
+    "DF": "BR",
+    "MA": "BR",
+    "PB": "BR",
+    "RN": "BR",
+    "PI": "BR",
+    "TO": "BR",
+    "RO": "BR",
+    "AC": "BR",
+    "RR": "BR",
+    "AP": "BR",
     "SE": "BR",
 }
 
@@ -506,20 +726,80 @@ def _refine_currency(currency: Optional[str], country: Optional[str]) -> Optiona
 # Category inference
 
 _CATEGORY_KEYWORDS = {
-    "meals": ["restaurant", "gastronomia", "bar", "cafe", "café", "coffee",
-              "espresso", "cappuccino", "latte", "tea", "food",
-              "tapioca", "pizza", "burger", "sushi", "grill", "kitchen",
-              "lunch", "dinner", "breakfast", "snack", "cantina", "bistro",
-              "lanchonete", "padaria", "bakery", "pastry", "deli", "diner",
-              "trattoria", "steakhouse"],
-    "travel": ["airline", "aerobar", "airport", "flight", "hotel", "airbnb",
-               "hostel", "inn", "motel", "resort", "booking", "aeroporto"],
-    "transportation": ["uber", "lyft", "taxi", "cab", "metro", "bus", "train",
-                       "parking", "toll", "posto", "gas station", "fuel",
-                       "estacionamento", "gasolina"],
+    "meals": [
+        "restaurant",
+        "gastronomia",
+        "bar",
+        "cafe",
+        "café",
+        "coffee",
+        "espresso",
+        "cappuccino",
+        "latte",
+        "tea",
+        "food",
+        "tapioca",
+        "pizza",
+        "burger",
+        "sushi",
+        "grill",
+        "kitchen",
+        "lunch",
+        "dinner",
+        "breakfast",
+        "snack",
+        "cantina",
+        "bistro",
+        "lanchonete",
+        "padaria",
+        "bakery",
+        "pastry",
+        "deli",
+        "diner",
+        "trattoria",
+        "steakhouse",
+    ],
+    "travel": [
+        "airline",
+        "aerobar",
+        "airport",
+        "flight",
+        "hotel",
+        "airbnb",
+        "hostel",
+        "inn",
+        "motel",
+        "resort",
+        "booking",
+        "aeroporto",
+    ],
+    "transportation": [
+        "uber",
+        "lyft",
+        "taxi",
+        "cab",
+        "metro",
+        "bus",
+        "train",
+        "parking",
+        "toll",
+        "posto",
+        "gas station",
+        "fuel",
+        "estacionamento",
+        "gasolina",
+    ],
     "lodging": ["hotel", "airbnb", "hostel", "inn", "motel", "resort", "pousada"],
-    "office_supplies": ["amazon", "office", "staples", "print", "paper", "ink",
-                        "papelaria", "livraria"],
+    "office_supplies": [
+        "amazon",
+        "office",
+        "staples",
+        "print",
+        "paper",
+        "ink",
+        "papelaria",
+        "livraria",
+    ],
 }
 
 
@@ -531,9 +811,11 @@ def _infer_category(vendor: str, items: list) -> str:
     plain substring for multi-word keywords like 'gas station' because the
     space already gives an implicit boundary.
     """
-    text = (vendor or "").lower() + " " + " ".join(
-        (i.get("description") or "") for i in (items or [])
-    ).lower()
+    text = (
+        (vendor or "").lower()
+        + " "
+        + " ".join((i.get("description") or "") for i in (items or [])).lower()
+    )
     for cat, keywords in _CATEGORY_KEYWORDS.items():
         for kw in keywords:
             if " " in kw:
@@ -551,10 +833,23 @@ def _infer_category(vendor: str, items: list) -> str:
 # Item cleaning
 
 _SUMMARY_KEYWORDS = [
-    "total", "valor a pagar", "subtotal", "desconto", "acréscimo",
-    "qtde", "quantidade", "troco", "change", "tax total", "grand total",
-    "amount due", "balance", "taxa de serviço", "service charge",
-    "service fee", "taxa serviço",
+    "total",
+    "valor a pagar",
+    "subtotal",
+    "desconto",
+    "acréscimo",
+    "qtde",
+    "quantidade",
+    "troco",
+    "change",
+    "tax total",
+    "grand total",
+    "amount due",
+    "balance",
+    "taxa de serviço",
+    "service charge",
+    "service fee",
+    "taxa serviço",
 ]
 
 
@@ -693,7 +988,7 @@ def warmup() -> Optional[str]:
     host = (settings.ollama_host or OLLAMA_HOST_DEFAULT).rstrip("/")
     payload = {
         "model": model,
-        "prompt": "",         # empty prompt = pure model load, no generation
+        "prompt": "",  # empty prompt = pure model load, no generation
         "stream": False,
         "keep_alive": "10m",
     }
@@ -737,10 +1032,18 @@ def _ollama_chat(model: str, prompt: str, image_bytes: bytes) -> dict:
 
 def _empty_receipt() -> dict:
     return {
-        "language": None, "date": None, "total_amount": None, "currency": None,
-        "vendor_name": "Unknown", "vendor_address": None,
-        "items": [], "tax_amount": None, "tip_amount": None,
-        "service_charge": None, "payment_method": None, "category": "other",
+        "language": None,
+        "date": None,
+        "total_amount": None,
+        "currency": None,
+        "vendor_name": "Unknown",
+        "vendor_address": None,
+        "items": [],
+        "tax_amount": None,
+        "tip_amount": None,
+        "service_charge": None,
+        "payment_method": None,
+        "category": "other",
     }
 
 
@@ -773,7 +1076,14 @@ def _normalize_one_receipt(data: dict) -> dict:
     # Strip clock time from the date field — receipts often print
     # "10-Mar-2026 1:44:53p.m." or "2026-03-10 10:29 a.m." and we only
     # want the calendar date downstream.
-    data["date"] = _strip_time_from_date(data.get("date"))
+    _date_clean = _strip_time_from_date(data.get("date"))
+    # Then normalise to ISO YYYY-MM-DD using the receipt's language/country
+    # to disambiguate D/M vs M/D. Falls back to the cleaned-but-not-ISO
+    # string if parsing fails, so we never silently drop the printed date.
+    data["date"] = (
+        _normalize_date(_date_clean, language=data.get("language"), country=data.get("country"))
+        or _date_clean
+    )
 
     for field in ("total_amount", "tax_amount", "tip_amount", "service_charge"):
         data[field] = _parse_amount(data.get(field), comma_dec)
@@ -781,13 +1091,21 @@ def _normalize_one_receipt(data: dict) -> dict:
     data["items"] = _clean_items(data.get("items"), comma_dec)
 
     cat = str(data.get("category") or "")
-    if "/" in cat or cat not in ("meals", "travel", "transportation", "lodging", "office_supplies", "other"):
+    if "/" in cat or cat not in (
+        "meals",
+        "travel",
+        "transportation",
+        "lodging",
+        "office_supplies",
+        "other",
+    ):
         data["category"] = _infer_category(data.get("vendor_name", ""), data.get("items", []))
 
     vendor = data.get("vendor_name") or ""
     vendor = re.sub(
         r"(?i)^(cnpj|cpf|vat|ein|tax id|nif|rfc)\s*[:\-#]?\s*[\d.\-/]+\s*",
-        "", vendor,
+        "",
+        vendor,
     ).strip()
     data["vendor_name"] = vendor or "Unknown"
 
@@ -820,6 +1138,7 @@ def _ocr_one_crop(model: str, image_bytes: bytes, prompt: Optional[str] = None) 
     the image contains exactly one receipt (e.g. the bbox-editor commit
     path) should pass SINGLE_RECEIPT_PROMPT — fewer prompt tokens means
     faster per-call latency."""
+
     def _fail(msg: str) -> list:
         empty = _empty_receipt()
         empty["error"] = msg
@@ -858,13 +1177,11 @@ def _ocr_one_crop(model: str, image_bytes: bytes, prompt: Optional[str] = None) 
     if not raw_receipts:
         return _fail("Model returned an empty receipts array")
 
-    cleaned = [
-        _normalize_one_receipt(r) for r in raw_receipts if isinstance(r, dict)
-    ]
+    cleaned = [_normalize_one_receipt(r) for r in raw_receipts if isinstance(r, dict)]
     return cleaned or _fail("Model returned no usable receipt objects")
 
 
-def process_with_segments(image_path: str) -> list:
+def process_with_segments(image_path: str, *, skip_segmentation: bool = False) -> list:
     """
     Process a receipt image and return a list of dicts:
         [{"metadata": <receipt_dict>, "crop": <PIL.Image | None>}, ...]
@@ -879,18 +1196,37 @@ def process_with_segments(image_path: str) -> list:
     - "apple_vision":             Apple Vision OCR (text) + small text LLM
                                   (structuring). Fast on Apple Silicon and
                                   far lower RAM pressure than vision-LMs.
+
+    `skip_segmentation=True` bypasses the multi-receipt detector and treats
+    the image as a single full-page receipt. Used for PDF pages, which are
+    almost always digital documents with one receipt per page — running the
+    segmenter on them tends to shred a single receipt into many fragments
+    because of whitespace between text blocks.
     """
+
     def _fail(msg: str) -> list:
         empty = _empty_receipt()
         empty["error"] = msg
         return [{"metadata": empty, "crop": None}]
 
     try:
-        from .receipt_segmenter import segment_receipts
-        segments = segment_receipts(image_path)
+        if skip_segmentation:
+            from .receipt_segmenter import _open_as_rgb
+
+            segments = [_open_as_rgb(image_path)]
+        else:
+            from .receipt_segmenter import segment_receipts
+
+            segments = segment_receipts(image_path)
         is_multi = len(segments) > 1
         backend = settings.ocr_backend
-        logger.info("OCR: backend=%s segments=%d path=%s", backend, len(segments), image_path)
+        logger.info(
+            "OCR: backend=%s segments=%d skip_seg=%s path=%s",
+            backend,
+            len(segments),
+            skip_segmentation,
+            image_path,
+        )
 
         results: list = []
         if backend == "apple_vision":
@@ -912,6 +1248,7 @@ def process_with_segments(image_path: str) -> list:
 
 def _process_via_ollama_vision(segments: list, is_multi: bool) -> list:
     """Original path: each segment becomes one Ollama vision-model call."""
+
     def _fail(msg: str) -> list:
         empty = _empty_receipt()
         empty["error"] = msg
@@ -926,7 +1263,9 @@ def _process_via_ollama_vision(segments: list, is_multi: bool) -> list:
     results: list = []
     for i, img in enumerate(segments, 1):
         image_bytes = _image_to_ocr_bytes(img)
-        logger.info("OCR (ollama_vision): segment %d/%d image_bytes=%d", i, len(segments), len(image_bytes))
+        logger.info(
+            "OCR (ollama_vision): segment %d/%d image_bytes=%d", i, len(segments), len(image_bytes)
+        )
         for r in _ocr_one_crop(model, image_bytes):
             results.append({"metadata": r, "crop": img if is_multi else None})
     return results
@@ -943,9 +1282,7 @@ def _process_via_apple_vision(segments: list, is_multi: bool) -> list:
         return [{"metadata": empty, "crop": None}]
 
     if not apple_vision_ocr.is_available():
-        return _fail(
-            f"Apple Vision OCR not available: {apple_vision_ocr.unavailability_reason()}"
-        )
+        return _fail(f"Apple Vision OCR not available: {apple_vision_ocr.unavailability_reason()}")
 
     results: list = []
     for i, img in enumerate(segments, 1):
@@ -985,43 +1322,47 @@ def _process_via_apple_vision(segments: list, is_multi: bool) -> list:
 # longer / more-specific tokens first so "R$" doesn't accidentally trigger
 # on "$" alone.
 _CURRENCY_TOKENS = [
-    ("CAD$",   "CAD"),
-    ("CA$",    "CAD"),
-    ("US$",    "USD"),
-    ("USD$",   "USD"),
-    ("AU$",    "AUD"),
-    ("A$",     "AUD"),
-    ("NZ$",    "NZD"),
-    ("HK$",    "HKD"),
-    ("S$",     "SGD"),
-    ("R$",     "BRL"),
-    ("R$ ",    "BRL"),
-    ("€",      "EUR"),
-    ("£",      "GBP"),
-    ("¥",      "JPY"),
-    ("CHF",    "CHF"),
-    ("CAD",    "CAD"),
-    ("USD",    "USD"),
-    ("BRL",    "BRL"),
-    ("EUR",    "EUR"),
-    ("GBP",    "GBP"),
-    ("JPY",    "JPY"),
-    ("AUD",    "AUD"),
-    ("MXN",    "MXN"),
+    ("CAD$", "CAD"),
+    ("CA$", "CAD"),
+    ("US$", "USD"),
+    ("USD$", "USD"),
+    ("AU$", "AUD"),
+    ("A$", "AUD"),
+    ("NZ$", "NZD"),
+    ("HK$", "HKD"),
+    ("S$", "SGD"),
+    ("R$", "BRL"),
+    ("R$ ", "BRL"),
+    ("€", "EUR"),
+    ("£", "GBP"),
+    ("¥", "JPY"),
+    ("CHF", "CHF"),
+    ("CAD", "CAD"),
+    ("USD", "USD"),
+    ("BRL", "BRL"),
+    ("EUR", "EUR"),
+    ("GBP", "GBP"),
+    ("JPY", "JPY"),
+    ("AUD", "AUD"),
+    ("MXN", "MXN"),
 ]
 
 # Date patterns we recognise in OCR text — generous coverage so a missed
 # `date` field can still get filled. We return the first match as-is and
 # let _parse_amount-equivalent normalisation downstream do the formatting.
 _DATE_PATTERNS_FALLBACK = [
-    re.compile(r"\b(\d{4}-\d{2}-\d{2})\b"),                       # ISO
-    re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b"),            # 10/03/2026 etc.
+    re.compile(r"\b(\d{4}-\d{2}-\d{2})\b"),  # ISO
+    re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b"),  # 10/03/2026 etc.
     re.compile(
         r"\b(\d{1,2}[\s\-]?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)"
-        r"\.?[\s\-]?\d{2,4})\b", re.IGNORECASE),                  # 10-Mar-2026
+        r"\.?[\s\-]?\d{2,4})\b",
+        re.IGNORECASE,
+    ),  # 10-Mar-2026
     re.compile(
         r"\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)"
-        r"\.?\s+\d{1,2},?\s+\d{2,4})\b", re.IGNORECASE),          # Mar 10, 2026
+        r"\.?\s+\d{1,2},?\s+\d{2,4})\b",
+        re.IGNORECASE,
+    ),  # Mar 10, 2026
 ]
 
 
@@ -1057,6 +1398,110 @@ _TIME_TAIL_RE = re.compile(
 _BARE_AMPM_RE = re.compile(r"\s+[ap]\.?\s*m\.?$", re.IGNORECASE)
 
 
+# Portuguese / Spanish month abbreviations → English (dateutil parses English
+# natively but doesn't know "abr" = "Apr" or "ago" = "Aug"). Keep this in sync
+# with the locales we see most often: BR (pt), MX/ES (es). Lowercased keys.
+_PT_TO_EN_MONTH = {
+    "jan": "Jan",
+    "fev": "Feb",
+    "mar": "Mar",
+    "abr": "Apr",
+    "mai": "May",
+    "jun": "Jun",
+    "jul": "Jul",
+    "ago": "Aug",
+    "set": "Sep",
+    "out": "Oct",
+    "nov": "Nov",
+    "dez": "Dec",
+}
+_ES_TO_EN_MONTH = {
+    "ene": "Jan",
+    "feb": "Feb",
+    "mar": "Mar",
+    "abr": "Apr",
+    "may": "May",
+    "jun": "Jun",
+    "jul": "Jul",
+    "ago": "Aug",
+    "sep": "Sep",
+    "oct": "Oct",
+    "nov": "Nov",
+    "dic": "Dec",
+}
+
+
+def _normalize_date(
+    date_str, *, language: Optional[str] = None, country: Optional[str] = None
+) -> Optional[str]:
+    """Parse a receipt date into ISO ``YYYY-MM-DD``.
+
+    Handles the formats receipts actually print:
+      "25/03/2026"   → "2026-03-25"  (D/M/Y default for non-US)
+      "01/abr"       → "2026-04-01"  (PT month, year filled from today)
+      "17,03,26"     → "2026-03-17"  (comma separators)
+      "3/6/26"       → "2026-06-03"  (D/M/Y default; M/D/Y only for US)
+      "2026-03-10"   → "2026-03-10"  (ISO pass-through)
+      "10-Mar-2026"  → "2026-03-10"  (English text month)
+      "1 abril 2026" → "2026-04-01"  (full PT month)
+
+    Returns None for None/empty/unparseable input — callers should keep the
+    original string in that case so we don't silently drop data.
+
+    Disambiguation rule for ambiguous numeric formats: ``country="US"`` →
+    month-first; everything else (BR, CA, EU, LATAM, …) → day-first, which
+    matches what receipts in those locales actually print.
+    """
+    if not date_str:
+        return None
+    s = str(date_str).strip()
+    if not s:
+        return None
+
+    # Fast path: already ISO and plausible.
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
+    if m:
+        y, mo, d = map(int, m.groups())
+        if 2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+
+    # Replace common alternative separators with slashes. Commas and bare dots
+    # between digits show up in BR receipts ("17,03,26", "17.03.26").
+    s2 = re.sub(r",", "/", s)
+    s2 = re.sub(r"(\d)\.(\d)", r"\1/\2", s2)
+
+    # Map non-English month tokens to English so dateutil understands them.
+    def _swap_months(text: str, mapping: dict) -> str:
+        for src, dst in mapping.items():
+            text = re.sub(rf"\b{src}\.?\b", dst, text, flags=re.IGNORECASE)
+        return text
+
+    s2 = _swap_months(s2, _PT_TO_EN_MONTH)
+    s2 = _swap_months(s2, _ES_TO_EN_MONTH)
+
+    from datetime import datetime as _dt
+
+    today = _dt.now()
+    dayfirst = (country or "").upper() != "US"
+
+    try:
+        from dateutil import parser as _dp
+
+        dt = _dp.parse(
+            s2,
+            dayfirst=dayfirst,
+            default=_dt(today.year, 1, 1),  # year-fill when missing
+            fuzzy=True,
+        )
+    except Exception:
+        return None
+
+    # Guard against wild parses ("forma de pagamento" → 1970-01-01 etc.)
+    if not (2000 <= dt.year <= today.year + 1):
+        return None
+    return dt.strftime("%Y-%m-%d")
+
+
 def _strip_time_from_date(date_str) -> Optional[str]:
     """Return just the calendar date portion of a date string.
 
@@ -1088,19 +1533,47 @@ def _strip_time_from_date(date_str) -> Optional[str]:
 # Keywords that signal a *final-charged* amount line. Matched case-insensitively
 # against the lowercased line.
 _TOTAL_FINAL_KEYWORDS = (
-    "venta", "amount due", "amount charged", "grand total", "total charged",
-    "balance due", "total cad", "total usd", "total brl", "total eur",
-    "valor a pagar", "valor total", "valor pago", "valor a receber",
-    "card total", "credito", "crédito",
+    "venta",
+    "amount due",
+    "amount charged",
+    "grand total",
+    "total charged",
+    "balance due",
+    "total cad",
+    "total usd",
+    "total brl",
+    "total eur",
+    "valor a pagar",
+    "valor total",
+    "valor pago",
+    "valor a receber",
+    "card total",
+    "credito",
+    "crédito",
 )
 # Weaker keywords — a plain "total" line. Only used if no FINAL keyword matched.
 _TOTAL_HEADLINE_KEYWORDS = ("total",)
 # Lines containing any of these are excluded — we never want subtotal/tax/tip
 # rows masquerading as the final total.
 _TOTAL_NEGATIVE_KEYWORDS = (
-    "subtotal", "sub total", "sub-total", "sous total", "sub tot",
-    "gst", "pst", "hst", "vat", "tax", "tip", "propina", "service charge",
-    "surcharge", "service fee", "gratuit", "discount", "desconto",
+    "subtotal",
+    "sub total",
+    "sub-total",
+    "sous total",
+    "sub tot",
+    "gst",
+    "pst",
+    "hst",
+    "vat",
+    "tax",
+    "tip",
+    "propina",
+    "service charge",
+    "surcharge",
+    "service fee",
+    "gratuit",
+    "discount",
+    "desconto",
 )
 
 # Matches a money-like token: 1234,56 or 1234.56, optionally with thousands
