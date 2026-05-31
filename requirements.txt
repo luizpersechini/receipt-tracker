@@ -7,23 +7,23 @@ starlette>=1.0.1
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
 pillow>=12.2.0   # CVE-2026-42308/09/10/11 buffer overflow (receipt images are untrusted input)
-pillow-heif>=0.13.0
-pandas==2.1.4
-openpyxl==3.1.2
-requests==2.31.0
-python-dotenv==1.0.0
+pillow-heif>=1.0.0   # ≥1.0 needed for Python 3.13 wheels
+pandas>=2.2.3   # ≥2.2 has py3.13 wheels
+openpyxl>=3.1.5
+requests>=2.32.0
+python-dotenv>=1.0.1
 # Bumped to satisfy fastapi>=0.115 (which pulls a patched starlette).
 # Requires Python 3.10+.
 pydantic>=2.9.0
 pydantic-settings>=2.4.0
-ollama==0.1.6
-watchdog==3.0.0
-beautifulsoup4==4.12.3
-google-auth==2.27.0
-google-auth-oauthlib==1.2.0
-google-api-python-client==2.117.0
-weasyprint==60.2
-opencv-python-headless==4.8.1.78
+ollama>=0.3.3
+watchdog>=4.0.0
+beautifulsoup4>=4.12.3
+google-auth>=2.32.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.140.0
+weasyprint>=62.3
+opencv-python-headless>=4.10.0.84
 # macOS only — used by the apple_vision OCR backend. pip install is a no-op
 # on non-Darwin systems (pyobjc only builds wheels for macOS), but
 # requirements.txt declares it for parity with development setup.
