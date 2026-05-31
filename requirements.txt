@@ -12,8 +12,10 @@ pandas==2.1.4
 openpyxl==3.1.2
 requests==2.31.0
 python-dotenv==1.0.0
-pydantic==2.5.3
-pydantic-settings==2.1.0
+# Bumped to satisfy fastapi>=0.115 (which pulls a patched starlette).
+# Requires Python 3.10+.
+pydantic>=2.9.0
+pydantic-settings>=2.4.0
 ollama==0.1.6
 watchdog==3.0.0
 beautifulsoup4==4.12.3
