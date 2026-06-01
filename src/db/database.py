@@ -490,6 +490,21 @@ def clear_matches_for_statement(statement_id: int):
     conn.close()
 
 
+def clear_auto_matches_for_statement(statement_id: int):
+    """Delete only auto-generated matches for a statement, preserving
+    manual drag-drop pairings. NULL match_kind is treated as auto — that's
+    the legacy case from before match_kind was a column."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM matches WHERE statement_id = ? "
+        "AND (match_kind IS NULL OR match_kind = 'auto')",
+        (statement_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_all_matches() -> list:
     conn = get_connection()
     cursor = conn.cursor()

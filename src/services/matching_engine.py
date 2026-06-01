@@ -5,9 +5,18 @@ from datetime import datetime
 from difflib import SequenceMatcher
 
 
-def match_receipts_to_statements(receipts: list, statements: list) -> dict:
+def match_receipts_to_statements(
+    receipts: list,
+    statements: list,
+    locked_txns: dict | None = None,
+) -> dict:
     """
     Match receipts to statement transactions using fuzzy logic.
+
+    `locked_txns` maps statement_id → set of transaction_index values that
+    are already manually matched and must not be re-paired here. The
+    matching engine skips them so a manual pairing never gets clobbered by
+    a subsequent auto-match run.
 
     Returns:
       {
@@ -16,12 +25,16 @@ def match_receipts_to_statements(receipts: list, statements: list) -> dict:
         unmatched_transactions: [...],
       }
     """
+    locked_txns = locked_txns or {}
     all_transactions = []
     for statement in statements:
         # Preserve the txn's position inside its parent statement so the
         # match row can persist `transaction_index`. Without it, the
         # reconcile board can't anchor a match to a specific row.
+        locked = locked_txns.get(statement["id"], set())
         for txn_index, txn in enumerate(statement.get("transactions", [])):
+            if txn_index in locked:
+                continue  # already paired manually — don't offer it
             all_transactions.append(
                 {
                     **txn,

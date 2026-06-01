@@ -23,7 +23,17 @@ class ManualMatchRequest(BaseModel):
 
 @router.post("/match")
 async def run_match():
-    """Match corp-card receipts against statement transactions."""
+    """Match corp-card receipts against statement transactions.
+
+    Manual matches are preserved. We:
+      1. Find every manual match across all statements.
+      2. Wipe ONLY the auto-matches (manual rows stay put).
+      3. Exclude manually-matched receipts from the matching pool.
+      4. Tell the matching engine which transaction_indices to skip per
+         statement so it can't re-match a txn that's already manually
+         paired to something else.
+      5. Reset only receipts that AREN'T manually matched.
+    """
     try:
         all_receipts, statements = await asyncio.gather(
             asyncio.to_thread(db.get_all_receipts),
@@ -36,12 +46,34 @@ async def run_match():
         if not statements:
             return JSONResponse({"success": False, "message": "No statement uploaded yet"})
 
+        # Collect manual locks BEFORE wiping auto-matches.
+        manual_receipt_ids: set[int] = set()
+        # statement_id → set of locked transaction_indices
+        manual_locked_txns: dict[int, set[int]] = {}
         for statement in statements:
-            await asyncio.to_thread(db.clear_matches_for_statement, statement["id"])
-        for receipt in receipts:
-            await asyncio.to_thread(db.update_receipt_match_status, receipt["id"], "pending")
+            ms = await asyncio.to_thread(db.get_matches_for_statement, statement["id"])
+            for m in ms:
+                if m.get("match_kind") == "manual":
+                    manual_receipt_ids.add(m["receipt_id"])
+                    if m.get("transaction_index") is not None:
+                        manual_locked_txns.setdefault(statement["id"], set()).add(
+                            m["transaction_index"]
+                        )
 
-        result = await asyncio.to_thread(match_receipts_to_statements, receipts, statements)
+        for statement in statements:
+            await asyncio.to_thread(db.clear_auto_matches_for_statement, statement["id"])
+        # Reset match_status only for receipts NOT pinned by a manual match.
+        for receipt in receipts:
+            if receipt["id"] not in manual_receipt_ids:
+                await asyncio.to_thread(db.update_receipt_match_status, receipt["id"], "pending")
+
+        eligible_receipts = [r for r in receipts if r["id"] not in manual_receipt_ids]
+        result = await asyncio.to_thread(
+            match_receipts_to_statements,
+            eligible_receipts,
+            statements,
+            manual_locked_txns,
+        )
 
         for match in result["matches"]:
             # Pass `transaction_index` so the reconcile board can anchor
