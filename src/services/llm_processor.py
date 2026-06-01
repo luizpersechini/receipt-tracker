@@ -1482,7 +1482,21 @@ def _normalize_date(
     from datetime import datetime as _dt
 
     today = _dt.now()
-    dayfirst = (country or "").upper() != "US"
+    # Disambiguation: month-first only when we're confident the receipt was
+    # printed for an English-speaking North American market.
+    #   US (any language)            → M/D/Y (the US default)
+    #   CA + English / unknown lang  → M/D/Y (Canadian English receipts
+    #                                   overwhelmingly print month-first)
+    #   CA + French / Portuguese / … → D/M/Y (Quebec, BR, etc.)
+    #   Everything else              → D/M/Y (most-of-world default)
+    cc = (country or "").upper()
+    lang = (language or "").lower()[:2]
+    if cc == "US":
+        dayfirst = False
+    elif cc == "CA" and lang in ("", "en"):
+        dayfirst = False
+    else:
+        dayfirst = True
 
     try:
         from dateutil import parser as _dp
