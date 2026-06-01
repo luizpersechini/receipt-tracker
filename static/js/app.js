@@ -22,7 +22,17 @@ const api = async (method, path, body) => {
           : res.statusText;
     throw new Error(msg);
   }
-  return res.json();
+  // 204 No Content carries no body — DELETE /api/matches/{id} returns that
+  // and the previous unconditional res.json() threw a SyntaxError that bled
+  // through as "Failed to unlink" flash messages on the reconcile board.
+  if (res.status === 204) return null;
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 };
 
 const fmt = {
