@@ -153,10 +153,15 @@ async def get_statement_transactions(statement_id: int):
         raise HTTPException(status_code=404, detail="Statement not found")
 
     matches = await asyncio.to_thread(db.get_matches_for_statement, statement_id)
-    # Index matches by transaction_index so the lookup below is O(1).
-    matches_by_idx = {
-        m["transaction_index"]: m for m in matches if m.get("transaction_index") is not None
-    }
+    # Group matches by transaction_index — N:1 is allowed now (multiple
+    # receipts cumulatively pay one statement charge, e.g. hotel folio
+    # split into room + restaurant + parking receipts).
+    matches_by_idx: dict[int, list] = {}
+    for m in matches:
+        idx = m.get("transaction_index")
+        if idx is None:
+            continue
+        matches_by_idx.setdefault(idx, []).append(m)
 
     txns = []
     for i, t in enumerate(statement.get("transactions") or []):
@@ -167,6 +172,23 @@ async def get_statement_transactions(statement_id: int):
         # the native currency amount + the FX rate — surface those so the
         # UI can show both and the matcher can compare receipts in their
         # original currency.
+        ms = matches_by_idx.get(i) or []
+        # Stable sort by match id so older pairings render first.
+        ms.sort(key=lambda m: m.get("id") or 0)
+        match_list = []
+        for m in ms:
+            rmeta = _receipt_metadata(m.get("receipt_metadata"))
+            match_list.append(
+                {
+                    "id": m["id"],
+                    "receipt_id": m["receipt_id"],
+                    "receipt_vendor": rmeta.get("vendor_name"),
+                    "receipt_amount": rmeta.get("total_amount"),
+                    "receipt_currency": rmeta.get("currency"),
+                    "score": m.get("match_score"),
+                    "kind": m.get("match_kind") or "auto",
+                }
+            )
         meta = {
             "index": i,
             "date": t.get("date"),
@@ -178,20 +200,12 @@ async def get_statement_transactions(statement_id: int):
             "original_amount": raw.get("original_amount"),
             "original_currency": native_ccy if native_ccy and native_ccy != "BRL" else None,
             "fx_to_brl": raw.get("fx_to_brl"),
-            "match": None,
+            # `matches` is the new shape; `match` keeps the first entry for
+            # any older code paths that hadn't migrated. New consumers
+            # should read `matches`.
+            "matches": match_list,
+            "match": match_list[0] if match_list else None,
         }
-        m = matches_by_idx.get(i)
-        if m:
-            rmeta = _receipt_metadata(m.get("receipt_metadata"))
-            meta["match"] = {
-                "id": m["id"],
-                "receipt_id": m["receipt_id"],
-                "receipt_vendor": rmeta.get("vendor_name"),
-                "receipt_amount": rmeta.get("total_amount"),
-                "receipt_currency": rmeta.get("currency"),
-                "score": m.get("match_score"),
-                "kind": m.get("match_kind") or "auto",
-            }
         txns.append(meta)
 
     return JSONResponse(
@@ -222,14 +236,11 @@ async def create_manual_match(body: ManualMatchRequest):
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found")
 
-    # Reject duplicate: that specific transaction slot already has a match.
+    # A transaction CAN take multiple receipts (cumulative pairing — e.g.
+    # one hotel folio charge split across room + restaurant + parking
+    # receipts). But a single receipt is still 1:1 — pairing it against
+    # two transactions would double-count it on reports.
     existing = await asyncio.to_thread(db.get_matches_for_statement, body.statement_id)
-    if any(m.get("transaction_index") == body.transaction_index for m in existing):
-        raise HTTPException(
-            status_code=409,
-            detail="That transaction is already matched. Unlink it first.",
-        )
-    # And the receipt itself can only be matched once.
     if any(m.get("receipt_id") == body.receipt_id for m in existing):
         raise HTTPException(
             status_code=409,

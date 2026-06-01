@@ -746,10 +746,31 @@ function _renderStmtDetail() {
         t.original_currency &&
         t.original_amount != null &&
         t.original_currency !== "BRL";
-      const matched = !!t.match;
-      const matchLabel = matched
-        ? `<span class="col-match matched" title="${_esc(t.match.receipt_vendor || "receipt")} · ${fmt.currency(t.match.receipt_amount, t.match.receipt_currency)}">✓ ${_esc(t.match.receipt_vendor || "matched")}</span>`
-        : `<span class="col-match unmatched">—</span>`;
+      // A txn can have multiple matches (cumulative pairing). Use the
+      // backend-provided `matches` array; fall back to the legacy `match`
+      // field for any cached older responses.
+      const matchArr = Array.isArray(t.matches)
+        ? t.matches
+        : t.match
+          ? [t.match]
+          : [];
+      const matched = matchArr.length > 0;
+      let matchLabel;
+      if (!matched) {
+        matchLabel = `<span class="col-match unmatched">—</span>`;
+      } else if (matchArr.length === 1) {
+        const m = matchArr[0];
+        matchLabel = `<span class="col-match matched" title="${_esc(m.receipt_vendor || "receipt")} · ${fmt.currency(m.receipt_amount, m.receipt_currency)}">✓ ${_esc(m.receipt_vendor || "matched")}</span>`;
+      } else {
+        // ≥2 cumulative receipts — show count + tooltip with each line.
+        const tip = matchArr
+          .map(
+            (m) =>
+              `${m.receipt_vendor || "receipt"} · ${fmt.currency(m.receipt_amount, m.receipt_currency)}`,
+          )
+          .join("\n");
+        matchLabel = `<span class="col-match matched" title="${_esc(tip)}">✓ ${matchArr.length} receipts</span>`;
+      }
       // Headline shows native for international rows (receipts always come
       // in native currency), with the BRL bill total under it. Tooltip
       // exposes the FX rate so the user can sanity-check the conversion.
@@ -1195,7 +1216,7 @@ const Reconcile = (() => {
 
   function _renderHeaderCounts() {
     const total = reconState.txns.length;
-    const matched = reconState.txns.filter((t) => t.match).length;
+    const matched = reconState.txns.filter((t) => _txnMatches(t).length).length;
     $("reconPairedNum").textContent = matched;
     $("reconPairedTotal").textContent = total;
     $("reconPairedLeft").textContent = Math.max(0, total - matched);
@@ -1249,7 +1270,9 @@ const Reconcile = (() => {
     // user focus on what still needs pairing), then apply the per-pane
     // search / date / amount filters.
     const filtered = reconState.txns
-      .filter((t) => (reconState.showMatchedTxns ? true : !t.match))
+      .filter((t) =>
+        reconState.showMatchedTxns ? true : _txnMatches(t).length === 0,
+      )
       .filter((t) => _matchesTxnFilter(t, reconState.txnFilter));
     if (!reconState.txns.length) {
       host.innerHTML = `
@@ -1266,7 +1289,7 @@ const Reconcile = (() => {
     if (
       !filtered.length &&
       !reconState.showMatchedTxns &&
-      reconState.txns.every((t) => t.match)
+      reconState.txns.every((t) => _txnMatches(t).length > 0)
     ) {
       host.innerHTML = `
         <div class="recon-empty-small recon-all-matched">
@@ -1286,8 +1309,17 @@ const Reconcile = (() => {
     _updateCountChip("reconTxnCount", filtered.length, reconState.txns.length);
   }
 
+  // Always read `matches` (array) — the backend keeps `match` populated
+  // with the first entry for legacy compatibility but cumulative pairing
+  // means we have to walk the list to render every paired receipt.
+  function _txnMatches(t) {
+    if (Array.isArray(t.matches)) return t.matches;
+    return t.match ? [t.match] : [];
+  }
+
   function _renderTxnCard(t) {
-    const isMatched = !!t.match;
+    const ms = _txnMatches(t);
+    const isMatched = ms.length > 0;
     const cls = ["recon-txn", isMatched ? "matched" : ""].join(" ");
     // International rows: show the native amount as the headline (matches
     // what the user's receipt shows) and the BRL bill total as a smaller
@@ -1302,6 +1334,20 @@ const Reconcile = (() => {
     const subAmt = isIntl
       ? `<span class="recon-amount-sub">${_fmt.money(t.amount, "BRL")}</span>`
       : "";
+    // Cumulative-progress chip: when a txn has ≥2 matches, show how
+    // much the paired receipts sum to vs the bill total so the user can
+    // see "R$ 100 of R$ 120 paired".
+    let progressHtml = "";
+    if (ms.length >= 2) {
+      const sum = ms.reduce(
+        (acc, m) => acc + (parseFloat(m.receipt_amount) || 0),
+        0,
+      );
+      const target = isIntl ? t.original_amount : t.amount;
+      const cur = isIntl ? t.original_currency : "BRL";
+      const close = target != null && Math.abs(sum - target) < 0.5;
+      progressHtml = `<span class="recon-cum-progress ${close ? "ok" : ""}">${_fmt.money(sum, cur)} of ${_fmt.money(target, cur)}</span>`;
+    }
     return `
       <div class="${cls}" data-index="${t.index}" draggable="false">
         <div class="recon-txn-top">
@@ -1316,8 +1362,9 @@ const Reconcile = (() => {
           ${t.category ? `<span class="badge badge-gray">${_fmt.cat(t.category)}</span>` : ""}
           ${t.city ? `<span class="recon-city">${_esc(t.city)}</span>` : ""}
           ${isIntl ? `<span class="badge badge-accent recon-cur">${_esc(t.original_currency)}</span>` : ""}
+          ${progressHtml}
         </div>
-        ${isMatched ? _renderMatchTag(t.match) : ""}
+        ${ms.map(_renderMatchTag).join("")}
       </div>
     `;
   }
@@ -1398,21 +1445,34 @@ const Reconcile = (() => {
   function _renderReceiptCard(r) {
     const isMatched = r.matched;
     const cls = ["recon-rcpt", isMatched ? "matched" : ""].join(" ");
-    const matchedTxn = isMatched
-      ? reconState.txns.find((t) => t.match && t.match.receipt_id === r.id)
-      : null;
+    // Find the (txn, match) pair for this receipt: any txn whose matches
+    // list contains a row pointing at this receipt id. Receipts are still
+    // 1:1 — a receipt can't be paired against two transactions.
+    let matchedTxn = null;
+    let matchOnTxn = null;
+    if (isMatched) {
+      for (const t of reconState.txns) {
+        const m = _txnMatches(t).find((mm) => mm.receipt_id === r.id);
+        if (m) {
+          matchedTxn = t;
+          matchOnTxn = m;
+          break;
+        }
+      }
+    }
     // Include the unlink button right next to the "Matched to ..." line
     // so the user can drop a bad pairing without first ticking "Show
     // matched transactions" to find the txn-side × button.
-    const matchedLine = matchedTxn
-      ? `<span class="recon-rcpt-matched-line">
+    const matchedLine =
+      matchedTxn && matchOnTxn
+        ? `<span class="recon-rcpt-matched-line">
            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
            Matched to <strong>${_esc(matchedTxn.description)}</strong>
-           <button class="btn btn-ghost btn-sm recon-unlink recon-rcpt-unlink" data-match="${matchedTxn.match.id}" title="Unlink this match">
+           <button class="btn btn-ghost btn-sm recon-unlink recon-rcpt-unlink" data-match="${matchOnTxn.id}" title="Unlink this match">
              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
            </button>
          </span>`
-      : "";
+        : "";
     return `
       <div class="${cls}" data-rid="${r.id}" draggable="${!isMatched}">
         <div class="recon-rcpt-top">
@@ -1602,8 +1662,9 @@ const Reconcile = (() => {
   }
 
   function _bindTxnCards() {
+    // Every txn card is a drop target — matched txns included, since
+    // multiple receipts can now cumulatively pair to one transaction.
     document.querySelectorAll(".recon-txn").forEach((el) => {
-      if (el.classList.contains("matched")) return;
       el.addEventListener("dragover", _onDragOver);
       el.addEventListener("dragenter", _onDragEnter);
       el.addEventListener("dragleave", _onDragLeave);
@@ -1628,7 +1689,10 @@ const Reconcile = (() => {
       e.dataTransfer.setData("text/plain", String(id));
     } catch {}
     document.body.classList.add("recon-drag-in-flight");
-    document.querySelectorAll(".recon-txn:not(.matched)").forEach((tEl) => {
+    // Decorate ALL txn cards (including matched ones — cumulative drops
+    // are now allowed). Smart-match still considers good fit by amount
+    // or by cumulative-fill of an already-matched txn.
+    document.querySelectorAll(".recon-txn").forEach((tEl) => {
       tEl.classList.add("droppable");
       const txn = reconState.txns.find((t) => t.index === +tEl.dataset.index);
       if (txn && _isGoodMatch(receipt, txn)) tEl.classList.add("good-match");
@@ -1669,16 +1733,14 @@ const Reconcile = (() => {
   async function _pair(receiptId, txnIndex) {
     const receipt = reconState.receipts.find((r) => r.id === receiptId);
     const txn = reconState.txns.find((t) => t.index === txnIndex);
-    if (!receipt || !txn || txn.match) return;
+    if (!receipt || !txn) return;
+    if (receipt.matched) return; // receipt is still 1:1
 
-    // Optimistic update
-    const snapshot = {
-      matched: receipt.matched,
-      txnMatch: txn.match,
-    };
-    receipt.matched = true;
-    txn.match = {
-      id: -1,
+    // Optimistic update — append to the cumulative matches array. We use
+    // a negative placeholder id; the API response replaces it.
+    if (!Array.isArray(txn.matches)) txn.matches = txn.match ? [txn.match] : [];
+    const optimistic = {
+      id: -Math.floor(Math.random() * 1e6) - 1,
       receipt_id: receipt.id,
       receipt_vendor: receipt.vendor,
       receipt_amount: receipt.amount,
@@ -1686,6 +1748,14 @@ const Reconcile = (() => {
       score: null,
       kind: "manual",
     };
+    const snapshot = {
+      matched: receipt.matched,
+      matches: [...txn.matches],
+      match: txn.match,
+    };
+    receipt.matched = true;
+    txn.matches.push(optimistic);
+    txn.match = txn.matches[0];
     _render();
     _flash("ok", `Matched ${receipt.vendor} → ${txn.description}`);
 
@@ -1695,10 +1765,14 @@ const Reconcile = (() => {
         statement_id: reconState.statementId,
         transaction_index: txnIndex,
       });
-      txn.match.id = res.id;
+      // Replace the placeholder id with the real one.
+      const slot = txn.matches.find((m) => m.id === optimistic.id);
+      if (slot) slot.id = res.id;
+      if (txn.match === optimistic) txn.match = slot;
     } catch (e) {
       receipt.matched = snapshot.matched;
-      txn.match = snapshot.txnMatch;
+      txn.matches = snapshot.matches;
+      txn.match = snapshot.match;
       _render();
       _flash("err", `Failed to save match: ${e.message}`);
     }
@@ -1707,16 +1781,33 @@ const Reconcile = (() => {
   }
 
   async function _onUnlink(matchId) {
-    const txn = reconState.txns.find((t) => t.match && t.match.id === matchId);
-    if (!txn) return;
-    const receiptId = txn.match.receipt_id;
+    // Find the txn + the specific match entry inside its matches array.
+    let txn = null;
+    let matchEntry = null;
+    for (const t of reconState.txns) {
+      const ms = _txnMatches(t);
+      const m = ms.find((mm) => mm.id === matchId);
+      if (m) {
+        txn = t;
+        matchEntry = m;
+        break;
+      }
+    }
+    if (!txn || !matchEntry) return;
+    const receiptId = matchEntry.receipt_id;
     const receipt = reconState.receipts.find((r) => r.id === receiptId);
 
     const snapshot = {
+      matches: Array.isArray(txn.matches) ? [...txn.matches] : [],
       match: txn.match,
       matched: receipt ? receipt.matched : null,
     };
-    txn.match = null;
+    if (Array.isArray(txn.matches)) {
+      txn.matches = txn.matches.filter((m) => m.id !== matchId);
+    } else {
+      txn.matches = [];
+    }
+    txn.match = txn.matches[0] || null;
     if (receipt) receipt.matched = false;
     _render();
     _flash("ok", `Unlinked from ${txn.description}`);
@@ -1724,6 +1815,7 @@ const Reconcile = (() => {
     try {
       await api("DELETE", `/api/matches/${matchId}`);
     } catch (e) {
+      txn.matches = snapshot.matches;
       txn.match = snapshot.match;
       if (receipt && snapshot.matched != null)
         receipt.matched = snapshot.matched;

@@ -2388,6 +2388,28 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   padding-left: 10px;
   background: linear-gradient(90deg, var(--accent-bg) 0%, var(--surface) 30%);
 }
+/* Stack multiple match tags vertically with subtle separation. */
+.recon-txn .recon-match-tag + .recon-match-tag {
+  border-top: none;
+  padding-top: 0;
+  margin-top: -2px;
+}
+.recon-cum-progress {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+.recon-cum-progress.ok {
+  color: var(--green);
+  background: var(--green-bg);
+  border-color: var(--green-border);
+}
 .recon-match-tag {
   display: flex;
   align-items: center;
