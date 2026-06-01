@@ -24,6 +24,10 @@ google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.140.0
 weasyprint>=62.3
 opencv-python-headless>=4.10.0.84
+# PyMuPDF / fitz — PDF rasterisation (folder scan, receipt upload card,
+# statement PDF parser). Was previously installed system-wide on py3.9
+# but not pinned; the new venv would fail to OCR any PDF without it.
+pymupdf>=1.24.0
 # macOS only — used by the apple_vision OCR backend. pip install is a no-op
 # on non-Darwin systems (pyobjc only builds wheels for macOS), but
 # requirements.txt declares it for parity with development setup.
