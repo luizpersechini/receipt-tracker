@@ -2607,6 +2607,24 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
 .recon-rcpt-matched-line strong {
   font-weight: 600;
 }
+.recon-rcpt-unlink {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Cancel the parent .recon-rcpt.matched dimming so the button stays
+     legible and clickable on dimmed matched cards. */
+  opacity: 1;
+  filter: none;
+}
+/* Override the cursor:default on matched receipts for this button only. */
+.recon-rcpt.matched .recon-rcpt-unlink {
+  cursor: pointer;
+  opacity: 1;
+}
 
 /* Empty / loading states */
 .recon-empty {

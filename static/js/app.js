@@ -1391,10 +1391,16 @@ const Reconcile = (() => {
     const matchedTxn = isMatched
       ? reconState.txns.find((t) => t.match && t.match.receipt_id === r.id)
       : null;
+    // Include the unlink button right next to the "Matched to ..." line
+    // so the user can drop a bad pairing without first ticking "Show
+    // matched transactions" to find the txn-side × button.
     const matchedLine = matchedTxn
       ? `<span class="recon-rcpt-matched-line">
            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
            Matched to <strong>${_esc(matchedTxn.description)}</strong>
+           <button class="btn btn-ghost btn-sm recon-unlink recon-rcpt-unlink" data-match="${matchedTxn.match.id}" title="Unlink this match">
+             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+           </button>
          </span>`
       : "";
     return `
@@ -1571,6 +1577,18 @@ const Reconcile = (() => {
       el.addEventListener("dragstart", _onDragStart);
       el.addEventListener("dragend", _onDragEnd);
     });
+    // Unlink buttons live INSIDE matched receipt cards. Bind them here
+    // (scoped to the receipt list) because `_bindTxnCards` runs before
+    // the receipt list re-renders — its document-wide query would miss
+    // the receipt-side buttons that hadn't been inserted yet.
+    document
+      .querySelectorAll("#reconReceiptList .recon-rcpt-unlink")
+      .forEach((el) => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          _onUnlink(+el.dataset.match);
+        });
+      });
   }
 
   function _bindTxnCards() {
