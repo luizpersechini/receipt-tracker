@@ -189,6 +189,17 @@ the `api()` helper tolerates the empty body, so unlink no longer shows
 a spurious "failed" flash). The receipt flips back to `pending` if it
 has no other matches anywhere.
 
+## Editing a charge's category
+
+Each **unmatched** transaction card has a category dropdown (Meals ·
+Transport · Fuel/Parking · Travel · Lodging · Office · Other). It drives
+which column the charge lands in on the report. Once you match a
+receipt, the **receipt's category wins** and the card shows a locked
+badge instead — to change a matched charge's category, edit the
+receipt on the Receipts tab. Overrides persist per `(statement,
+transaction)` in `data/statement_categories.json`. See
+[reports.md](reports.md#editing-a-charges-category).
+
 ## Justifying open items (no receipt)
 
 When a transaction has no receipt and you can't match one — you lost it,

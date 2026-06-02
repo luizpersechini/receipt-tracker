@@ -107,6 +107,7 @@ src/
     report_users.py        cardholder roster + name auto-detect
     report_history.py      saved-report index (data/reports/history.json)
     statement_notes.py     per-transaction open-item justifications
+    statement_categories.py  per-transaction report-category overrides
 static/                    SPA frontend (vanilla JS, no build step)
   index.html               single-page UI (Receipts/Reconcile/Statements/Users/Reports)
   css/app.css              design tokens + components

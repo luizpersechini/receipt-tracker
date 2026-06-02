@@ -81,17 +81,44 @@ grid automatically.
 
 Each charge's receipt/transaction category maps onto a form column:
 
-| Form column                 | Mapped from                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------ |
-| Combustível, Estacionamento | parking / fuel keywords (estacion, posto, parking, parkchamp, shell, …) in the label |
-| Despesas com alimentação    | `meals`                                                                              |
-| Taxi / Correios             | `transportation` (uber, taxi, lyft)                                                  |
-| Material para escritório    | `office_supplies`                                                                    |
-| Outros                      | `travel`, `lodging`, `other`, unknown, and IOF                                       |
+| Form column                 | Mapped from                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| Combustível, Estacionamento | `fuel`, or parking/fuel keywords (estacion, posto, parking, parkchamp, shell, …) |
+| Despesas com alimentação    | `meals`                                                                          |
+| Taxi / Correios             | `transportation` (uber, taxi, lyft)                                              |
+| Material para escritório    | `office_supplies`                                                                |
+| Outros                      | `travel`, `lodging`, `other`, unknown, and IOF                                   |
 
 The parking/fuel keyword check runs first so a `transportation` charge
 that's actually parking lands in the right column. Mapping logic is
 `expense_report_pdf._bucket()`.
+
+**Which category a charge uses** (precedence in `_assemble`):
+
+1. **Matched → the receipt's category wins.** Pair a receipt and its
+   category drives the column, regardless of any override.
+2. Else the user's **override** (set on the Reconcile board — see
+   [Editing a charge's category](#editing-a-charges-category)).
+3. Else the **parser's** guess.
+
+So to fix where a matched charge lands, change the _receipt's_ category
+(Receipts tab → Edit); to fix an open item, set the override on the
+board.
+
+### Editing a charge's category
+
+On the Reconcile board, each **unmatched** transaction card has a
+category dropdown (Meals · Transport · Fuel/Parking · Travel · Lodging ·
+Office · Other) — pick one to move the charge to another report column.
+The `fuel` option reaches Combustível/Estacionamento directly. Matched
+cards show the receipt's category as a locked badge instead.
+
+- Overrides are keyed by `(statement_id, transaction_index)` in
+  `data/statement_categories.json` (gitignored), survive re-parses, and
+  are cleared when the statement is deleted.
+- Endpoint: `PUT /api/statements/{id}/transactions/{index}/category`
+  `{category}`. The effective category + a `category_locked` flag come
+  back on each transaction from `GET …/transactions`.
 
 ## Justifying open items
 

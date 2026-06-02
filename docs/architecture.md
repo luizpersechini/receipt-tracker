@@ -59,9 +59,13 @@ a `transaction_index`; the reconcile board groups by it, so a null index
 makes a match invisible there even though the receipt shows `matched`.
 
 **Not in SQLite** (JSON files under `data/`, gitignored — they hold
-PII): `report_profile.json` (the global report front-page defaults) and
-`report_users.json` (the cardholder roster — a list of profile dicts,
-each with an `id`). See [reports.md](reports.md).
+PII): `report_profile.json` (the global report front-page defaults),
+`report_users.json` (the cardholder roster), `report_history.json`
+(saved-report index), `statement_notes.json` (open-item
+justifications), and `statement_categories.json` (per-transaction
+report-category overrides). The last two are keyed by
+`(statement_id, transaction_index)` so they survive a re-parse. See
+[reports.md](reports.md).
 
 ## OCR pipeline
 

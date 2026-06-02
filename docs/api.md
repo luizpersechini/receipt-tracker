@@ -147,7 +147,10 @@ Re-run the parser over the saved file and replace
 Reconcile-board-ready view: each transaction annotated with its current
 matches. A transaction can hold **multiple** matches (cumulative
 pairing), so read `matches` (array). `match` is the first entry,
-retained for older callers.
+retained for older callers. `category` is the **effective** category
+(matched → receipt's; else override; else parser) and `category_locked`
+is true when a receipt is driving it; `note` is the open-item
+justification.
 
 ```json
 {
@@ -160,6 +163,8 @@ retained for older callers.
       "amount": 17.81,
       "currency": "BRL",
       "category": "transportation",
+      "category_locked": false,
+      "note": "",
       "city": null,
       "original_amount": null,
       "original_currency": null,
@@ -207,6 +212,15 @@ Save (or clear, when blank) a justification note for one transaction —
 the open-item reason that prints on the report. Body `{note}`. The note
 also appears on each transaction in the `/transactions` response. 400 if
 the index is out of range, 404 if the statement is gone.
+
+### `PUT /api/statements/{id}/transactions/{index}/category`
+
+Override a transaction's category (which report column it lands in).
+Body `{category}` — one of `meals`, `transportation`, `fuel`, `travel`,
+`lodging`, `office_supplies`, `other`; blank/invalid clears it. Has no
+effect while the transaction is matched (the receipt's category wins).
+The effective `category` + a `category_locked` flag come back on each
+transaction from `GET …/transactions`.
 
 ## Matching
 
