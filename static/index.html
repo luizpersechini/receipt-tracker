@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=16" />
+    <link rel="stylesheet" href="/static/css/app.css?v=17" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -653,6 +653,24 @@
                 >
                   Clear
                 </button>
+                <button class="btn btn-outline btn-sm" id="reimbReportBtn">
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+                    />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                  Reimbursement report
+                </button>
               </div>
             </div>
             <div class="card">
@@ -1217,6 +1235,43 @@
       </div>
     </div>
 
+    <!-- ── REIMBURSEMENT REPORT MODAL (receipts only, no statement) ─────────── -->
+    <div class="modal-overlay" id="reimbModal">
+      <div class="modal-box" style="width: 460px; max-width: 92vw">
+        <div class="modal-title">Reimbursement report</div>
+        <div class="modal-sub">
+          Builds the form from your
+          <strong>reimbursement</strong>-type receipts — no statement, no
+          matching.
+        </div>
+
+        <div class="reimb-grid">
+          <label class="full"
+            >Cardholder
+            <select id="reimbUserSelect"></select>
+          </label>
+          <label
+            >Currency
+            <select id="reimbCurrency"></select>
+          </label>
+          <label
+            >Receipts<span id="reimbCount" class="reimb-count">—</span></label
+          >
+          <label>From<input type="date" id="reimbFrom" /></label>
+          <label>To<input type="date" id="reimbTo" /></label>
+        </div>
+
+        <div class="report-foot" style="margin-top: 16px">
+          <span class="status-msg" id="reimbStatus"></span>
+          <span style="flex: 1"></span>
+          <button class="btn btn-outline" onclick="closeReimbModal()">
+            Cancel
+          </button>
+          <button class="btn btn-primary" id="reimbGenBtn">Download PDF</button>
+        </div>
+      </div>
+    </div>
+
     <div class="modal-overlay" id="stmtDetailModal">
       <div class="modal-box stmt-detail-box">
         <div class="modal-title" id="stmtDetailTitle">Statement</div>
@@ -1607,6 +1662,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=36"></script>
+    <script src="/static/js/app.js?v=37"></script>
   </body>
 </html>

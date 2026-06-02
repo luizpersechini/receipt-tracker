@@ -113,6 +113,39 @@ async def statement_report_pdf(statement_id: int, user_id: int | None = Query(No
     )
 
 
+@router.get("/reports/reimbursement")
+async def reimbursement_report_pdf(
+    user_id: int | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    currency: str | None = Query(None),
+):
+    """Build a reimbursement-only PDF (front-page form + receipt grid) from
+    `reimbursement`-type receipts — no statement, no matching. Scope with
+    optional date range + currency."""
+    try:
+        pdf_bytes = await asyncio.to_thread(
+            expense_report_pdf.build_reimbursement_report,
+            user_id,
+            date_from,
+            date_to,
+            currency,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("reimbursement_report_pdf failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''" + quote("reembolso_despesas.pdf")
+        },
+    )
+
+
 @router.get("/report")
 async def generate_report(currency: str = Query("BRL")):
     """Full reconciliation report with FX conversion."""

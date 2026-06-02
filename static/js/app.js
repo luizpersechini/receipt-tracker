@@ -2146,6 +2146,144 @@ async function _generateReport() {
     });
 })();
 
+// ─── Reimbursement report (receipts only, no statement) ─────────────────────
+// "Reimbursement report" on the Receipts tab → pick cardholder + currency
+// (+ optional dates) → download the form built from reimbursement receipts.
+let _reimbReceipts = []; // cached reimbursement-type receipts (date, currency)
+
+async function openReimbModal() {
+  $("reimbModal").classList.add("open");
+  $("reimbStatus").textContent = "";
+
+  // Cardholder picker from the roster.
+  const usel = $("reimbUserSelect");
+  try {
+    const { users } = await api("GET", "/api/report-users");
+    _usersCache = users || [];
+  } catch {
+    _usersCache = [];
+  }
+  usel.innerHTML =
+    '<option value="">(saved defaults)</option>' +
+    _usersCache
+      .map(
+        (u) => `<option value="${u.id}">${_esc(u.nome || "#" + u.id)}</option>`,
+      )
+      .join("");
+
+  // Pull reimbursement receipts to derive currencies + count.
+  try {
+    const { receipts } = await api("GET", "/api/receipts");
+    _reimbReceipts = (receipts || [])
+      .filter((r) => (r.expense_type || "corp_card") === "reimbursement")
+      .map((r) => {
+        let m = {};
+        try {
+          m = JSON.parse(r.metadata || "{}");
+        } catch {}
+        return {
+          date: m.date || "",
+          currency: (m.currency || "").toUpperCase(),
+        };
+      });
+  } catch {
+    _reimbReceipts = [];
+  }
+
+  // Currency dropdown = currencies present, most-common first (default).
+  const counts = {};
+  _reimbReceipts.forEach((r) => {
+    if (r.currency) counts[r.currency] = (counts[r.currency] || 0) + 1;
+  });
+  const byFreq = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  const csel = $("reimbCurrency");
+  csel.innerHTML = byFreq
+    .map((c) => `<option value="${c}">${c} (${counts[c]})</option>`)
+    .join("");
+  if (!byFreq.length) csel.innerHTML = '<option value="">(none)</option>';
+
+  $("reimbFrom").value = "";
+  $("reimbTo").value = "";
+  _refreshReimbCount();
+}
+
+function _refreshReimbCount() {
+  const cur = $("reimbCurrency").value;
+  const from = $("reimbFrom").value;
+  const to = $("reimbTo").value;
+  const n = _reimbReceipts.filter((r) => {
+    if (cur && r.currency !== cur) return false;
+    if (from && r.date && r.date < from) return false;
+    if (to && r.date && r.date > to) return false;
+    return true;
+  }).length;
+  $("reimbCount").textContent = `${n} in scope`;
+  $("reimbGenBtn").disabled = n === 0;
+}
+
+function closeReimbModal() {
+  $("reimbModal").classList.remove("open");
+}
+
+async function _generateReimb() {
+  const btn = $("reimbGenBtn");
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Building PDF…';
+  $("reimbStatus").className = "status-msg";
+  $("reimbStatus").textContent = "Rendering receipts…";
+  try {
+    const params = new URLSearchParams();
+    const uid = $("reimbUserSelect").value;
+    const cur = $("reimbCurrency").value;
+    const from = $("reimbFrom").value;
+    const to = $("reimbTo").value;
+    if (uid) params.set("user_id", uid);
+    if (cur) params.set("currency", cur);
+    if (from) params.set("date_from", from);
+    if (to) params.set("date_to", to);
+    const res = await fetch(`/api/reports/reimbursement?${params.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `reembolso_despesas.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    $("reimbStatus").className = "status-msg ok";
+    $("reimbStatus").textContent = "Report downloaded.";
+    setTimeout(closeReimbModal, 1200);
+  } catch (e) {
+    $("reimbStatus").className = "status-msg err";
+    $("reimbStatus").textContent = "Failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+(function _wireReimbModal() {
+  const open = $("reimbReportBtn");
+  if (open) open.addEventListener("click", openReimbModal);
+  const gen = $("reimbGenBtn");
+  if (gen) gen.addEventListener("click", _generateReimb);
+  ["reimbCurrency", "reimbFrom", "reimbTo"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("change", _refreshReimbCount);
+  });
+  const overlay = $("reimbModal");
+  if (overlay)
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeReimbModal();
+    });
+})();
+
 // ─── Expense type toggle ──────────────────────────────────────────────────────
 async function toggleExpenseType(id, current) {
   const next = current === "reimbursement" ? "corp_card" : "reimbursement";

@@ -371,8 +371,11 @@ def _front_page_html(data: dict, profile: dict) -> str:
         else (f'<div class="logo-text">{escape(profile.get("company_name") or "")}</div>')
     )
 
-    reembolso_chk = "checked" if profile.get("expense_kind") == "reembolso" else ""
-    cartao_chk = "checked" if profile.get("expense_kind") != "reembolso" else ""
+    # WeasyPrint doesn't reliably paint native <input checked> boxes, so use
+    # unicode glyphs — ☑ for the active kind, ☐ for the other.
+    is_reembolso = profile.get("expense_kind") == "reembolso"
+    reembolso_box = "☑" if is_reembolso else "☐"
+    cartao_box = "☐" if is_reembolso else "☑"
 
     stmt_date = ""
     # Use the latest transaction date as the report date if available.
@@ -406,8 +409,8 @@ def _front_page_html(data: dict, profile: dict) -> str:
         </tr>
         <tr>
           <td class="lbl r">Motivo do Gasto:</td><td class="val"><b>{escape(profile.get("motivo") or "")}</b></td>
-          <td colspan="2" class="chk"><input type="checkbox" {reembolso_chk} disabled> Reembolso despesa</td>
-          <td colspan="2" class="chk"><input type="checkbox" {cartao_chk} disabled> Cartão Crédito</td>
+          <td colspan="2" class="chk"><span class="cbx">{reembolso_box}</span> Reembolso despesa</td>
+          <td colspan="2" class="chk"><span class="cbx">{cartao_box}</span> Cartão Crédito</td>
         </tr>
         <tr>
           <td class="lbl r">Local:</td><td class="val"><b>{escape(profile.get("local") or "")}</b></td>
@@ -508,6 +511,7 @@ table { border-collapse: collapse; width: 100%; }
 .emp .lbl { background: #fff; text-align: right; font-weight: 600; white-space: nowrap; width: 1%; }
 .emp .val { white-space: nowrap; }
 .emp .chk { text-align: left; }
+.emp .cbx { font-size: 11px; vertical-align: middle; }
 
 .grid { margin-top: 4px; }
 .grid th, .grid td { border: 1px solid #000; padding: 2px 4px; }
@@ -585,6 +589,96 @@ def build_statement_report(statement_id: int, user_id: Optional[int] = None) -> 
         "Built report for statement %d (user=%s): %d rows, %d receipts, %d bytes",
         statement_id,
         profile.get("nome") or "—",
+        len(data["rows"]),
+        len(data["receipts"]),
+        len(pdf_bytes),
+    )
+    return pdf_bytes
+
+
+# ─── Reimbursement report (receipts only — no statement, no matching) ────────
+
+
+def _assemble_reimbursement(receipts: list) -> dict[str, Any]:
+    """Build the report data from a flat list of reimbursement receipts.
+
+    Same shape as `_assemble` but: no statement, every row is "matched"
+    (the receipt IS the proof — no justification note), and no IOF.
+    """
+    rows: list[dict] = []
+    grid: list[dict] = []
+    for r in receipts:
+        meta = _receipt_meta(r)
+        amount = float(meta.get("total_amount") or 0)
+        label = meta.get("vendor_name") or r.get("description") or "Receipt"
+        col = _bucket(meta.get("category"), label)
+        rows.append(
+            {
+                "date": _fmt_date_br(meta.get("date")),
+                "conta": "",
+                "detalhe": label.upper().strip() or "—",
+                "col": col,
+                "amount": amount,
+                "matched": True,  # reimbursement rows always have a receipt
+            }
+        )
+        grid.append(
+            {
+                "vendor": label,
+                "date": _fmt_date_br(meta.get("date")),
+                "amount": meta.get("total_amount"),
+                "currency": meta.get("currency") or "BRL",
+                "img": _image_data_uri(r.get("filepath")),
+            }
+        )
+    return {"statement": {"filename": None}, "rows": rows, "iof": None, "receipts": grid}
+
+
+def build_reimbursement_report(
+    user_id: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    currency: Optional[str] = None,
+) -> bytes:
+    """Render a reimbursement report: the front-page form (Reembolso ticked)
+    over all `reimbursement`-type receipts in the optional date range +
+    currency, followed by their images. Raises ValueError if none match."""
+    from weasyprint import HTML
+
+    receipts = db.get_receipts_by_period(date_from, date_to, "reimbursement")
+    if currency:
+        cur = currency.upper()
+        receipts = [r for r in receipts if (_receipt_meta(r).get("currency") or "").upper() == cur]
+    if not receipts:
+        raise ValueError("No reimbursement receipts match the selected filters")
+
+    # Sort by date so the table reads chronologically.
+    receipts.sort(key=lambda r: _receipt_meta(r).get("date") or "")
+
+    data = _assemble_reimbursement(receipts)
+
+    # Profile: explicit user → global default. No statement to guess from.
+    if user_id is not None and report_users.get_user(user_id):
+        profile = {**report_profile.DEFAULT_PROFILE, **report_users.get_user(user_id)}
+    else:
+        profile = report_profile.load_profile()
+    # Force the reimbursement framing.
+    profile = {**profile, "expense_kind": "reembolso"}
+    if currency:
+        profile["moeda"] = currency.upper() if currency.upper() != "BRL" else "R$"
+
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<style>{_CSS}</style></head><body>"
+        + _front_page_html(data, profile)
+        + _receipts_html(data["receipts"])
+        + "</body></html>"
+    )
+    pdf_bytes = HTML(string=html).write_pdf()
+    logger.info(
+        "Built reimbursement report (user=%s, cur=%s): %d rows, %d receipts, %d bytes",
+        profile.get("nome") or "—",
+        currency or "all",
         len(data["rows"]),
         len(data["receipts"]),
         len(pdf_bytes),

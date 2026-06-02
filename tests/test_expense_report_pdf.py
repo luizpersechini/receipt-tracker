@@ -159,3 +159,50 @@ def test_build_report_endtoend(report_env, tmp_path):
 def test_build_report_missing_statement_raises(report_env):
     with pytest.raises(ValueError):
         erp.build_statement_report(99999)
+
+
+# ─── Reimbursement report ───────────────────────────────────────────────────
+
+
+def _add_reimb(db, vendor, amount, currency, date, category="meals"):
+    return db.save_receipt(
+        filename=f"{vendor}.jpg",
+        filepath="",  # no file → synthetic card
+        metadata={
+            "vendor_name": vendor,
+            "total_amount": amount,
+            "currency": currency,
+            "date": date,
+            "category": category,
+        },
+        description="reimb",
+    )
+
+
+def test_reimbursement_report_filters_by_currency(report_env):
+    db = report_env
+    r1 = _add_reimb(db, "Cafe BR", 30.0, "BRL", "2026-04-10")
+    r2 = _add_reimb(db, "Coffee CA", 8.0, "CAD", "2026-04-11", "meals")
+    # Mark both as reimbursement.
+    db.update_receipt(r1, column_patch={"expense_type": "reimbursement"}, metadata_patch={})
+    db.update_receipt(r2, column_patch={"expense_type": "reimbursement"}, metadata_patch={})
+
+    pdf = erp.build_reimbursement_report(currency="BRL")
+    assert pdf[:4] == b"%PDF"
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        front = doc[0].get_text()
+        # Reembolso framing, BRL row present, CAD row excluded.
+        assert "Reembolso" in front
+        assert "CAFE BR" in front.upper()
+        assert "COFFEE CA" not in front.upper()
+        # No IOF / justification on a reimbursement report.
+        assert "sem comprovante" not in front.lower()
+    finally:
+        doc.close()
+
+
+def test_reimbursement_report_empty_raises(report_env):
+    with pytest.raises(ValueError):
+        erp.build_reimbursement_report(currency="BRL")
