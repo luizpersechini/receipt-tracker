@@ -2043,19 +2043,14 @@ const Reconcile = (() => {
 })();
 
 // ─── Users (cardholder roster) ─────────────────────────────────────────────
-// (Reference list of profile fields; the form collects from the DOM, so
-// this isn't load-bearing — kept in sync for clarity.)
+// (Reference list of per-user profile fields; the form collects from the
+// DOM, so this isn't load-bearing — kept in sync for clarity. GL accounts
+// live in the global config, not here.)
 const _USER_FIELDS = [
   "nome",
   "cost_center",
   "motivo",
   "local",
-  "conta_contabil",
-  "conta_combustivel",
-  "conta_alimentacao",
-  "conta_taxi",
-  "conta_material",
-  "conta_outros",
   "projeto",
   "expense_kind",
   "moeda",
@@ -2067,6 +2062,60 @@ const _USER_FIELDS = [
 ];
 let _editingUserId = null;
 let _usersCache = [];
+
+// ─── Accounting accounts (company-wide GL accounts, global config) ──────────
+async function openAccountsModal() {
+  $("accountsModal").classList.add("open");
+  $("accountsStatus").textContent = "";
+  try {
+    const profile = await api("GET", "/api/report-profile");
+    document.querySelectorAll("#accountsForm [data-k]").forEach((el) => {
+      el.value = profile[el.dataset.k] ?? "";
+    });
+  } catch (e) {
+    $("accountsStatus").className = "status-msg err";
+    $("accountsStatus").textContent = "Couldn't load: " + e.message;
+  }
+}
+
+function closeAccountsModal() {
+  $("accountsModal").classList.remove("open");
+}
+
+async function _saveAccounts() {
+  const btn = $("accountsSaveBtn");
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Saving…';
+  try {
+    const patch = {};
+    document.querySelectorAll("#accountsForm [data-k]").forEach((el) => {
+      patch[el.dataset.k] = el.value;
+    });
+    await api("PUT", "/api/report-profile", patch);
+    $("accountsStatus").className = "status-msg ok";
+    $("accountsStatus").textContent = "Saved.";
+    setTimeout(closeAccountsModal, 800);
+  } catch (e) {
+    $("accountsStatus").className = "status-msg err";
+    $("accountsStatus").textContent = "Failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+(function _wireAccountsModal() {
+  const open = $("accountsBtn");
+  if (open) open.addEventListener("click", openAccountsModal);
+  const save = $("accountsSaveBtn");
+  if (save) save.addEventListener("click", _saveAccounts);
+  const overlay = $("accountsModal");
+  if (overlay)
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeAccountsModal();
+    });
+})();
 
 async function loadUsers() {
   try {

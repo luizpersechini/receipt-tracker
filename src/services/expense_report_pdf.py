@@ -669,6 +669,23 @@ def cardholder_name(user_id: Optional[int], statement: Optional[dict] = None) ->
     return _resolve_profile(user_id, statement or {}).get("nome") or ""
 
 
+# GL accounts ("Conta Contábil") are company-wide, not per-cardholder, so
+# they always come from the global profile — never the resolved user.
+_ACCOUNT_KEYS = (
+    "conta_contabil",
+    "conta_combustivel",
+    "conta_alimentacao",
+    "conta_taxi",
+    "conta_material",
+    "conta_outros",
+)
+
+
+def _with_global_accounts(profile: dict) -> dict:
+    g = report_profile.load_profile()
+    return {**profile, **{k: g.get(k, "") for k in _ACCOUNT_KEYS}}
+
+
 def build_statement_report(statement_id: int, user_id: Optional[int] = None) -> bytes:
     """Render the combined expense-report PDF for one statement. Returns the
     PDF as bytes. `user_id` selects a roster user's profile; if omitted we
@@ -676,7 +693,7 @@ def build_statement_report(statement_id: int, user_id: Optional[int] = None) -> 
     from weasyprint import HTML
 
     data = _assemble(statement_id)
-    profile = _resolve_profile(user_id, data["statement"])
+    profile = _with_global_accounts(_resolve_profile(user_id, data["statement"]))
 
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
@@ -764,8 +781,8 @@ def build_reimbursement_report(
         profile = {**report_profile.DEFAULT_PROFILE, **report_users.get_user(user_id)}
     else:
         profile = report_profile.load_profile()
-    # Force the reimbursement framing.
-    profile = {**profile, "expense_kind": "reembolso"}
+    # GL accounts always come from the global config, and force reembolso.
+    profile = {**_with_global_accounts(profile), "expense_kind": "reembolso"}
     if currency:
         profile["moeda"] = currency.upper() if currency.upper() != "BRL" else "R$"
 
