@@ -110,11 +110,29 @@ get a green "good match" ribbon in the top-right corner.
 
 On drop the UI updates optimistically — the receipt fades out of the
 right pane, the transaction card flips to its `.matched` state — then
-fires `POST /api/matches`. If the server returns an error (most
-commonly 409 because the transaction is already paired), the optimistic
-update rolls back and a red flash banner appears under the header.
+fires `POST /api/matches`. If the server returns an error, the
+optimistic update rolls back and a red flash banner appears under the
+header.
 
 Manual matches have `match_kind = "manual"` and `match_score = null`.
+
+### Cumulative matching (N receipts → 1 charge)
+
+A single statement charge sometimes covers several receipts — a hotel
+folio that's billed once but has separate room / restaurant / parking
+receipts. You can drop **multiple** receipts onto the same transaction:
+
+- A matched transaction stays a drop target (tick "Show matched
+  transactions" to keep it on screen).
+- It renders one green tag per receipt, each with its own × to unlink
+  just that one.
+- A **progress chip** appears once ≥2 receipts are attached:
+  `R$ 100 of R$ 120` — the running total of the attached receipts vs
+  the bill amount. It turns green when the sum lands within R$ 0.50 of
+  the charge.
+
+A receipt is still **1:1** — you can't pair the same receipt onto two
+transactions (it would double-count on the report). Trying returns 409.
 
 ### 3. Pre-existing
 
@@ -157,15 +175,27 @@ layout makes amount-matching obvious at a glance.
 
 ## Unlinking and re-pairing
 
-Each matched transaction has a small × button on the right. Click it
-to delete the match — the receipt flips back to `pending`, the
-transaction becomes an unmatched drop target again. The deletion
-hits `DELETE /api/matches/{id}`.
+You can unlink from **either side**:
 
-If you unlink and the receipt has no other matches anywhere, its
-`match_status` goes back to `pending`. If somehow the same receipt
-was paired against multiple statements, the receipt stays `matched`
-until the last reference is gone.
+- **Transaction side** — each green match tag on a matched transaction
+  has a × button.
+- **Receipt side** — a matched receipt card (visible with "Show matched
+  receipts" on) shows a "Matched to <txn>" line with its own × button.
+  Handy when you spot a wrong pairing while looking at the receipts
+  pane and don't want to hunt for the transaction.
+
+Both call `DELETE /api/matches/{id}` (which returns **204 No Content** —
+the `api()` helper tolerates the empty body, so unlink no longer shows
+a spurious "failed" flash). The receipt flips back to `pending` if it
+has no other matches anywhere.
+
+## Generating the report
+
+Once a statement is reconciled, **Generate report** (top of the
+reconcile header) builds the combined "Prestação de Contas" PDF — a
+categorised summary front page plus receipt-image grid pages. The
+cardholder is auto-detected from the statement's name. Full detail in
+[reports.md](reports.md).
 
 ## When the matcher gets it wrong
 
@@ -196,8 +226,11 @@ manually. Real matches are usually 0.8+.
 - **Statements you don't want to match against can be deleted** —
   there's no "soft-disable" for a statement. Deletion is destructive
   but the file stays on disk so you can re-upload.
-- **The Auto-match button always clears existing auto-matches first**
-  on its targeted statements. Manual matches survive.
+- **Auto-match preserves manual pairings.** Running it clears only the
+  `auto`-kind matches and re-scores; anything you dragged by hand stays
+  put, and its receipt + transaction slot are excluded from the new
+  pass so they can't be clobbered. So you can hand-fix a few, then run
+  Auto-match again to mop up the rest without losing your work.
 - **The currency dropdown only lists currencies present in data.**
   After uploading a new statement or adding receipts in a new
   currency, switch tabs or reload the Reconcile page to refresh the

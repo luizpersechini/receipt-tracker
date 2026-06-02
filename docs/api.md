@@ -144,8 +144,10 @@ Re-run the parser over the saved file and replace
 
 ### `GET /api/statements/{id}/transactions`
 
-Reconcile-board-ready view: each transaction annotated with current
-match status.
+Reconcile-board-ready view: each transaction annotated with its current
+matches. A transaction can hold **multiple** matches (cumulative
+pairing), so read `matches` (array). `match` is the first entry,
+retained for older callers.
 
 ```json
 {
@@ -162,6 +164,7 @@ match status.
       "original_amount": null,
       "original_currency": null,
       "fx_to_brl": null,
+      "matches": [],
       "match": null
     },
     {
@@ -175,27 +178,38 @@ match status.
       "original_amount": 35.92,
       "original_currency": "CAD",
       "fx_to_brl": 5.46,
-      "match": {
-        "id": 287,
-        "receipt_id": 1003,
-        "receipt_vendor": "Twist Toronto",
-        "receipt_amount": 35.92,
-        "receipt_currency": "CAD",
-        "score": 0.97,
-        "kind": "auto"
-      }
+      "matches": [
+        {
+          "id": 287,
+          "receipt_id": 1003,
+          "receipt_vendor": "Twist Toronto",
+          "receipt_amount": 35.92,
+          "receipt_currency": "CAD",
+          "score": 0.97,
+          "kind": "auto"
+        }
+      ],
+      "match": { "id": 287, "receipt_id": 1003, "...": "(first entry)" }
     }
   ]
 }
 ```
 
+### `GET /api/statements/{id}/guess-user`
+
+Best-guess cardholder for a statement, by name. Returns
+`{user_id, nome}` or `{user_id: null}` when nothing matches confidently.
+See [reports.md](reports.md#name-auto-detection).
+
 ## Matching
 
 ### `POST /api/match`
 
-Run the auto-matcher. Clears existing matches for every uploaded
-statement first, scores receipts against transactions, persists
-matches with `match_kind="auto"`, flips receipt statuses.
+Run the auto-matcher. **Preserves manual matches** — it deletes only
+auto-kind rows, excludes manually-paired receipts/transaction slots from
+the pool, scores the rest, and persists new matches with
+`match_kind="auto"` and a `transaction_index`. Reimbursement receipts
+are excluded.
 
 Response: `{success, matches, unmatched_receipts,
 unmatched_transactions, total_matched, ...}`.
@@ -213,13 +227,15 @@ Create a manual match (drag-drop on the reconcile board).
 { "receipt_id": 1003, "statement_id": 1, "transaction_index": 17 }
 ```
 
-Returns `{id, kind: "manual", score: null}`. 409 if the txn or
-receipt is already matched.
+Returns `{id, kind: "manual", score: null}`. **N:1 allowed** — a
+transaction can take multiple receipts (cumulative pairing). A single
+receipt is still 1:1: pairing it twice returns 409 (would double-count
+on the report).
 
 ### `DELETE /api/matches/{id}`
 
-Remove a match (auto or manual). Returns 204. The linked receipt
-goes back to `pending` if no other matches reference it.
+Remove a match (auto or manual). Returns 204 with an empty body. The
+linked receipt goes back to `pending` if no other matches reference it.
 
 ## Folder scan
 
@@ -259,6 +275,43 @@ Returns the file path; download via `GET /api/reports/expense?id=...`.
 ### `GET /api/reports/expense`
 
 Stream a previously-generated report by id.
+
+## Combined PDF report + cardholders
+
+See [reports.md](reports.md) for the full picture. Endpoints:
+
+### `GET /api/statements/{id}/report?user_id=`
+
+Build + stream the combined "Prestação de Contas" PDF (categorised
+front page + receipt-image grid) for one statement. `user_id` picks a
+roster cardholder's profile; omitted → guess by name → global default.
+`Content-Type: application/pdf`, attachment download.
+
+### `GET` / `PUT` `/api/report-profile`
+
+Get / save the **global default** front-page fields (company code, nome,
+C/C, bank details, …). Used as the template for new cardholders and the
+fallback when no cardholder matches. Stored in
+`data/report_profile.json`.
+
+### `GET /api/report-users`
+
+List cardholders: `{users: [{id, nome, cost_center, ...}]}`.
+
+### `POST /api/report-users`
+
+Create a cardholder. Body is any subset of the profile fields (`nome`
+recommended). Unknown keys are dropped; defaults fill the rest. Returns
+the created user with its assigned `id`.
+
+### `PUT /api/report-users/{id}`
+
+Update a cardholder. Merges the patch over the existing record. 404 if
+the id doesn't exist.
+
+### `DELETE /api/report-users/{id}`
+
+Remove a cardholder. Returns 204. 404 if not found.
 
 ## FX rates
 

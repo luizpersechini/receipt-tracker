@@ -31,6 +31,7 @@ laptop — no external API calls except optional Gmail.
 │  • statement_parser (CSV) + statement_pdf_parser (PDF)        │
 │  • matching_engine fuzzy scoring with currency awareness      │
 │  • folder_watcher, gmail_ingest, excel_reports, fx_rates      │
+│  • expense_report_pdf (WeasyPrint) + report_profile/_users    │
 └─────────────┬────────────────────────────────────┬────────────┘
               │                                    │
    ┌──────────▼─────────┐              ┌──────────▼──────────┐
@@ -51,6 +52,16 @@ Five tables. Schema lives in `src/db/database.py:init_db()`.
 | `matches`         | Pairs a receipt to a specific transaction inside a statement. Columns: `receipt_id`, `statement_id`, `transaction_index` (which row inside `statements.transactions`), `transaction_data` (snapshot of the row at match time), `match_score` (0–1, null for manual), `match_kind` (`auto` or `manual`).             |
 | `expense_reports` | Excel-report history.                                                                                                                                                                                                                                                                                               |
 | `fx_rates`        | Cached FX rates (`date`, `from_currency`, `to_currency`, `rate`).                                                                                                                                                                                                                                                   |
+
+`matches` is N:1 — a transaction can hold several rows (cumulative
+pairing), but a receipt appears in at most one. Every row **must** carry
+a `transaction_index`; the reconcile board groups by it, so a null index
+makes a match invisible there even though the receipt shows `matched`.
+
+**Not in SQLite** (JSON files under `data/`, gitignored — they hold
+PII): `report_profile.json` (the global report front-page defaults) and
+`report_users.json` (the cardholder roster — a list of profile dicts,
+each with an `id`). See [reports.md](reports.md).
 
 ## OCR pipeline
 
@@ -123,6 +134,12 @@ Either kind sets the receipt's `match_status` to `matched`. Unlinking
 via `DELETE /api/matches/{id}` flips it back to `pending` (only if no
 other matches across statements reference it).
 
+Auto-match **preserves manual pairings**: it deletes only auto-kind
+rows, snapshots the manual ones, and feeds the matching engine a
+`locked_txns` set so it can't propose a slot a manual match already
+owns. A transaction can collect several receipts (cumulative); a
+receipt is still 1:1.
+
 **Critical:** every match row must carry a `transaction_index`. The
 reconcile board groups matches by index to render them; rows with
 `transaction_index=NULL` are invisible on the board even though
@@ -130,6 +147,26 @@ their linked receipt shows `matched`. The auto-matcher persists the
 index alongside the score and snapshot; manual matches always have
 it (the drop target supplies it). If you ever see a paired count
 mismatch between the receipts table and the board, look here first.
+
+## Report pipeline (combined PDF)
+
+`POST` of nothing — it's a `GET /api/statements/{id}/report?user_id=`
+that streams a self-contained PDF built by
+`expense_report_pdf.build_statement_report`:
+
+```
+build_statement_report(id, user_id)
+  → _assemble(id)          load statement + matches + receipts;
+                           bucket each charge into a form column;
+                           normalise each receipt image to a data URI;
+                           extract IOF from the saved statement PDF
+  → _resolve_profile(...)  user_id → guess-by-name → global default
+  → HTML (front page + 3-col receipt grid) → WeasyPrint → bytes
+```
+
+Cardholder roster lives in `report_users.py`;
+`guess_user_for_statement` matches the statement's filename + first-page
+text against user names. Full detail in [reports.md](reports.md).
 
 ## Frontend conventions
 
@@ -156,3 +193,16 @@ mismatch between the receipts table and the board, look here first.
 | Auto-match misses obvious pairs                    | `src/services/matching_engine.py` `_score()` weights                           |
 | Reconcile board shows fewer matches than DB has    | match rows missing `transaction_index` — see migration notes in commit history |
 | Receipts table shows wrong day (off-by-one)        | `static/js/app.js` `fmt.date()` — timezone fix uses local-date components      |
+| Report PDF blank / WeasyPrint error                | `expense_report_pdf.py`; check `pango`/`cairo` system libs are installed       |
+| Report front page has the wrong person             | `report_users.guess_user_for_statement` — or just pick the user in the modal   |
+| Report charge in the wrong category column         | `expense_report_pdf._bucket()` keyword/category map                            |
+| `ModuleNotFoundError` after a fresh checkout       | wrong interpreter — use the venv (`.venv/bin/python`), needs Python 3.10+      |
+
+## Runtime / dependencies
+
+Python **3.10+** (developed on 3.13). The app is run from a `uv` venv
+(`.venv/`); `.claude/launch.json` points the preview server at
+`.venv/bin/python` so it matches. `requirements.lock` is the
+reproducible install. The version floor exists because the security
+pins (Starlette ≥1, Pillow ≥12) only ship on the newer line — see the
+README's _Security & dependencies_ section.
