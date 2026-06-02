@@ -3,8 +3,15 @@
   "configurations": [
     {
       "name": "api",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "uvicorn", "src.main:app", "--reload", "--port", "8000"],
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "src.main:app",
+        "--reload",
+        "--port",
+        "8000"
+      ],
       "port": 8000
     },
     {

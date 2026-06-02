@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..db import database as db
 from ..schemas.reports import ExpenseReportRequest
+from ..services import expense_report_pdf, report_profile
 from ..services.fx_fetcher import fetch_rates, get_unique_currencies
 from ..services.report_generator import generate_excel_report, generate_expense_report
 
@@ -15,6 +17,48 @@ router = APIRouter(prefix="/api", tags=["reports"])
 logger = logging.getLogger(__name__)
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+# ─── Report profile (saved header/footer fields for the PDF report) ─────────
+
+
+@router.get("/report-profile")
+async def get_report_profile():
+    profile = await asyncio.to_thread(report_profile.load_profile)
+    return JSONResponse(profile)
+
+
+@router.put("/report-profile")
+async def put_report_profile(patch: dict = Body(...)):
+    try:
+        saved = await asyncio.to_thread(report_profile.save_profile, patch)
+        return JSONResponse(saved)
+    except Exception as e:
+        logger.exception("put_report_profile failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Combined expense-report PDF, built from a reconciled statement ─────────
+
+
+@router.get("/statements/{statement_id}/report")
+async def statement_report_pdf(statement_id: int):
+    """Build the combined 'Prestação de Contas' PDF (front-page summary +
+    receipt-image grid) for one reconciled statement."""
+    try:
+        pdf_bytes = await asyncio.to_thread(expense_report_pdf.build_statement_report, statement_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("statement_report_pdf failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    fname = f"prestacao_contas_statement_{statement_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
 
 
 @router.get("/report")
@@ -29,7 +73,11 @@ async def generate_report(currency: str = Query("BRL")):
         currencies = get_unique_currencies(receipts)
         fx_rates = await asyncio.to_thread(fetch_rates, currencies, target) if currencies else {}
         report_path = await asyncio.to_thread(
-            generate_excel_report, receipts, statements, target, fx_rates,
+            generate_excel_report,
+            receipts,
+            statements,
+            target,
+            fx_rates,
         )
         return FileResponse(
             report_path,
@@ -52,7 +100,10 @@ async def create_expense_report(body: ExpenseReportRequest):
 
         expense_type_filter = None if report_type == "all" else report_type
         receipts = await asyncio.to_thread(
-            db.get_receipts_by_period, period_start, period_end, expense_type_filter,
+            db.get_receipts_by_period,
+            period_start,
+            period_end,
+            expense_type_filter,
         )
 
         currencies = get_unique_currencies(receipts)
@@ -72,7 +123,11 @@ async def create_expense_report(body: ExpenseReportRequest):
 
         report_path = await asyncio.to_thread(
             generate_expense_report,
-            receipts, report_type, target, fx_rates, matches,
+            receipts,
+            report_type,
+            target,
+            fx_rates,
+            matches,
         )
 
         label = report_type.replace("_", " ").title()

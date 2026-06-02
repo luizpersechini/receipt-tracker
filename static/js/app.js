@@ -1908,7 +1908,98 @@ const Reconcile = (() => {
     }, 3000);
   }
 
-  return { init };
+  return { init, state: reconState };
+})();
+
+// ─── Expense report (PDF) ──────────────────────────────────────────────────
+// "Generate report" on the reconcile header → fill the saved profile →
+// download the combined Prestação de Contas PDF for the current statement.
+let _reportProfileLoaded = false;
+
+async function openReportModal() {
+  const sid = Reconcile.state && Reconcile.state.statementId;
+  if (sid == null) {
+    alert("Pick a statement on the Reconcile tab first.");
+    return;
+  }
+  $("reportModal").classList.add("open");
+  $("reportStatus").textContent = "";
+  // Load saved profile once and populate the form fields.
+  try {
+    const profile = await api("GET", "/api/report-profile");
+    document.querySelectorAll("#reportForm [data-k]").forEach((el) => {
+      const k = el.dataset.k;
+      if (k in profile) el.value = profile[k] ?? "";
+    });
+    _reportProfileLoaded = true;
+  } catch (e) {
+    $("reportStatus").className = "status-msg err";
+    $("reportStatus").textContent = "Couldn't load saved profile: " + e.message;
+  }
+}
+
+function closeReportModal() {
+  $("reportModal").classList.remove("open");
+}
+
+function _collectReportProfile() {
+  const patch = {};
+  document.querySelectorAll("#reportForm [data-k]").forEach((el) => {
+    patch[el.dataset.k] = el.value;
+  });
+  return patch;
+}
+
+async function _generateReport() {
+  const sid = Reconcile.state && Reconcile.state.statementId;
+  if (sid == null) return;
+  const btn = $("reportGenBtn");
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Building PDF…';
+  $("reportStatus").className = "status-msg";
+  $("reportStatus").textContent =
+    "Rendering receipts — this can take a moment…";
+  try {
+    // Save the profile first so it's remembered next time.
+    await api("PUT", "/api/report-profile", _collectReportProfile());
+    // Fetch the PDF as a blob and trigger a download.
+    const res = await fetch(`/api/statements/${sid}/report`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `prestacao_contas_statement_${sid}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    $("reportStatus").className = "status-msg ok";
+    $("reportStatus").textContent = "Report downloaded.";
+    setTimeout(closeReportModal, 1200);
+  } catch (e) {
+    $("reportStatus").className = "status-msg err";
+    $("reportStatus").textContent = "Failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+(function _wireReportModal() {
+  const open = $("reconReportBtn");
+  if (open) open.addEventListener("click", openReportModal);
+  const gen = $("reportGenBtn");
+  if (gen) gen.addEventListener("click", _generateReport);
+  const overlay = $("reportModal");
+  if (overlay)
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeReportModal();
+    });
 })();
 
 // ─── Expense type toggle ──────────────────────────────────────────────────────

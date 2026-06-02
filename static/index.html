@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=14" />
+    <link rel="stylesheet" href="/static/css/app.css?v=15" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -726,6 +726,27 @@
                   Auto-match
                 </button>
 
+                <button class="btn btn-outline" id="reconReportBtn">
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+                    />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                  </svg>
+                  Generate report
+                </button>
+
                 <div class="recon-counts">
                   <strong id="reconPairedNum">0</strong>
                   <span class="recon-paired-sep">/</span>
@@ -1075,6 +1096,56 @@
     </div>
 
     <!-- ── STATEMENT DETAIL MODAL (view all parsed transactions) ────────────── -->
+    <!-- ── REPORT PROFILE MODAL (header/footer fields for the PDF report) ───── -->
+    <div class="modal-overlay" id="reportModal">
+      <div class="modal-box report-box">
+        <div class="modal-title">Generate expense report</div>
+        <div class="modal-sub">
+          These fields fill the front-page form. Saved for next time.
+        </div>
+
+        <div class="report-form" id="reportForm">
+          <label>Nome<input type="text" data-k="nome" /></label>
+          <label
+            >C/C (cost center)<input type="text" data-k="cost_center"
+          /></label>
+          <label>Motivo do Gasto<input type="text" data-k="motivo" /></label>
+          <label>Local<input type="text" data-k="local" /></label>
+          <label
+            >Conta Contábil<input type="text" data-k="conta_contabil"
+          /></label>
+          <label>Projeto<input type="text" data-k="projeto" /></label>
+          <label
+            >Tipo
+            <select data-k="expense_kind">
+              <option value="cartao">Cartão Crédito</option>
+              <option value="reembolso">Reembolso despesa</option>
+            </select>
+          </label>
+          <label>Moeda<input type="text" data-k="moeda" /></label>
+          <div class="report-form-sep">Dados bancários (rodapé)</div>
+          <label>Favorecido<input type="text" data-k="favorecido" /></label>
+          <label>Banco<input type="text" data-k="banco" /></label>
+          <label>Agência<input type="text" data-k="agencia" /></label>
+          <label
+            >Conta Corrente<input type="text" data-k="conta_corrente"
+          /></label>
+          <label>CPF / RG<input type="text" data-k="cpf_rg" /></label>
+        </div>
+
+        <div class="report-foot">
+          <span class="status-msg" id="reportStatus"></span>
+          <span style="flex: 1"></span>
+          <button class="btn btn-outline" onclick="closeReportModal()">
+            Cancel
+          </button>
+          <button class="btn btn-primary" id="reportGenBtn">
+            Save &amp; download PDF
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div class="modal-overlay" id="stmtDetailModal">
       <div class="modal-box stmt-detail-box">
         <div class="modal-title" id="stmtDetailTitle">Statement</div>
@@ -1465,6 +1536,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=33"></script>
+    <script src="/static/js/app.js?v=34"></script>
   </body>
 </html>
