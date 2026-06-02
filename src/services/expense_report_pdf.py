@@ -568,6 +568,11 @@ def _resolve_profile(user_id: Optional[int], statement: dict) -> dict:
     return report_profile.load_profile()
 
 
+def cardholder_name(user_id: Optional[int], statement: Optional[dict] = None) -> str:
+    """The cardholder name a report would resolve to — for history labels."""
+    return _resolve_profile(user_id, statement or {}).get("nome") or ""
+
+
 def build_statement_report(statement_id: int, user_id: Optional[int] = None) -> bytes:
     """Render the combined expense-report PDF for one statement. Returns the
     PDF as bytes. `user_id` selects a roster user's profile; if omitted we

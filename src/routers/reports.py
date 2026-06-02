@@ -9,7 +9,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..db import database as db
 from ..schemas.reports import ExpenseReportRequest
-from ..services import expense_report_pdf, report_profile, report_users
+from ..services import (
+    expense_report_pdf,
+    report_history,
+    report_profile,
+    report_users,
+)
 from ..services.fx_fetcher import fetch_rates, get_unique_currencies
 from ..services.report_generator import generate_excel_report, generate_expense_report
 
@@ -99,6 +104,8 @@ async def statement_report_pdf(statement_id: int, user_id: int | None = Query(No
         pdf_bytes = await asyncio.to_thread(
             expense_report_pdf.build_statement_report, statement_id, user_id
         )
+        statement = await asyncio.to_thread(db.get_statement_by_id, statement_id)
+        nome = await asyncio.to_thread(expense_report_pdf.cardholder_name, user_id, statement)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -106,6 +113,16 @@ async def statement_report_pdf(statement_id: int, user_id: int | None = Query(No
         raise HTTPException(status_code=500, detail=str(e))
 
     fname = f"prestacao_contas_statement_{statement_id}.pdf"
+    stmt_name = (statement or {}).get("filename") or f"statement {statement_id}"
+    await asyncio.to_thread(
+        report_history.record,
+        pdf_bytes,
+        kind="statement",
+        title=f"Statement · {nome or stmt_name}",
+        cardholder=nome,
+        period=stmt_name,
+        download_name=fname,
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -131,12 +148,24 @@ async def reimbursement_report_pdf(
             date_to,
             currency,
         )
+        nome = await asyncio.to_thread(expense_report_pdf.cardholder_name, user_id, None)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception("reimbursement_report_pdf failed")
         raise HTTPException(status_code=500, detail=str(e))
 
+    period = " to ".join([p for p in (date_from, date_to) if p]) or "all dates"
+    await asyncio.to_thread(
+        report_history.record,
+        pdf_bytes,
+        kind="reimbursement",
+        title=f"Reimbursement · {nome or '—'}" + (f" · {currency}" if currency else ""),
+        cardholder=nome,
+        currency=currency or "",
+        period=period,
+        download_name="reembolso_despesas.pdf",
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -144,6 +173,41 @@ async def reimbursement_report_pdf(
             "Content-Disposition": "attachment; filename*=UTF-8''" + quote("reembolso_despesas.pdf")
         },
     )
+
+
+# ─── Report history ─────────────────────────────────────────────────────────
+
+
+@router.get("/report-history")
+async def get_report_history():
+    records = await asyncio.to_thread(report_history.list_history)
+    return JSONResponse({"reports": records})
+
+
+@router.get("/report-history/{report_id}/download")
+async def download_report_history(report_id: int):
+    rec = await asyncio.to_thread(report_history.get_record, report_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Report not found")
+    pdf_bytes = await asyncio.to_thread(report_history.read_pdf, report_id)
+    if pdf_bytes is None:
+        raise HTTPException(status_code=404, detail="Report file missing")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''"
+            + quote(rec.get("download_name") or f"report_{report_id}.pdf")
+        },
+    )
+
+
+@router.delete("/report-history/{report_id}", status_code=204)
+async def delete_report_history(report_id: int):
+    ok = await asyncio.to_thread(report_history.delete_record, report_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return Response(status_code=204)
 
 
 @router.get("/report")

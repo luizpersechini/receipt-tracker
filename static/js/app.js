@@ -2124,6 +2124,7 @@ async function _generateReport() {
     URL.revokeObjectURL(url);
     $("reportStatus").className = "status-msg ok";
     $("reportStatus").textContent = "Report downloaded.";
+    loadReportHistory().catch(() => {});
     setTimeout(closeReportModal, 1200);
   } catch (e) {
     $("reportStatus").className = "status-msg err";
@@ -2258,6 +2259,7 @@ async function _generateReimb() {
     URL.revokeObjectURL(url);
     $("reimbStatus").className = "status-msg ok";
     $("reimbStatus").textContent = "Report downloaded.";
+    loadReportHistory().catch(() => {});
     setTimeout(closeReimbModal, 1200);
   } catch (e) {
     $("reimbStatus").className = "status-msg err";
@@ -2269,7 +2271,8 @@ async function _generateReimb() {
 }
 
 (function _wireReimbModal() {
-  const open = $("reimbReportBtn");
+  // Reimbursement report lives on the Reports tab now.
+  const open = $("reportsReimbBtn");
   if (open) open.addEventListener("click", openReimbModal);
   const gen = $("reimbGenBtn");
   if (gen) gen.addEventListener("click", _generateReimb);
@@ -2283,6 +2286,59 @@ async function _generateReimb() {
       if (e.target === overlay) closeReimbModal();
     });
 })();
+
+// ─── Report history (Reports tab) ──────────────────────────────────────────
+async function loadReportHistory() {
+  let reports = [];
+  try {
+    ({ reports } = await api("GET", "/api/report-history"));
+  } catch {}
+  reports = reports || [];
+  const badge = $("navReportCount");
+  if (badge) badge.textContent = reports.length;
+  const host = $("reportHistoryList");
+  if (!host) return;
+  if (!reports.length) {
+    host.innerHTML =
+      '<div class="users-empty">No reports yet. Generate a reimbursement report above, or a statement report from the Reconcile tab.</div>';
+    return;
+  }
+  host.innerHTML = reports
+    .map((r) => {
+      const when = (r.created_at || "").slice(0, 16).replace("T", " ");
+      const kindCls = r.kind === "statement" ? "badge-accent" : "badge-green";
+      const kindLbl = r.kind === "statement" ? "Statement" : "Reimbursement";
+      const meta = [r.period, r.currency, _fmtSize(r.size)]
+        .filter(Boolean)
+        .join(" · ");
+      return `<div class="rh-row">
+        <span class="badge ${kindCls}">${kindLbl}</span>
+        <div class="rh-main">
+          <div class="rh-title">${_esc(r.title || "Report")}</div>
+          <div class="rh-meta">${_esc(meta)} · ${when}</div>
+        </div>
+        <a class="btn btn-outline btn-sm" href="/api/report-history/${r.id}/download">Download</a>
+        <button class="btn btn-ghost btn-sm" onclick="deleteReportHistory(${r.id})">Del</button>
+      </div>`;
+    })
+    .join("");
+}
+
+function _fmtSize(bytes) {
+  if (!bytes) return "";
+  const kb = bytes / 1024;
+  return kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.round(kb)} KB`;
+}
+
+async function deleteReportHistory(id) {
+  if (!confirm("Delete this saved report?")) return;
+  try {
+    await api("DELETE", `/api/report-history/${id}`);
+    loadReportHistory();
+  } catch (e) {
+    alert("Failed to delete: " + e.message);
+  }
+}
 
 // ─── Expense type toggle ──────────────────────────────────────────────────────
 async function toggleExpenseType(id, current) {
@@ -3357,12 +3413,14 @@ const tabTitles = {
   reconcile: "Reconcile",
   statements: "Statements",
   users: "Users",
+  reports: "Reports",
 };
 const tabPanels = {
   receipts: $("tab-receipts"),
   reconcile: $("tab-reconcile"),
   statements: $("tab-statements"),
   users: $("tab-users"),
+  reports: $("tab-reports"),
 };
 
 document.querySelectorAll(".nav-item[data-tab]").forEach((btn) => {
@@ -3380,6 +3438,7 @@ document.querySelectorAll(".nav-item[data-tab]").forEach((btn) => {
     if (name === "statements") loadStatements();
     if (name === "reconcile") Reconcile.init();
     if (name === "users") loadUsers();
+    if (name === "reports") loadReportHistory();
   });
 });
 
@@ -4184,6 +4243,7 @@ loadFxRates().catch(() => {});
 loadWatchFolder().catch(() => {});
 loadGmailStatus().catch(() => {});
 loadUsers().catch(() => {});
+loadReportHistory().catch(() => {});
 restoreLastSync();
 checkOllama().catch(() => {});
 

@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=17" />
+    <link rel="stylesheet" href="/static/css/app.css?v=18" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -105,6 +105,25 @@
           </svg>
           <span>Users</span>
           <span class="nav-badge" id="navUserCount">0</span>
+        </button>
+        <button class="nav-item" data-tab="reports">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+            />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+          </svg>
+          <span>Reports</span>
+          <span class="nav-badge" id="navReportCount">0</span>
         </button>
       </div>
       <div class="nav-footer">
@@ -653,24 +672,6 @@
                 >
                   Clear
                 </button>
-                <button class="btn btn-outline btn-sm" id="reimbReportBtn">
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path
-                      d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-                    />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                  Reimbursement report
-                </button>
               </div>
             </div>
             <div class="card">
@@ -1056,6 +1057,41 @@
                 </button>
               </div>
               <div class="users-list" id="usersList"></div>
+            </div>
+          </div>
+
+          <!-- ══ Reports (generate + history) ══ -->
+          <div id="tab-reports" style="display: none">
+            <div class="card">
+              <div class="users-head">
+                <div>
+                  <div class="card-head" style="margin: 0">Reports</div>
+                  <div class="users-sub">
+                    Reimbursement reports build from your reimbursement-type
+                    receipts. Statement reports are generated from the Reconcile
+                    tab. Every report is saved below.
+                  </div>
+                </div>
+                <button class="btn btn-primary" id="reportsReimbBtn">
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+                    />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                  Reimbursement report
+                </button>
+              </div>
+              <div class="rh-list" id="reportHistoryList"></div>
             </div>
           </div>
         </div>
@@ -1662,6 +1698,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=37"></script>
+    <script src="/static/js/app.js?v=38"></script>
   </body>
 </html>
