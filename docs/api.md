@@ -321,6 +321,22 @@ the id doesn't exist.
 
 Remove a cardholder. Returns 204. 404 if not found.
 
+### `GET /api/report-history`
+
+List saved reports, newest first:
+`{reports: [{id, created_at, kind, title, cardholder, currency, period,
+size, file, download_name}]}`. `kind` is `statement` or
+`reimbursement`. Every statement / reimbursement PDF the app builds is
+recorded here automatically.
+
+### `GET /api/report-history/{id}/download`
+
+Re-download a saved report PDF. 404 if the record or its file is gone.
+
+### `DELETE /api/report-history/{id}`
+
+Delete a saved report (index row + file). Returns 204. 404 if not found.
+
 ## FX rates
 
 ### `GET /api/fx/rates`

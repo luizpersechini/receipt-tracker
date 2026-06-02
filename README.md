@@ -102,11 +102,12 @@ src/
     pdf_render.py          PyMuPDF wrapper for PDF → PIL image
     gmail_ingest.py        Gmail API client + Uber receipt parser
     excel_reports.py       openpyxl expense-report generator
-    expense_report_pdf.py  combined Prestação de Contas PDF (WeasyPrint)
+    expense_report_pdf.py  statement + reimbursement Prestação de Contas PDFs
     report_profile.py      global report front-page fields (JSON)
     report_users.py        cardholder roster + name auto-detect
+    report_history.py      saved-report index (data/reports/history.json)
 static/                    SPA frontend (vanilla JS, no build step)
-  index.html               single-page UI (Receipts/Reconcile/Statements/Users)
+  index.html               single-page UI (Receipts/Reconcile/Statements/Users/Reports)
   css/app.css              design tokens + components
   js/app.js                all client logic
   report_assets/logo.png   company logo for the report front page

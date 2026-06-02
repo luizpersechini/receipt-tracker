@@ -5,12 +5,12 @@ statement, and how the cardholder roster auto-fills it.
 
 There are **three** report systems in the app, for different needs:
 
-|         | Excel reports                  | Statement PDF report                 | Reimbursement PDF report              |
-| ------- | ------------------------------ | ------------------------------------ | ------------------------------------- |
-| Trigger | Reconcile → "Export Report"    | Reconcile header → "Generate report" | Receipts tab → "Reimbursement report" |
-| Scope   | receipts in a period, FX-conv. | one reconciled statement             | `reimbursement`-type receipts         |
-| Output  | `.xlsx` (editable)             | `.pdf` (front page + receipts)       | `.pdf` (front page + receipts)        |
-| Code    | `report_generator.py`          | `expense_report_pdf.py`              | `expense_report_pdf.py`               |
+|         | Excel reports                  | Statement PDF report                 | Reimbursement PDF report             |
+| ------- | ------------------------------ | ------------------------------------ | ------------------------------------ |
+| Trigger | Reconcile → "Export Report"    | Reconcile header → "Generate report" | Reports tab → "Reimbursement report" |
+| Scope   | receipts in a period, FX-conv. | one reconciled statement             | `reimbursement`-type receipts        |
+| Output  | `.xlsx` (editable)             | `.pdf` (front page + receipts)       | `.pdf` (front page + receipts)       |
+| Code    | `report_generator.py`          | `expense_report_pdf.py`              | `expense_report_pdf.py`              |
 
 This doc covers the **two PDF reports** — the corporate form deliverable.
 The Excel path is the older period-based export and is unchanged.
@@ -21,6 +21,9 @@ ticked (`Cartão Crédito` vs `Reembolso despesa`). The reimbursement
 report has **no statement, no matching, no IOF, and no open-item
 justification rows** — every receipt is its own proof. See
 [Reimbursement report](#reimbursement-report) below.
+
+Every generated PDF (both kinds) is saved and listed on the **Reports
+tab** — see [History](#history).
 
 ## What the PDF contains
 
@@ -144,7 +147,7 @@ Reconcile header → "Generate report"
 
 Personal-spend receipts (the ones you mark **reimbursement** with the
 per-row type toggle) never appear on a corporate statement, so they
-can't be reconciled. The **Receipts tab → "Reimbursement report"**
+can't be reconciled. The **Reports tab → "Reimbursement report"**
 button builds the same form from those receipts directly:
 
 - One row per reimbursement receipt (date · vendor · category column ·
@@ -167,6 +170,21 @@ Code: `expense_report_pdf.build_reimbursement_report(user_id, date_from,
 date_to, currency)`. It pulls `get_receipts_by_period(..., "reimbursement")`,
 filters currency in Python, and reuses the shared renderers.
 
+## History
+
+Every PDF the app builds — statement _and_ reimbursement — is saved and
+listed on the **Reports tab**. Each row shows a kind badge, a title
+(e.g. `Statement · LUIZ EDUARDO PERSECHINI` or
+`Reimbursement · TONY · BRL`), the period/currency/size/timestamp, and
+**Download** / **Del** buttons.
+
+Persistence is `report_history.py`: the PDF bytes are written to
+`data/reports/report_{id}.pdf` and indexed in
+`data/reports/history.json` (newest first, monotonic ids, gitignored —
+the files embed receipt images + PII). Both report endpoints call
+`report_history.record(...)` after building, labelling the entry with
+the resolved cardholder name (`expense_report_pdf.cardholder_name`).
+
 ## Endpoints
 
 | Method | Path                                   | Purpose                               |
@@ -180,6 +198,9 @@ filters currency in Python, and reuses the shared renderers.
 | GET    | `/api/statements/{id}/guess-user`      | best-match cardholder for a statement |
 | GET    | `/api/statements/{id}/report?user_id=` | build + stream the statement PDF      |
 | GET    | `/api/reports/reimbursement?...`       | build + stream the reimbursement PDF  |
+| GET    | `/api/report-history`                  | list saved reports (newest first)     |
+| GET    | `/api/report-history/{id}/download`    | re-download a saved report            |
+| DELETE | `/api/report-history/{id}`             | delete a saved report + its file      |
 
 `/api/reports/reimbursement` takes `user_id`, `date_from`, `date_to`,
 `currency` (all optional). See [`api.md`](api.md) for request/response
