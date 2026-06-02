@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=20" />
+    <link rel="stylesheet" href="/static/css/app.css?v=21" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -1113,9 +1113,6 @@
           /></label>
           <label>Motivo do Gasto<input type="text" data-k="motivo" /></label>
           <label>Local<input type="text" data-k="local" /></label>
-          <label
-            >Conta Contábil<input type="text" data-k="conta_contabil"
-          /></label>
           <label>Projeto<input type="text" data-k="projeto" /></label>
           <label
             >Tipo
@@ -1125,6 +1122,30 @@
             </select>
           </label>
           <label>Moeda<input type="text" data-k="moeda" /></label>
+          <div class="report-form-sep">
+            Contas contábeis por categoria
+            <span class="report-form-hint"
+              >(usa a conta padrão quando vazio)</span
+            >
+          </div>
+          <label
+            >Conta padrão<input type="text" data-k="conta_contabil"
+          /></label>
+          <label
+            >Combustível / Estacion.<input
+              type="text"
+              data-k="conta_combustivel"
+          /></label>
+          <label
+            >Alimentação<input type="text" data-k="conta_alimentacao"
+          /></label>
+          <label
+            >Taxi / Correios<input type="text" data-k="conta_taxi"
+          /></label>
+          <label
+            >Material escritório<input type="text" data-k="conta_material"
+          /></label>
+          <label>Outros<input type="text" data-k="conta_outros" /></label>
           <div class="report-form-sep">Dados bancários (rodapé)</div>
           <label>Favorecido<input type="text" data-k="favorecido" /></label>
           <label>Banco<input type="text" data-k="banco" /></label>
@@ -1698,6 +1719,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=40"></script>
+    <script src="/static/js/app.js?v=41"></script>
   </body>
 </html>

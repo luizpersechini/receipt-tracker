@@ -2043,12 +2043,19 @@ const Reconcile = (() => {
 })();
 
 // ─── Users (cardholder roster) ─────────────────────────────────────────────
+// (Reference list of profile fields; the form collects from the DOM, so
+// this isn't load-bearing — kept in sync for clarity.)
 const _USER_FIELDS = [
   "nome",
   "cost_center",
   "motivo",
   "local",
   "conta_contabil",
+  "conta_combustivel",
+  "conta_alimentacao",
+  "conta_taxi",
+  "conta_material",
+  "conta_outros",
   "projeto",
   "expense_kind",
   "moeda",

@@ -318,8 +318,12 @@ def _front_page_html(data: dict, profile: dict) -> str:
         col_totals["outros"] += iof
     grand_total = sum(col_totals.values())
 
-    conta = escape(profile.get("conta_contabil") or "")
+    default_conta = profile.get("conta_contabil") or ""
     projeto = escape(profile.get("projeto") or "")
+
+    def _conta_for(col: str) -> str:
+        # Per-column GL account, falling back to the single default.
+        return escape(profile.get(f"conta_{col}") or default_conta or "")
 
     def _amount_cells(col: str, amount: float) -> str:
         cells = []
@@ -340,7 +344,7 @@ def _front_page_html(data: dict, profile: dict) -> str:
         body_rows.append(
             f"<tr>"
             f'<td class="dt">{escape(r["date"])}</td>'
-            f'<td class="ct">{conta}</td>'
+            f'<td class="ct">{_conta_for(r["col"])}</td>'
             f'<td class="ds">{detalhe}</td>'
             f"{_amount_cells(r['col'], r['amount'])}"
             f'<td class="num tot">{_fmt_brl(r["amount"])}</td>'
@@ -351,7 +355,7 @@ def _front_page_html(data: dict, profile: dict) -> str:
     if iof:
         body_rows.append(
             f"<tr>"
-            f'<td class="dt"></td><td class="ct"></td>'
+            f'<td class="dt"></td><td class="ct">{_conta_for("outros")}</td>'
             f'<td class="ds">IOF</td>'
             f"{_amount_cells('outros', iof)}"
             f'<td class="num tot">{_fmt_brl(iof)}</td>'
@@ -517,29 +521,48 @@ def _open_items_html(data: dict) -> str:
     )
 
 
+_RECEIPTS_PER_ROW = 3
+
+
+def _receipt_cell(rc: dict) -> str:
+    cap = f"{escape(rc['date'])} · {escape(rc['vendor'])}"
+    amt = rc.get("amount")
+    if amt is not None:
+        sym = "R$" if (rc.get("currency") or "BRL") == "BRL" else (rc.get("currency") + " ")
+        cap += f" · {sym} {_fmt_brl(amt)}"
+    if rc.get("img"):
+        inner = f'<img src="{rc["img"]}" alt="">'
+    else:
+        # Synthetic card for rows with no image (e.g. Uber CSV imports).
+        inner = (
+            '<div class="noimg">'
+            f'<div class="noimg-v">{escape(rc["vendor"])}</div>'
+            f'<div class="noimg-d">{escape(rc["date"])}</div>'
+            '<div class="noimg-t">sem imagem</div>'
+            "</div>"
+        )
+    return f'<td class="rcell">{inner}<div class="rcap">{cap}</div></td>'
+
+
 def _receipts_html(receipts: list[dict]) -> str:
+    """Receipt-image grid as a TABLE (not CSS grid). WeasyPrint paginates
+    table rows reliably and honours `break-inside: avoid` on <tr>, so a
+    receipt image never gets split from its caption across a page break —
+    the whole row of 3 moves to the next page if it doesn't fit."""
     if not receipts:
         return ""
-    cards = []
-    for rc in receipts:
-        cap = f"{escape(rc['date'])} · {escape(rc['vendor'])}"
-        amt = rc.get("amount")
-        if amt is not None:
-            sym = "R$" if (rc.get("currency") or "BRL") == "BRL" else (rc.get("currency") + " ")
-            cap += f" · {sym} {_fmt_brl(amt)}"
-        if rc.get("img"):
-            inner = f'<img src="{rc["img"]}" alt="">'
-        else:
-            # Synthetic card for rows with no image (e.g. Uber CSV imports).
-            inner = (
-                '<div class="noimg">'
-                f'<div class="noimg-v">{escape(rc["vendor"])}</div>'
-                f'<div class="noimg-d">{escape(rc["date"])}</div>'
-                '<div class="noimg-t">sem imagem</div>'
-                "</div>"
-            )
-        cards.append(f'<figure class="rcard">{inner}<figcaption>{cap}</figcaption></figure>')
-    return f'<section class="receipts"><div class="rgrid">{"".join(cards)}</div></section>'
+    cells = [_receipt_cell(rc) for rc in receipts]
+    rows = []
+    for i in range(0, len(cells), _RECEIPTS_PER_ROW):
+        chunk = cells[i : i + _RECEIPTS_PER_ROW]
+        while len(chunk) < _RECEIPTS_PER_ROW:
+            chunk.append('<td class="rcell rcell-empty"></td>')
+        rows.append(f"<tr>{''.join(chunk)}</tr>")
+    return (
+        '<section class="receipts"><table class="rgrid"><tbody>'
+        + "".join(rows)
+        + "</tbody></table></section>"
+    )
 
 
 _CSS = """
@@ -593,11 +616,15 @@ table { border-collapse: collapse; width: 100%; }
 .sign .sigline { border-bottom: 1px solid #000; height: 26px; }
 .sign .siglbl { font-weight: 700; margin-top: 2px; margin-bottom: 14px; }
 
-.rgrid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-.rcard { margin: 0; break-inside: avoid; border: 1px solid #ccc; border-radius: 3px; padding: 4px; display: flex; flex-direction: column; align-items: center; }
-.rcard img { max-width: 100%; max-height: 240px; object-fit: contain; }
-.rcard figcaption { font-size: 7.5px; color: #333; margin-top: 3px; text-align: center; word-break: break-word; }
-.rcard .noimg { width: 100%; height: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f6f6f6; border: 1px dashed #bbb; }
+/* Receipt grid as a table — each <tr> stays together across page breaks
+   so an image is never split from its caption. */
+.rgrid { width: 100%; border-collapse: separate; border-spacing: 8px; table-layout: fixed; }
+.rgrid tr { break-inside: avoid; page-break-inside: avoid; }
+.rcell { width: 33.33%; vertical-align: top; text-align: center; border: 1px solid #ccc; border-radius: 3px; padding: 4px; }
+.rcell-empty { border: none; }
+.rcell img { max-width: 100%; max-height: 240px; object-fit: contain; }
+.rcap { font-size: 7.5px; color: #333; margin-top: 3px; text-align: center; word-break: break-word; }
+.rcell .noimg { width: 100%; height: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f6f6f6; border: 1px dashed #bbb; }
 .noimg-v { font-weight: 700; font-size: 9px; }
 .noimg-d { font-size: 8px; color: #555; }
 .noimg-t { font-size: 7px; color: #999; margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }

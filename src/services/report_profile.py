@@ -35,7 +35,15 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "motivo": "Despesas",  # Motivo do Gasto
     "local": "",
     "moeda": "R$",
-    "conta_contabil": "",  # accounting account code shown per row
+    "conta_contabil": "",  # default GL account (fallback when no per-column one)
+    # Per-column GL accounts ("Conta Contábil" differs by expense type).
+    # A row uses the account for its report column, falling back to
+    # `conta_contabil`. Keys mirror the 5 form columns.
+    "conta_combustivel": "",  # Combustível / Estacionamento
+    "conta_alimentacao": "",  # Despesas com alimentação
+    "conta_taxi": "",  # Taxi / Correios
+    "conta_material": "",  # Material para escritório
+    "conta_outros": "",  # Outros
     "expense_kind": "cartao",  # "cartao" (Cartão Crédito) or "reembolso"
     # Bank / signature footer
     "favorecido": "",

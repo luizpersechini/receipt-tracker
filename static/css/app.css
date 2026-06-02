@@ -3043,6 +3043,13 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   padding-bottom: 4px;
   margin-top: 4px;
 }
+.report-form-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-3);
+  margin-left: 6px;
+}
 .report-foot {
   display: flex;
   align-items: center;
