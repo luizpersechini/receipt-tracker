@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 from ..config import settings
 from ..db import database as db
-from . import report_profile, report_users, statement_notes
+from . import report_profile, report_users, statement_categories, statement_notes
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,9 @@ _FUEL_PARKING_KEYWORDS = (
 def _bucket(category: Optional[str], label: Optional[str]) -> str:
     cat = (category or "").lower()
     text = (label or "").lower()
+    # An explicit `fuel` category (user override) wins over keyword sniffing.
+    if cat == "fuel":
+        return "combustivel"
     if any(k in text for k in _FUEL_PARKING_KEYWORDS):
         return "combustivel"
     if cat == "meals":
@@ -231,6 +234,7 @@ def _assemble(statement_id: int) -> dict[str, Any]:
 
     matches = db.get_matches_for_statement(statement_id)
     notes = statement_notes.get_notes(statement_id)
+    cat_overrides = statement_categories.get_categories(statement_id)
     # transaction_index → [match rows]
     by_idx: dict[int, list] = {}
     for m in matches:
@@ -246,11 +250,13 @@ def _assemble(statement_id: int) -> dict[str, Any]:
         ms = sorted(by_idx.get(i, []), key=lambda m: m.get("id") or 0)
         amount = float(t.get("amount") or 0)
         label = t.get("description") or ""
-        # Category: prefer the matched receipt's category, else the txn's.
-        category = t.get("category")
+        # Category precedence: matched → the receipt's category wins;
+        # otherwise the user's override, else the parser's guess.
         if ms:
             rmeta0 = _receipt_meta_from_match(ms[0])
-            category = rmeta0.get("category") or category
+            category = rmeta0.get("category") or t.get("category")
+        else:
+            category = cat_overrides.get(i) or t.get("category")
         col = _bucket(category, label)
 
         row = {

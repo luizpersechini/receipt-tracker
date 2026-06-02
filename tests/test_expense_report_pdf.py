@@ -283,6 +283,61 @@ def test_open_items_page_lists_charges_and_justifications(report_env):
         doc.close()
 
 
+def test_category_override_changes_report_column(report_env):
+    db = report_env
+    from src.services import statement_categories
+
+    txns = [
+        {
+            "date": "2026-04-01",
+            "description": "MYSTERY",
+            "amount": 50.0,
+            "category": "other",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("c.csv", "c.csv", txns)
+    # Parser said "other" (→ Outros). Override to meals → Alimentação column.
+    statement_categories.set_category(sid, 0, "meals")
+    data = erp._assemble(sid)
+    assert data["rows"][0]["col"] == "alimentacao"
+    # `fuel` override reaches the Combustível column.
+    statement_categories.set_category(sid, 0, "fuel")
+    assert erp._assemble(sid)["rows"][0]["col"] == "combustivel"
+
+
+def test_matched_receipt_category_beats_override(report_env):
+    db = report_env
+    from src.services import statement_categories
+
+    txns = [
+        {
+            "date": "2026-04-01",
+            "description": "UBER",
+            "amount": 50.0,
+            "category": "other",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("c2.csv", "c2.csv", txns)
+    statement_categories.set_category(sid, 0, "meals")  # override → would be Alimentação
+    rid = db.save_receipt(
+        "u.jpg",
+        "",
+        {
+            "vendor_name": "Uber",
+            "total_amount": 50.0,
+            "currency": "BRL",
+            "date": "2026-04-01",
+            "category": "transportation",
+        },
+        "x",
+    )
+    db.save_match(rid, sid, txns[0], 0.9, match_kind="manual", transaction_index=0)
+    # Receipt (transportation → Taxi) wins over the meals override.
+    assert erp._assemble(sid)["rows"][0]["col"] == "taxi"
+
+
 def test_no_open_items_page_when_all_matched(report_env):
     db = report_env
     rid = _add_reimb(db, "Cafe", 12.0, "BRL", "2026-04-10")

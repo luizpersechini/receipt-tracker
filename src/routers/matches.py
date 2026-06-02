@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..db import database as db
-from ..services import statement_notes
+from ..services import statement_categories, statement_notes
 from ..services.matching_engine import match_receipts_to_statements
 
 router = APIRouter(prefix="/api", tags=["matches"])
@@ -155,6 +155,7 @@ async def get_statement_transactions(statement_id: int):
 
     matches = await asyncio.to_thread(db.get_matches_for_statement, statement_id)
     notes = await asyncio.to_thread(statement_notes.get_notes, statement_id)
+    cat_overrides = await asyncio.to_thread(statement_categories.get_categories, statement_id)
     # Group matches by transaction_index — N:1 is allowed now (multiple
     # receipts cumulatively pay one statement charge, e.g. hotel folio
     # split into room + restaurant + parking receipts).
@@ -178,8 +179,11 @@ async def get_statement_transactions(statement_id: int):
         # Stable sort by match id so older pairings render first.
         ms.sort(key=lambda m: m.get("id") or 0)
         match_list = []
-        for m in ms:
+        receipt_category = None
+        for j, m in enumerate(ms):
             rmeta = _receipt_metadata(m.get("receipt_metadata"))
+            if j == 0:
+                receipt_category = rmeta.get("category")
             match_list.append(
                 {
                     "id": m["id"],
@@ -191,13 +195,23 @@ async def get_statement_transactions(statement_id: int):
                     "kind": m.get("match_kind") or "auto",
                 }
             )
+        # Effective category precedence: matched → receipt's category wins;
+        # otherwise the user override, else the parser's guess. `category_locked`
+        # tells the UI when editing is pointless (the receipt drives it).
+        if ms:
+            category = receipt_category or t.get("category")
+            category_locked = True
+        else:
+            category = cat_overrides.get(i) or t.get("category")
+            category_locked = False
         meta = {
             "index": i,
             "date": t.get("date"),
             "description": t.get("description"),
             "amount": t.get("amount"),
             "currency": "BRL",
-            "category": t.get("category"),
+            "category": category,
+            "category_locked": category_locked,
             "city": raw.get("city"),
             "original_amount": raw.get("original_amount"),
             "original_currency": native_ccy if native_ccy and native_ccy != "BRL" else None,
@@ -238,6 +252,27 @@ async def set_transaction_note(statement_id: int, transaction_index: int, body: 
     note = body.get("note") if isinstance(body, dict) else None
     await asyncio.to_thread(statement_notes.set_note, statement_id, transaction_index, note)
     return JSONResponse({"success": True, "note": (note or "").strip()})
+
+
+@router.put("/statements/{statement_id}/transactions/{transaction_index}/category")
+async def set_transaction_category(
+    statement_id: int, transaction_index: int, body: dict = Body(...)
+):
+    """Override the category of one statement transaction. Has no effect on
+    matched items — the receipt's category wins there (the override is kept
+    but the report/board ignore it while matched). Pass an empty/invalid
+    value to clear."""
+    statement = await asyncio.to_thread(db.get_statement_by_id, statement_id)
+    if not statement:
+        raise HTTPException(status_code=404, detail="Statement not found")
+    n = len(statement.get("transactions") or [])
+    if transaction_index < 0 or transaction_index >= n:
+        raise HTTPException(status_code=400, detail="transaction_index out of range")
+    category = body.get("category") if isinstance(body, dict) else None
+    await asyncio.to_thread(
+        statement_categories.set_category, statement_id, transaction_index, category
+    )
+    return JSONResponse({"success": True, "category": (category or "").strip().lower()})
 
 
 @router.post("/matches")

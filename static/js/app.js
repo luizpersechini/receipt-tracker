@@ -1360,7 +1360,7 @@ const Reconcile = (() => {
           </span>
         </div>
         <div class="recon-txn-bot">
-          ${t.category ? `<span class="badge badge-gray">${_fmt.cat(t.category)}</span>` : ""}
+          ${_renderCategoryControl(t, isMatched)}
           ${t.city ? `<span class="recon-city">${_esc(t.city)}</span>` : ""}
           ${isIntl ? `<span class="badge badge-accent recon-cur">${_esc(t.original_currency)}</span>` : ""}
           ${progressHtml}
@@ -1369,6 +1369,35 @@ const Reconcile = (() => {
         ${isMatched ? "" : _renderNoteArea(t)}
       </div>
     `;
+  }
+
+  // Category control: matched cards show the receipt's category (locked —
+  // the receipt wins); unmatched cards get an editable dropdown that drives
+  // the report column.
+  const _CAT_OPTIONS = [
+    ["meals", "Meals"],
+    ["transportation", "Transport"],
+    ["fuel", "Fuel / Parking"],
+    ["travel", "Travel"],
+    ["lodging", "Lodging"],
+    ["office_supplies", "Office"],
+    ["other", "Other"],
+  ];
+
+  function _renderCategoryControl(t, isMatched) {
+    if (isMatched || t.category_locked) {
+      return t.category
+        ? `<span class="badge badge-gray" title="From the matched receipt">${_fmt.cat(t.category)}</span>`
+        : "";
+    }
+    const cur = (t.category || "other").toLowerCase();
+    const opts = _CAT_OPTIONS
+      .map(
+        ([v, l]) =>
+          `<option value="${v}"${v === cur ? " selected" : ""}>${l}</option>`,
+      )
+      .join("");
+    return `<select class="recon-cat-select" data-index="${t.index}" title="Report category — change to move this charge to another column">${opts}</select>`;
   }
 
   // Justification editor for open items (unmatched transactions). The note
@@ -1735,6 +1764,28 @@ const Reconcile = (() => {
         }
       });
     });
+    // Category override on unmatched cards.
+    document.querySelectorAll(".recon-cat-select").forEach((sel) => {
+      // Don't let a click on the select start a card drag / drop interaction.
+      sel.addEventListener("mousedown", (e) => e.stopPropagation());
+      sel.addEventListener("change", () =>
+        _saveCategory(+sel.dataset.index, sel.value),
+      );
+    });
+  }
+
+  async function _saveCategory(txnIndex, category) {
+    const txn = reconState.txns.find((t) => t.index === txnIndex);
+    if (txn) txn.category = category; // optimistic
+    try {
+      await api(
+        "PUT",
+        `/api/statements/${reconState.statementId}/transactions/${txnIndex}/category`,
+        { category },
+      );
+    } catch (e) {
+      _flash("err", `Couldn't save category: ${e.message}`);
+    }
   }
 
   async function _saveNote(txnIndex) {
@@ -3513,6 +3564,9 @@ document.querySelectorAll(".nav-item[data-tab]").forEach((btn) => {
     Object.entries(tabPanels).forEach(
       ([k, el]) => (el.style.display = k === name ? "" : "none"),
     );
+    // The upload/ingest side panel is only relevant on Receipts.
+    const sp = $("sidePanelEl");
+    if (sp) sp.classList.toggle("tab-hidden", name !== "receipts");
     $("topbarTitle").textContent = tabTitles[name];
     if (name === "receipts") loadReceipts();
     if (name === "statements") loadStatements();
