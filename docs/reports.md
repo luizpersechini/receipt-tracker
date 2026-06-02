@@ -63,10 +63,12 @@ A single self-contained PDF mirroring the Atlantic Nickel
 
 **Receipt pages**
 
-- Every matched receipt as an image in a **3-column CSS grid**.
-  `break-inside: avoid` keeps each image with its caption, so the layout
-  packs ~9 small receipts per page and fewer for tall ones — "as many as
-  fit while readable".
+- Every matched receipt as an image in a **3-column table** (3 cards per
+  `<tr>`, `break-inside: avoid` on the row). A table is used rather than
+  CSS grid because WeasyPrint paginates table rows reliably — a row of 3
+  image+caption cells moves to the next page intact instead of splitting
+  an image from its caption. Packs ~9 small receipts per page, fewer for
+  tall ones.
 - Caption under each: `date · vendor · amount`.
 - Real image files are embedded as downscaled JPEG data URIs (long edge
   ≤ 1000 px, quality 72) so the PDF is self-contained but not huge.
@@ -92,6 +94,23 @@ Each charge's receipt/transaction category maps onto a form column:
 The parking/fuel keyword check runs first so a `transportation` charge
 that's actually parking lands in the right column. Mapping logic is
 `expense_report_pdf._bucket()`.
+
+### Conta Contábil (GL accounts)
+
+The report's **Conta Contábil** column shows a different GL account per
+expense column. These are **company-wide** — the same chart of accounts
+for every cardholder — so they live in the global config
+(`report_profile.json`), not on individual users.
+
+- Six fields: a default (`conta_contabil`) plus one per column
+  (`conta_combustivel`, `conta_alimentacao`, `conta_taxi`,
+  `conta_material`, `conta_outros`). A row uses its column's account,
+  falling back to the default when that's blank.
+- Edit them on the **Reports tab → Accounts** ("Contas contábeis"
+  modal), saved via `PUT /api/report-profile`.
+- At build time `_with_global_accounts()` overlays these onto whichever
+  cardholder generated the report, so they're identical regardless of
+  who it's for.
 
 **Which category a charge uses** (precedence in `_assemble`):
 

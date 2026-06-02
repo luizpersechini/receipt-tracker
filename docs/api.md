@@ -318,10 +318,13 @@ single Total). 404 when no receipts match. `application/pdf` attachment.
 
 ### `GET` / `PUT` `/api/report-profile`
 
-Get / save the **global default** front-page fields (company code, nome,
-C/C, bank details, …). Used as the template for new cardholders and the
-fallback when no cardholder matches. Stored in
-`data/report_profile.json`.
+Get / save the **global** report config: the front-page defaults
+(company code, nome, C/C, bank details, …) used as the template for new
+cardholders and the no-match fallback, **and** the company-wide GL
+accounts (`conta_contabil` default + `conta_combustivel` /
+`conta_alimentacao` / `conta_taxi` / `conta_material` / `conta_outros`).
+The Reports-tab "Accounts" modal PUTs just the `conta_*` fields here.
+Stored in `data/report_profile.json`.
 
 ### `GET /api/report-users`
 
