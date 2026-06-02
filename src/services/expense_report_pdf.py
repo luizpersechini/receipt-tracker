@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 from ..config import settings
 from ..db import database as db
-from . import report_profile
+from . import report_profile, report_users
 
 logger = logging.getLogger(__name__)
 
@@ -548,13 +548,30 @@ table { border-collapse: collapse; width: 100%; }
 """
 
 
-def build_statement_report(statement_id: int) -> bytes:
+def _resolve_profile(user_id: Optional[int], statement: dict) -> dict:
+    """Pick the profile for the report's front page:
+    1. explicit user_id (the picker on the modal)
+    2. the user guessed from the statement's cardholder name
+    3. the global saved default profile (backward compat)
+    """
+    if user_id is not None:
+        u = report_users.get_user(user_id)
+        if u:
+            return {**report_profile.DEFAULT_PROFILE, **u}
+    guessed = report_users.guess_user_for_statement(statement)
+    if guessed:
+        return {**report_profile.DEFAULT_PROFILE, **guessed}
+    return report_profile.load_profile()
+
+
+def build_statement_report(statement_id: int, user_id: Optional[int] = None) -> bytes:
     """Render the combined expense-report PDF for one statement. Returns the
-    PDF as bytes."""
+    PDF as bytes. `user_id` selects a roster user's profile; if omitted we
+    try to guess by cardholder name, then fall back to the global profile."""
     from weasyprint import HTML
 
-    profile = report_profile.load_profile()
     data = _assemble(statement_id)
+    profile = _resolve_profile(user_id, data["statement"])
 
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
@@ -565,8 +582,9 @@ def build_statement_report(statement_id: int) -> bytes:
     )
     pdf_bytes = HTML(string=html).write_pdf()
     logger.info(
-        "Built report for statement %d: %d rows, %d receipts, %d bytes",
+        "Built report for statement %d (user=%s): %d rows, %d receipts, %d bytes",
         statement_id,
+        profile.get("nome") or "—",
         len(data["rows"]),
         len(data["receipts"]),
         len(pdf_bytes),

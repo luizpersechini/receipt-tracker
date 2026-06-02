@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=15" />
+    <link rel="stylesheet" href="/static/css/app.css?v=16" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -88,6 +88,23 @@
           </svg>
           <span>Statements</span>
           <span class="nav-badge" id="navStmtCount">0</span>
+        </button>
+        <button class="nav-item" data-tab="users">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+          <span>Users</span>
+          <span class="nav-badge" id="navUserCount">0</span>
         </button>
       </div>
       <div class="nav-footer">
@@ -993,6 +1010,84 @@
               </div>
             </div>
           </div>
+
+          <!-- ══ Users (cardholder roster) ══ -->
+          <div id="tab-users" style="display: none">
+            <div class="card">
+              <div class="users-head">
+                <div>
+                  <div class="card-head" style="margin: 0">Cardholders</div>
+                  <div class="users-sub">
+                    Saved report profiles. When you generate a report, the
+                    matching user is auto-selected by the statement's name.
+                  </div>
+                </div>
+                <button class="btn btn-primary" id="userAddBtn">
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                  >
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                  Add user
+                </button>
+              </div>
+              <div class="users-list" id="usersList"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── USER EDIT MODAL (add / edit a cardholder) ───────────────────────────── -->
+    <div class="modal-overlay" id="userModal">
+      <div class="modal-box report-box">
+        <div class="modal-title" id="userModalTitle">Add user</div>
+        <div class="modal-sub">
+          These fields fill the report front page for this cardholder.
+        </div>
+
+        <div class="report-form" id="userForm">
+          <label>Nome<input type="text" data-k="nome" /></label>
+          <label
+            >C/C (cost center)<input type="text" data-k="cost_center"
+          /></label>
+          <label>Motivo do Gasto<input type="text" data-k="motivo" /></label>
+          <label>Local<input type="text" data-k="local" /></label>
+          <label
+            >Conta Contábil<input type="text" data-k="conta_contabil"
+          /></label>
+          <label>Projeto<input type="text" data-k="projeto" /></label>
+          <label
+            >Tipo
+            <select data-k="expense_kind">
+              <option value="cartao">Cartão Crédito</option>
+              <option value="reembolso">Reembolso despesa</option>
+            </select>
+          </label>
+          <label>Moeda<input type="text" data-k="moeda" /></label>
+          <div class="report-form-sep">Dados bancários (rodapé)</div>
+          <label>Favorecido<input type="text" data-k="favorecido" /></label>
+          <label>Banco<input type="text" data-k="banco" /></label>
+          <label>Agência<input type="text" data-k="agencia" /></label>
+          <label
+            >Conta Corrente<input type="text" data-k="conta_corrente"
+          /></label>
+          <label>CPF / RG<input type="text" data-k="cpf_rg" /></label>
+        </div>
+
+        <div class="report-foot">
+          <span class="status-msg" id="userModalStatus"></span>
+          <span style="flex: 1"></span>
+          <button class="btn btn-outline" onclick="closeUserModal()">
+            Cancel
+          </button>
+          <button class="btn btn-primary" id="userSaveBtn">Save user</button>
         </div>
       </div>
     </div>
@@ -1096,51 +1191,27 @@
     </div>
 
     <!-- ── STATEMENT DETAIL MODAL (view all parsed transactions) ────────────── -->
-    <!-- ── REPORT PROFILE MODAL (header/footer fields for the PDF report) ───── -->
+    <!-- ── GENERATE REPORT MODAL (pick cardholder, then download) ───────────── -->
     <div class="modal-overlay" id="reportModal">
-      <div class="modal-box report-box">
+      <div class="modal-box" style="width: 440px; max-width: 92vw">
         <div class="modal-title">Generate expense report</div>
         <div class="modal-sub">
-          These fields fill the front-page form. Saved for next time.
+          The cardholder is auto-detected from the statement. Confirm and
+          download.
         </div>
 
-        <div class="report-form" id="reportForm">
-          <label>Nome<input type="text" data-k="nome" /></label>
-          <label
-            >C/C (cost center)<input type="text" data-k="cost_center"
-          /></label>
-          <label>Motivo do Gasto<input type="text" data-k="motivo" /></label>
-          <label>Local<input type="text" data-k="local" /></label>
-          <label
-            >Conta Contábil<input type="text" data-k="conta_contabil"
-          /></label>
-          <label>Projeto<input type="text" data-k="projeto" /></label>
-          <label
-            >Tipo
-            <select data-k="expense_kind">
-              <option value="cartao">Cartão Crédito</option>
-              <option value="reembolso">Reembolso despesa</option>
-            </select>
-          </label>
-          <label>Moeda<input type="text" data-k="moeda" /></label>
-          <div class="report-form-sep">Dados bancários (rodapé)</div>
-          <label>Favorecido<input type="text" data-k="favorecido" /></label>
-          <label>Banco<input type="text" data-k="banco" /></label>
-          <label>Agência<input type="text" data-k="agencia" /></label>
-          <label
-            >Conta Corrente<input type="text" data-k="conta_corrente"
-          /></label>
-          <label>CPF / RG<input type="text" data-k="cpf_rg" /></label>
-        </div>
+        <label class="report-picker-lbl">Cardholder</label>
+        <select class="report-picker" id="reportUserSelect"></select>
+        <div class="report-picker-hint" id="reportGuessHint"></div>
 
-        <div class="report-foot">
+        <div class="report-foot" style="margin-top: 18px">
           <span class="status-msg" id="reportStatus"></span>
           <span style="flex: 1"></span>
           <button class="btn btn-outline" onclick="closeReportModal()">
             Cancel
           </button>
           <button class="btn btn-primary" id="reportGenBtn">
-            Save &amp; download PDF
+            Download PDF
           </button>
         </div>
       </div>
@@ -1536,6 +1607,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=34"></script>
+    <script src="/static/js/app.js?v=35"></script>
   </body>
 </html>

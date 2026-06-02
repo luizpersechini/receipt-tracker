@@ -1911,10 +1911,142 @@ const Reconcile = (() => {
   return { init, state: reconState };
 })();
 
+// ─── Users (cardholder roster) ─────────────────────────────────────────────
+const _USER_FIELDS = [
+  "nome",
+  "cost_center",
+  "motivo",
+  "local",
+  "conta_contabil",
+  "projeto",
+  "expense_kind",
+  "moeda",
+  "favorecido",
+  "banco",
+  "agencia",
+  "conta_corrente",
+  "cpf_rg",
+];
+let _editingUserId = null;
+let _usersCache = [];
+
+async function loadUsers() {
+  try {
+    const { users } = await api("GET", "/api/report-users");
+    _usersCache = users || [];
+  } catch {
+    _usersCache = [];
+  }
+  $("navUserCount").textContent = _usersCache.length;
+  const host = $("usersList");
+  if (!host) return;
+  if (!_usersCache.length) {
+    host.innerHTML =
+      '<div class="users-empty">No users yet. Add a cardholder so reports auto-fill their name, cost center and bank details.</div>';
+    return;
+  }
+  host.innerHTML = _usersCache
+    .map((u) => {
+      const sub = [u.cost_center && `C/C ${u.cost_center}`, u.local, u.banco]
+        .filter(Boolean)
+        .join(" · ");
+      return `<div class="user-row">
+        <div class="user-id">#${u.id}</div>
+        <div class="user-main">
+          <div class="user-name">${_esc(u.nome || "(no name)")}</div>
+          <div class="user-meta">${_esc(sub || "—")}</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="openUserModal(${u.id})">Edit</button>
+        <button class="btn btn-ghost btn-sm" onclick="deleteUser(${u.id})">Del</button>
+      </div>`;
+    })
+    .join("");
+}
+
+async function openUserModal(uid) {
+  _editingUserId = uid ?? null;
+  $("userModalTitle").textContent = uid != null ? "Edit user" : "Add user";
+  $("userModalStatus").textContent = "";
+  const u = uid != null ? _usersCache.find((x) => x.id === uid) || {} : {};
+  // Pre-fill from an existing user, or from the global default template.
+  let defaults = {};
+  if (uid == null) {
+    try {
+      defaults = await api("GET", "/api/report-profile");
+    } catch {}
+  }
+  const src = uid != null ? u : defaults;
+  document.querySelectorAll("#userForm [data-k]").forEach((el) => {
+    const k = el.dataset.k;
+    el.value = src[k] ?? "";
+  });
+  $("userModal").classList.add("open");
+}
+
+function closeUserModal() {
+  $("userModal").classList.remove("open");
+  _editingUserId = null;
+}
+
+function _collectUser() {
+  const patch = {};
+  document.querySelectorAll("#userForm [data-k]").forEach((el) => {
+    patch[el.dataset.k] = el.value;
+  });
+  return patch;
+}
+
+async function _saveUser() {
+  const btn = $("userSaveBtn");
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Saving…';
+  try {
+    const body = _collectUser();
+    if (!body.nome || !body.nome.trim()) {
+      throw new Error("Nome is required");
+    }
+    if (_editingUserId != null) {
+      await api("PUT", `/api/report-users/${_editingUserId}`, body);
+    } else {
+      await api("POST", "/api/report-users", body);
+    }
+    closeUserModal();
+    loadUsers();
+  } catch (e) {
+    $("userModalStatus").className = "status-msg err";
+    $("userModalStatus").textContent = "Failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+async function deleteUser(uid) {
+  if (!confirm("Remove this user?")) return;
+  try {
+    await api("DELETE", `/api/report-users/${uid}`);
+    loadUsers();
+  } catch (e) {
+    alert("Failed to delete: " + e.message);
+  }
+}
+
+(function _wireUsers() {
+  const add = $("userAddBtn");
+  if (add) add.addEventListener("click", () => openUserModal(null));
+  const save = $("userSaveBtn");
+  if (save) save.addEventListener("click", _saveUser);
+  const overlay = $("userModal");
+  if (overlay)
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeUserModal();
+    });
+})();
+
 // ─── Expense report (PDF) ──────────────────────────────────────────────────
-// "Generate report" on the reconcile header → fill the saved profile →
-// download the combined Prestação de Contas PDF for the current statement.
-let _reportProfileLoaded = false;
+// "Generate report" on the reconcile header → pick the cardholder (auto-
+// guessed from the statement) → download the Prestação de Contas PDF.
 
 async function openReportModal() {
   const sid = Reconcile.state && Reconcile.state.statementId;
@@ -1924,30 +2056,43 @@ async function openReportModal() {
   }
   $("reportModal").classList.add("open");
   $("reportStatus").textContent = "";
-  // Load saved profile once and populate the form fields.
+  $("reportGuessHint").textContent = "";
+  const sel = $("reportUserSelect");
+  // Populate the picker from the roster.
   try {
-    const profile = await api("GET", "/api/report-profile");
-    document.querySelectorAll("#reportForm [data-k]").forEach((el) => {
-      const k = el.dataset.k;
-      if (k in profile) el.value = profile[k] ?? "";
-    });
-    _reportProfileLoaded = true;
-  } catch (e) {
-    $("reportStatus").className = "status-msg err";
-    $("reportStatus").textContent = "Couldn't load saved profile: " + e.message;
+    const { users } = await api("GET", "/api/report-users");
+    _usersCache = users || [];
+  } catch {
+    _usersCache = [];
   }
+  if (!_usersCache.length) {
+    sel.innerHTML =
+      '<option value="">(no users — using saved defaults)</option>';
+  } else {
+    sel.innerHTML =
+      '<option value="">(saved defaults)</option>' +
+      _usersCache
+        .map(
+          (u) =>
+            `<option value="${u.id}">${_esc(u.nome || "#" + u.id)}</option>`,
+        )
+        .join("");
+  }
+  // Auto-guess the cardholder from the statement name.
+  try {
+    const g = await api("GET", `/api/statements/${sid}/guess-user`);
+    if (g.user_id != null) {
+      sel.value = String(g.user_id);
+      $("reportGuessHint").textContent = `Auto-detected: ${g.nome}`;
+    } else if (_usersCache.length) {
+      $("reportGuessHint").textContent =
+        "Couldn't match a user to this statement — pick one.";
+    }
+  } catch {}
 }
 
 function closeReportModal() {
   $("reportModal").classList.remove("open");
-}
-
-function _collectReportProfile() {
-  const patch = {};
-  document.querySelectorAll("#reportForm [data-k]").forEach((el) => {
-    patch[el.dataset.k] = el.value;
-  });
-  return patch;
 }
 
 async function _generateReport() {
@@ -1961,10 +2106,9 @@ async function _generateReport() {
   $("reportStatus").textContent =
     "Rendering receipts — this can take a moment…";
   try {
-    // Save the profile first so it's remembered next time.
-    await api("PUT", "/api/report-profile", _collectReportProfile());
-    // Fetch the PDF as a blob and trigger a download.
-    const res = await fetch(`/api/statements/${sid}/report`);
+    const uid = $("reportUserSelect").value;
+    const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : "";
+    const res = await fetch(`/api/statements/${sid}/report${qs}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       throw new Error(err.detail || res.statusText);
@@ -3074,11 +3218,13 @@ const tabTitles = {
   receipts: "Receipts",
   reconcile: "Reconcile",
   statements: "Statements",
+  users: "Users",
 };
 const tabPanels = {
   receipts: $("tab-receipts"),
   reconcile: $("tab-reconcile"),
   statements: $("tab-statements"),
+  users: $("tab-users"),
 };
 
 document.querySelectorAll(".nav-item[data-tab]").forEach((btn) => {
@@ -3095,6 +3241,7 @@ document.querySelectorAll(".nav-item[data-tab]").forEach((btn) => {
     if (name === "receipts") loadReceipts();
     if (name === "statements") loadStatements();
     if (name === "reconcile") Reconcile.init();
+    if (name === "users") loadUsers();
   });
 });
 
@@ -3897,6 +4044,7 @@ loadReceipts().catch(() => {});
 loadFxRates().catch(() => {});
 loadWatchFolder().catch(() => {});
 loadGmailStatus().catch(() => {});
+loadUsers().catch(() => {});
 restoreLastSync();
 checkOllama().catch(() => {});
 
