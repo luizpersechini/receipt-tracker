@@ -189,6 +189,16 @@ the `api()` helper tolerates the empty body, so unlink no longer shows
 a spurious "failed" flash). The receipt flips back to `pending` if it
 has no other matches anywhere.
 
+## Justifying open items (no receipt)
+
+When a transaction has no receipt and you can't match one — you lost it,
+or it's an unidentified charge — type a justification right on the
+unmatched card: the `+ justification (no receipt)` field. It prints on
+the report's front page in place of the blank `justificativa: ____`
+line. Saved per `(statement, transaction)` in
+`data/statement_notes.json`; survives re-parses. See
+[reports.md](reports.md#justifying-open-items).
+
 ## Generating the report
 
 Once a statement is reconciled, **Generate report** (top of the

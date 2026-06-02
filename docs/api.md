@@ -201,6 +201,13 @@ Best-guess cardholder for a statement, by name. Returns
 `{user_id, nome}` or `{user_id: null}` when nothing matches confidently.
 See [reports.md](reports.md#name-auto-detection).
 
+### `PUT /api/statements/{id}/transactions/{index}/note`
+
+Save (or clear, when blank) a justification note for one transaction —
+the open-item reason that prints on the report. Body `{note}`. The note
+also appears on each transaction in the `/transactions` response. 400 if
+the index is out of range, 404 if the statement is gone.
+
 ## Matching
 
 ### `POST /api/match`

@@ -41,8 +41,10 @@ A single self-contained PDF mirroring the Atlantic Nickel
 · Material para escritório · Outros`. Columns total at the bottom,
   plus a grand total.
 - **Open items** (transactions with no matched receipt) render with the
-  Detalhamento cell tagged `(sem comprovante — justificativa: ____)` so
-  the reviewer hand-writes a reason.
+  Detalhamento cell tagged `(sem comprovante — justificativa: ____)`.
+  If the user typed a **justification** on the Reconcile board (see
+  [Justifying open items](#justifying-open-items)), that text prints in
+  place of the blank line.
 - **IOF row**: Brazilian tax on international transactions, pulled live
   from the saved statement PDF (the parser drops it from the txn list,
   but the form shows it as a line in Outros).
@@ -81,6 +83,24 @@ Each charge's receipt/transaction category maps onto a form column:
 The parking/fuel keyword check runs first so a `transportation` charge
 that's actually parking lands in the right column. Mapping logic is
 `expense_report_pdf._bucket()`.
+
+## Justifying open items
+
+A statement charge with no receipt (lost receipt, or an unidentified
+expense) is an **open item**. On the **Reconcile board**, each unmatched
+transaction card has a `+ justification (no receipt)` field — type why
+there's no receipt and it prints on the report's front page in place of
+the blank `justificativa: ____` line.
+
+- Notes are keyed by `(statement_id, transaction_index)` and stored in
+  `data/statement_notes.json` (gitignored), separate from the parsed
+  transactions so a re-parse doesn't wipe them.
+- Save with the Save button or Cmd/Ctrl+Enter; Esc cancels. A saved note
+  shows in amber with a pencil; click to edit.
+- Endpoint: `PUT /api/statements/{id}/transactions/{index}/note`
+  `{note}`. The note also comes back on each transaction from
+  `GET /api/statements/{id}/transactions`.
+- Deleting the statement clears its notes.
 
 ## Cardholders (Users tab)
 

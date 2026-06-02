@@ -106,6 +106,7 @@ src/
     report_profile.py      global report front-page fields (JSON)
     report_users.py        cardholder roster + name auto-detect
     report_history.py      saved-report index (data/reports/history.json)
+    statement_notes.py     per-transaction open-item justifications
 static/                    SPA frontend (vanilla JS, no build step)
   index.html               single-page UI (Receipts/Reconcile/Statements/Users/Reports)
   css/app.css              design tokens + components
