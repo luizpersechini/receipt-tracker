@@ -52,6 +52,15 @@ A single self-contained PDF mirroring the Atlantic Nickel
   CPF-RG) + No Cheque / Data pagamento / Valor total, then
   **Assinatura / Autorizado / Data** signature lines.
 
+**Open-items page** (only when there are unmatched charges)
+
+- Sits between the front-page spreadsheet and the receipt grid.
+- Heading "Lançamentos sem comprovante" + a count and total, then one
+  bordered block per card charge with no receipt: date · description ·
+  category column · BRL amount, with **Justificativa:** below — the
+  typed note (italic), or a blank underline if none was entered.
+- `_open_items_html()`; renders nothing when every charge is matched.
+
 **Receipt pages**
 
 - Every matched receipt as an image in a **3-column CSS grid**.
