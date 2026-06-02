@@ -240,6 +240,73 @@ def test_statement_note_prints_on_report(report_env):
         doc.close()
 
 
+def test_open_items_page_lists_charges_and_justifications(report_env):
+    db = report_env
+    from src.services import statement_notes
+
+    txns = [
+        {
+            "date": "2026-04-05",
+            "description": "MYSTERY CHARGE",
+            "amount": 99.0,
+            "category": "other",
+            "raw_data": {"section": "domestic"},
+        },
+        {
+            "date": "2026-04-06",
+            "description": "LOST TAXI",
+            "amount": 30.0,
+            "category": "transportation",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("oi.csv", "oi.csv", txns)
+    statement_notes.set_note(sid, 0, "Assinatura sem recibo emitido")
+    # index 1 left without a note → blank placeholder.
+
+    pdf = erp.build_statement_report(sid)
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        full = "\n".join(p.get_text() for p in doc)
+        # The dedicated open-items page heading + both charges + the note.
+        assert "Lançamentos sem comprovante" in full
+        assert "MYSTERY CHARGE" in full
+        assert "LOST TAXI" in full
+        assert "Assinatura sem recibo emitido" in full
+        # The page is its own page after the front spreadsheet.
+        page_with_heading = next(
+            i for i, p in enumerate(doc) if "Lançamentos sem comprovante" in p.get_text()
+        )
+        assert page_with_heading >= 1
+    finally:
+        doc.close()
+
+
+def test_no_open_items_page_when_all_matched(report_env):
+    db = report_env
+    rid = _add_reimb(db, "Cafe", 12.0, "BRL", "2026-04-10")
+    txns = [
+        {
+            "date": "2026-04-10",
+            "description": "CAFE",
+            "amount": 12.0,
+            "category": "meals",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("ok.csv", "ok.csv", txns)
+    db.save_match(rid, sid, txns[0], 0.99, match_kind="manual", transaction_index=0)
+    pdf = erp.build_statement_report(sid)
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        full = "\n".join(p.get_text() for p in doc)
+        assert "Lançamentos sem comprovante" not in full
+    finally:
+        doc.close()
+
+
 def test_open_item_without_note_shows_blank_placeholder(report_env):
     db = report_env
     txns = [

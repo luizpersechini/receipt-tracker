@@ -469,6 +469,48 @@ def _front_page_html(data: dict, profile: dict) -> str:
     """
 
 
+def _open_items_html(data: dict) -> str:
+    """A page listing the card charges with no receipt, each with its
+    justification below. Sits between the front-page spreadsheet and the
+    receipt-image grid. Renders nothing when every charge is matched."""
+    open_rows = [r for r in data.get("rows", []) if not r.get("matched")]
+    if not open_rows:
+        return ""
+
+    items = []
+    for r in open_rows:
+        col_label = _COL_LABELS.get(r.get("col"), "").replace("\n", " ")
+        note = (r.get("note") or "").strip()
+        if note:
+            just = f'<span class="oi-note">{escape(note)}</span>'
+        else:
+            just = (
+                '<span class="oi-blank">____________________________________________________</span>'
+            )
+        items.append(
+            "<div class='oi-item'>"
+            "<div class='oi-head'>"
+            f"<span class='oi-date'>{escape(r.get('date') or '')}</span>"
+            f"<span class='oi-desc'>{escape(r.get('detalhe') or '—')}</span>"
+            f"<span class='oi-cat'>{escape(col_label)}</span>"
+            f"<span class='oi-amt'>{_fmt_brl(r.get('amount'))}</span>"
+            "</div>"
+            f"<div class='oi-just'><span class='oi-just-lbl'>Justificativa:</span> {just}</div>"
+            "</div>"
+        )
+
+    total = sum(float(r.get("amount") or 0) for r in open_rows)
+    n = len(open_rows)
+    return (
+        '<section class="openitems">'
+        '<h2 class="oi-title">Lançamentos sem comprovante</h2>'
+        '<p class="oi-sub">Despesas do cartão sem recibo anexado — '
+        f"{n} lançamento{'s' if n != 1 else ''}, total R$ {_fmt_brl(total)}.</p>"
+        f'<div class="oi-list">{"".join(items)}</div>'
+        "</section>"
+    )
+
+
 def _receipts_html(receipts: list[dict]) -> str:
     if not receipts:
         return ""
@@ -554,6 +596,22 @@ table { border-collapse: collapse; width: 100%; }
 .noimg-d { font-size: 8px; color: #555; }
 .noimg-t { font-size: 7px; color: #999; margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
 .receipts h2 { font-size: 11px; margin: 0 0 6px; }
+
+/* Open-items page (card charges with no receipt + justification) */
+.openitems { page-break-after: always; }
+.oi-title { font-size: 14px; font-weight: 700; margin: 0 0 2px; }
+.oi-sub { font-size: 9px; color: #555; margin: 0 0 12px; }
+.oi-list { display: flex; flex-direction: column; gap: 7px; }
+.oi-item { border: 1px solid #ccc; border-radius: 3px; padding: 7px 9px; break-inside: avoid; }
+.oi-head { display: flex; align-items: baseline; gap: 10px; }
+.oi-date { font-size: 9px; color: #555; width: 60px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.oi-desc { font-size: 10px; font-weight: 700; flex: 1; }
+.oi-cat { font-size: 8px; color: #777; white-space: nowrap; }
+.oi-amt { font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.oi-just { margin-top: 5px; font-size: 9px; color: #222; line-height: 1.5; }
+.oi-just-lbl { font-weight: 700; color: #555; }
+.oi-blank { color: #999; letter-spacing: 1px; }
+.oi-note { font-style: italic; }
 """
 
 
@@ -591,6 +649,7 @@ def build_statement_report(statement_id: int, user_id: Optional[int] = None) -> 
         "<!doctype html><html><head><meta charset='utf-8'>"
         f"<style>{_CSS}</style></head><body>"
         + _front_page_html(data, profile)
+        + _open_items_html(data)
         + _receipts_html(data["receipts"])
         + "</body></html>"
     )
