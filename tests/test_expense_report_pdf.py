@@ -206,3 +206,57 @@ def test_reimbursement_report_filters_by_currency(report_env):
 def test_reimbursement_report_empty_raises(report_env):
     with pytest.raises(ValueError):
         erp.build_reimbursement_report(currency="BRL")
+
+
+# ─── Open-item justification notes ──────────────────────────────────────────
+
+
+def test_statement_note_prints_on_report(report_env):
+    db = report_env
+    from src.services import statement_notes
+
+    txns = [
+        {
+            "date": "2026-04-05",
+            "description": "UNKNOWN CHARGE",
+            "amount": 99.0,
+            "category": "other",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("s.csv", "s.csv", txns)
+    # No match for index 0 → open item. Add a justification.
+    statement_notes.set_note(sid, 0, "Cobrança não identificada — recibo perdido")
+
+    pdf = erp.build_statement_report(sid)
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        front = doc[0].get_text()
+        # The typed note replaces the blank "justificativa: ___" placeholder.
+        assert "recibo perdido" in front
+        assert "justificativa: ____" not in front
+    finally:
+        doc.close()
+
+
+def test_open_item_without_note_shows_blank_placeholder(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-04-05",
+            "description": "MYSTERY",
+            "amount": 10.0,
+            "category": "other",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("s2.csv", "s2.csv", txns)
+    pdf = erp.build_statement_report(sid)
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        front = doc[0].get_text()
+        assert "sem comprovante" in front.lower()
+    finally:
+        doc.close()

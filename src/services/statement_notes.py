@@ -1,0 +1,84 @@
+"""Per-transaction justification notes for statement open items.
+
+When a statement charge has no receipt (lost it, or it's an unidentified
+expense), the user types a justification that prints on the report in
+place of the blank "sem comprovante" line.
+
+Notes are keyed by (statement_id, transaction_index) and stored in
+data/statement_notes.json — separate from statements.transactions so a
+re-parse doesn't wipe them. As long as the parser produces rows in the
+same order (stable transaction_index), notes stay aligned with their
+charge — the same guarantee manual matches rely on.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+from ..config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _path() -> Path:
+    return settings.data_dir / "statement_notes.json"
+
+
+def _read() -> dict:
+    p = _path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("statement_notes.json unreadable (%s)", e)
+        return {}
+
+
+def _write(data: dict) -> None:
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    _path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_notes(statement_id: int) -> dict[int, str]:
+    """Return {transaction_index: note} for one statement (int keys)."""
+    raw = _read().get(str(statement_id), {})
+    out: dict[int, str] = {}
+    for k, v in raw.items():
+        try:
+            out[int(k)] = str(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def get_note(statement_id: int, transaction_index: int) -> str | None:
+    return get_notes(statement_id).get(int(transaction_index))
+
+
+def set_note(statement_id: int, transaction_index: int, note: str | None) -> None:
+    """Save (or, when blank, clear) a note for one transaction."""
+    data = _read()
+    sid = str(statement_id)
+    idx = str(int(transaction_index))
+    text = (note or "").strip()
+    bucket = data.get(sid) or {}
+    if text:
+        bucket[idx] = text
+    else:
+        bucket.pop(idx, None)
+    if bucket:
+        data[sid] = bucket
+    else:
+        data.pop(sid, None)
+    _write(data)
+
+
+def clear_statement(statement_id: int) -> None:
+    """Drop all notes for a statement (called when it's deleted)."""
+    data = _read()
+    if data.pop(str(statement_id), None) is not None:
+        _write(data)

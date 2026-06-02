@@ -998,6 +998,7 @@ const Reconcile = (() => {
     dragging: null,
     initialized: false,
     autoMatchRunning: false,
+    editingNote: null, // transaction index whose justification is being edited
   };
 
   function _loadFilter(key) {
@@ -1365,8 +1366,36 @@ const Reconcile = (() => {
           ${progressHtml}
         </div>
         ${ms.map(_renderMatchTag).join("")}
+        ${isMatched ? "" : _renderNoteArea(t)}
       </div>
     `;
+  }
+
+  // Justification editor for open items (unmatched transactions). The note
+  // prints on the report in place of the blank "sem comprovante" line.
+  function _renderNoteArea(t) {
+    if (reconState.editingNote === t.index) {
+      return `
+        <div class="recon-note-edit" data-index="${t.index}">
+          <textarea class="recon-note-input" rows="2"
+            placeholder="Why is there no receipt? (lost receipt, unidentified charge…)">${_esc(t.note || "")}</textarea>
+          <div class="recon-note-actions">
+            <button class="btn btn-ghost btn-sm recon-note-cancel">Cancel</button>
+            <button class="btn btn-primary btn-sm recon-note-save" data-index="${t.index}">Save</button>
+          </div>
+        </div>`;
+    }
+    if (t.note) {
+      return `
+        <div class="recon-note-display recon-note-trigger" data-index="${t.index}" title="Click to edit justification">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          <span>${_esc(t.note)}</span>
+        </div>`;
+    }
+    return `
+      <button class="recon-note-add recon-note-trigger" data-index="${t.index}">
+        + justification (no receipt)
+      </button>`;
   }
 
   function _renderMatchTag(m) {
@@ -1673,6 +1702,57 @@ const Reconcile = (() => {
     document.querySelectorAll(".recon-unlink").forEach((el) => {
       el.addEventListener("click", () => _onUnlink(+el.dataset.match));
     });
+    // Justification editor (open items).
+    document.querySelectorAll(".recon-note-trigger").forEach((el) => {
+      el.addEventListener("click", () => {
+        reconState.editingNote = +el.dataset.index;
+        _renderTxnList();
+        const ta = document.querySelector(".recon-note-input");
+        if (ta) {
+          ta.focus();
+          ta.setSelectionRange(ta.value.length, ta.value.length);
+        }
+      });
+    });
+    document.querySelectorAll(".recon-note-cancel").forEach((el) => {
+      el.addEventListener("click", () => {
+        reconState.editingNote = null;
+        _renderTxnList();
+      });
+    });
+    document.querySelectorAll(".recon-note-save").forEach((el) => {
+      el.addEventListener("click", () => _saveNote(+el.dataset.index));
+    });
+    // Save on Cmd/Ctrl+Enter; cancel on Escape.
+    document.querySelectorAll(".recon-note-input").forEach((ta) => {
+      ta.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          _saveNote(reconState.editingNote);
+        } else if (e.key === "Escape") {
+          reconState.editingNote = null;
+          _renderTxnList();
+        }
+      });
+    });
+  }
+
+  async function _saveNote(txnIndex) {
+    const ta = document.querySelector(".recon-note-input");
+    const text = ta ? ta.value.trim() : "";
+    const txn = reconState.txns.find((t) => t.index === txnIndex);
+    if (txn) txn.note = text; // optimistic
+    reconState.editingNote = null;
+    _renderTxnList();
+    try {
+      await api(
+        "PUT",
+        `/api/statements/${reconState.statementId}/transactions/${txnIndex}/note`,
+        { note: text },
+      );
+    } catch (e) {
+      _flash("err", `Couldn't save note: ${e.message}`);
+    }
   }
 
   function _onDragStart(e) {

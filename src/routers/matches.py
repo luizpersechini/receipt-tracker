@@ -4,11 +4,12 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..db import database as db
+from ..services import statement_notes
 from ..services.matching_engine import match_receipts_to_statements
 
 router = APIRouter(prefix="/api", tags=["matches"])
@@ -153,6 +154,7 @@ async def get_statement_transactions(statement_id: int):
         raise HTTPException(status_code=404, detail="Statement not found")
 
     matches = await asyncio.to_thread(db.get_matches_for_statement, statement_id)
+    notes = await asyncio.to_thread(statement_notes.get_notes, statement_id)
     # Group matches by transaction_index — N:1 is allowed now (multiple
     # receipts cumulatively pay one statement charge, e.g. hotel folio
     # split into room + restaurant + parking receipts).
@@ -200,6 +202,9 @@ async def get_statement_transactions(statement_id: int):
             "original_amount": raw.get("original_amount"),
             "original_currency": native_ccy if native_ccy and native_ccy != "BRL" else None,
             "fx_to_brl": raw.get("fx_to_brl"),
+            # Justification note for open items (no receipt). Prints on the
+            # report in place of the blank "sem comprovante" line.
+            "note": notes.get(i) or "",
             # `matches` is the new shape; `match` keeps the first entry for
             # any older code paths that hadn't migrated. New consumers
             # should read `matches`.
@@ -218,6 +223,21 @@ async def get_statement_transactions(statement_id: int):
             "transactions": txns,
         }
     )
+
+
+@router.put("/statements/{statement_id}/transactions/{transaction_index}/note")
+async def set_transaction_note(statement_id: int, transaction_index: int, body: dict = Body(...)):
+    """Save (or clear, when blank) a justification note for one statement
+    transaction — used for open items with no receipt."""
+    statement = await asyncio.to_thread(db.get_statement_by_id, statement_id)
+    if not statement:
+        raise HTTPException(status_code=404, detail="Statement not found")
+    n = len(statement.get("transactions") or [])
+    if transaction_index < 0 or transaction_index >= n:
+        raise HTTPException(status_code=400, detail="transaction_index out of range")
+    note = body.get("note") if isinstance(body, dict) else None
+    await asyncio.to_thread(statement_notes.set_note, statement_id, transaction_index, note)
+    return JSONResponse({"success": True, "note": (note or "").strip()})
 
 
 @router.post("/matches")

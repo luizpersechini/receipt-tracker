@@ -2410,6 +2410,74 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   background: var(--green-bg);
   border-color: var(--green-border);
 }
+
+/* Justification editor for open items (unmatched transactions) */
+.recon-note-add {
+  margin-top: 6px;
+  align-self: flex-start;
+  background: none;
+  border: 1px dashed var(--border);
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color 0.12s,
+    border-color 0.12s;
+}
+.recon-note-add:hover {
+  color: var(--amber);
+  border-color: var(--amber-border);
+}
+.recon-note-display {
+  margin-top: 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--amber);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.recon-note-display svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  opacity: 0.8;
+}
+.recon-note-display:hover {
+  text-decoration: underline;
+}
+.recon-note-edit {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.recon-note-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm);
+  background: var(--amber-bg);
+  color: var(--text);
+  resize: vertical;
+}
+.recon-note-input:focus {
+  outline: none;
+  border-color: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-bg);
+}
+.recon-note-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .recon-match-tag {
   display: flex;
   align-items: center;

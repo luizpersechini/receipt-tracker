@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 from ..config import settings
 from ..db import database as db
-from . import report_profile, report_users
+from . import report_profile, report_users, statement_notes
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,7 @@ def _assemble(statement_id: int) -> dict[str, Any]:
         raise ValueError(f"Statement {statement_id} not found")
 
     matches = db.get_matches_for_statement(statement_id)
+    notes = statement_notes.get_notes(statement_id)
     # transaction_index → [match rows]
     by_idx: dict[int, list] = {}
     for m in matches:
@@ -259,6 +260,7 @@ def _assemble(statement_id: int) -> dict[str, Any]:
             "col": col,
             "amount": amount,
             "matched": bool(ms),
+            "note": notes.get(i) or "",  # justification for open items
         }
         rows.append(row)
 
@@ -323,9 +325,12 @@ def _front_page_html(data: dict, profile: dict) -> str:
     for r in rows:
         detalhe = escape(r["detalhe"])
         if not r["matched"]:
-            detalhe += (
-                ' <span class="noreceipt">(sem comprovante — justificativa: ____________)</span>'
-            )
+            note = (r.get("note") or "").strip()
+            if note:
+                # User-typed justification prints in place of the blank line.
+                detalhe += f' <span class="noreceipt">(sem comprovante — {escape(note)})</span>'
+            else:
+                detalhe += ' <span class="noreceipt">(sem comprovante — justificativa: ____________)</span>'
         body_rows.append(
             f"<tr>"
             f'<td class="dt">{escape(r["date"])}</td>'
