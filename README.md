@@ -28,7 +28,9 @@ optional add-ons.
   builds the corporate "Prestação de Contas" form: a categorised
   front-page summary with a signature footer, then receipt-image grid
   pages packing ~9 readable receipts per page. Open items (charges with
-  no receipt) print a "sem comprovante — justificativa" line. See
+  no receipt) print a "sem comprovante — justificativa" line. A second
+  **reimbursement-only** variant (Receipts tab) builds the same form
+  from reimbursement-type receipts with no statement/matching. See
   [`docs/reports.md`](docs/reports.md).
 - **Cardholder roster (Users tab)** — save report profiles per person
   (name, cost centre, bank, CPF/RG). When you generate a report the

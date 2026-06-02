@@ -3,17 +3,24 @@
 How the combined "Prestação de Contas" PDF is built from a reconciled
 statement, and how the cardholder roster auto-fills it.
 
-There are **two** report systems in the app, for different needs:
+There are **three** report systems in the app, for different needs:
 
-|         | Excel reports                                | Combined PDF report                  |
-| ------- | -------------------------------------------- | ------------------------------------ |
-| Trigger | Reconcile tab → report-panel "Export Report" | Reconcile header → "Generate report" |
-| Scope   | receipts across a period, FX-converted       | one reconciled statement             |
-| Output  | `.xlsx` (editable)                           | `.pdf` (front page + receipt images) |
-| Code    | `services/report_generator.py`               | `services/expense_report_pdf.py`     |
+|         | Excel reports                  | Statement PDF report                 | Reimbursement PDF report              |
+| ------- | ------------------------------ | ------------------------------------ | ------------------------------------- |
+| Trigger | Reconcile → "Export Report"    | Reconcile header → "Generate report" | Receipts tab → "Reimbursement report" |
+| Scope   | receipts in a period, FX-conv. | one reconciled statement             | `reimbursement`-type receipts         |
+| Output  | `.xlsx` (editable)             | `.pdf` (front page + receipts)       | `.pdf` (front page + receipts)        |
+| Code    | `report_generator.py`          | `expense_report_pdf.py`              | `expense_report_pdf.py`               |
 
-This doc covers the **combined PDF** — the corporate form deliverable.
+This doc covers the **two PDF reports** — the corporate form deliverable.
 The Excel path is the older period-based export and is unchanged.
+
+The two PDFs share all rendering (`_front_page_html` + `_receipts_html`);
+they differ only in how the rows are assembled and which checkbox is
+ticked (`Cartão Crédito` vs `Reembolso despesa`). The reimbursement
+report has **no statement, no matching, no IOF, and no open-item
+justification rows** — every receipt is its own proof. See
+[Reimbursement report](#reimbursement-report) below.
 
 ## What the PDF contains
 
@@ -133,6 +140,33 @@ Reconcile header → "Generate report"
 2. the user guessed from the statement name
 3. the global `report_profile.json` (back-compat fallback)
 
+## Reimbursement report
+
+Personal-spend receipts (the ones you mark **reimbursement** with the
+per-row type toggle) never appear on a corporate statement, so they
+can't be reconciled. The **Receipts tab → "Reimbursement report"**
+button builds the same form from those receipts directly:
+
+- One row per reimbursement receipt (date · vendor · category column ·
+  amount). Every row is "matched" — the receipt is the proof, so there's
+  no `(sem comprovante)` justification line and no IOF.
+- The **Reembolso despesa** checkbox is ticked instead of Cartão Crédito.
+- Receipt grid is the same — each reimbursement receipt's image.
+
+**Single currency per report.** The form has one Total / Moeda column,
+so the modal scopes to one currency (the dropdown defaults to the most
+common currency among your reimbursement receipts, listed with counts
+like `BRL (10)`). This keeps the total correct when you have
+mixed-currency reimbursements — generate one report per currency.
+
+The modal also takes an optional **date range** and a **cardholder**
+(for the name + bank footer). A live "N in scope" count shows how many
+receipts the current filters select and disables Download at zero.
+
+Code: `expense_report_pdf.build_reimbursement_report(user_id, date_from,
+date_to, currency)`. It pulls `get_receipts_by_period(..., "reimbursement")`,
+filters currency in Python, and reuses the shared renderers.
+
 ## Endpoints
 
 | Method | Path                                   | Purpose                               |
@@ -144,9 +178,12 @@ Reconcile header → "Generate report"
 | PUT    | `/api/report-users/{id}`               | update a cardholder                   |
 | DELETE | `/api/report-users/{id}`               | delete a cardholder                   |
 | GET    | `/api/statements/{id}/guess-user`      | best-match cardholder for a statement |
-| GET    | `/api/statements/{id}/report?user_id=` | build + stream the combined PDF       |
+| GET    | `/api/statements/{id}/report?user_id=` | build + stream the statement PDF      |
+| GET    | `/api/reports/reimbursement?...`       | build + stream the reimbursement PDF  |
 
-See [`api.md`](api.md) for request/response shapes.
+`/api/reports/reimbursement` takes `user_id`, `date_from`, `date_to`,
+`currency` (all optional). See [`api.md`](api.md) for request/response
+shapes.
 
 ## Gotchas
 

@@ -287,6 +287,14 @@ front page + receipt-image grid) for one statement. `user_id` picks a
 roster cardholder's profile; omitted → guess by name → global default.
 `Content-Type: application/pdf`, attachment download.
 
+### `GET /api/reports/reimbursement`
+
+Build + stream the **reimbursement** PDF — the same form built from
+`reimbursement`-type receipts (no statement, no matching). Query params,
+all optional: `user_id` (cardholder profile), `date_from`, `date_to`
+(YYYY-MM-DD), `currency` (one report per currency — the form has a
+single Total). 404 when no receipts match. `application/pdf` attachment.
+
 ### `GET` / `PUT` `/api/report-profile`
 
 Get / save the **global default** front-page fields (company code, nome,
