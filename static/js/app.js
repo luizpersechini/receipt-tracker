@@ -4041,6 +4041,7 @@ document.addEventListener("keydown", (e) => {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 loadStats().catch(() => {});
 loadReceipts().catch(() => {});
+loadStatements().catch(() => {});
 loadFxRates().catch(() => {});
 loadWatchFolder().catch(() => {});
 loadGmailStatus().catch(() => {});
