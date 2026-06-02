@@ -62,17 +62,43 @@ export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 PROJECT="$PROJECT_ROOT"
 PORT=$PORT
 URL="http://localhost:\${PORT}/"
-PY="/usr/bin/python3"
 LOG="\$PROJECT/data/app_launcher.log"
+
+# The app requires Python 3.10+ (Starlette/Pillow security pins + union-type
+# syntax). Prefer the project's venv; fall back to a system python only if
+# it's new enough, otherwise bail with a clear message.
+if [ -x "\$PROJECT/.venv/bin/python" ]; then
+  PY="\$PROJECT/.venv/bin/python"
+else
+  PY=""
+  for cand in python3.13 python3.12 python3.11 python3.10 python3; do
+    p="\$(command -v \$cand 2>/dev/null)" || true
+    if [ -n "\$p" ] && "\$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+      PY="\$p"; break
+    fi
+  done
+  if [ -z "\$PY" ]; then
+    mkdir -p "\$PROJECT/data"
+    echo "No Python 3.10+ found and no .venv. Create one: uv venv --python 3.13 && uv pip sync requirements.lock" > "\$LOG"
+    osascript -e 'display alert "Receipt Tracker" message "No Python 3.10+ environment found.\n\nIn the project folder run:\n  uv venv --python 3.13\n  uv pip sync requirements.lock\n\nThen relaunch."'
+    exit 1
+  fi
+fi
 
 # Finder/LaunchServices may start this app under x86_64 (Rosetta). The
 # installed Python packages are built for the native arch, so force the
-# matching slice of the universal python3 binary or imports like
-# pydantic_core fail with an "incompatible architecture" error.
+# matching slice or imports like pydantic_core fail with an "incompatible
+# architecture" error. A venv python is already arch-specific, so only
+# apply the prefix when using a universal system python3.
 ARCH_PREFIX=""
-if [ "\$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
-  ARCH_PREFIX="arch -arm64"
-fi
+case "\$PY" in
+  */.venv/bin/python) : ;;  # venv binary — no arch coercion needed
+  *)
+    if [ "\$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+      ARCH_PREFIX="arch -arm64"
+    fi
+    ;;
+esac
 
 cd "\$PROJECT" 2>/dev/null || {
   osascript -e 'display alert "Receipt Tracker" message "Project folder not found:\n'"\$PROJECT"'"'
