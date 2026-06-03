@@ -16,11 +16,12 @@ This doc covers the **two PDF reports** — the corporate form deliverable.
 The Excel path is the older period-based export and is unchanged.
 
 The two PDFs share all rendering (`_front_page_html` + `_receipts_html`);
-they differ only in how the rows are assembled and which checkbox is
-ticked (`Cartão Crédito` vs `Reembolso despesa`). The reimbursement
-report has **no statement, no matching, no IOF, and no open-item
-justification rows** — every receipt is its own proof. See
-[Reimbursement report](#reimbursement-report) below.
+they differ only in how the rows are assembled and a few front-page bits
+(the card form shows Vencimento / Nº Cartão and a signature line; the
+reimbursement form shows a "Reembolso de despesas" marker and a bank-
+details footer). The reimbursement report has **no statement, no
+matching, no IOF, and no open-item justification rows** — every receipt
+is its own proof. See [Reimbursement report](#reimbursement-report) below.
 
 Every generated PDF (both kinds) is saved and listed on the **Reports
 tab** — see [History](#history).
@@ -28,18 +29,25 @@ tab** — see [History](#history).
 ## What the PDF contains
 
 A single self-contained PDF mirroring the Atlantic Nickel
-"Prestação de Contas - Cartão Corporativo" form:
+"Prestação de Contas - Cartão Corporativo" form
+(code MMB-F-REG-0101-001-00):
 
 **Front page**
 
-- Header band: company logo + form title + Código / Data / Página.
-- Employee band: Nome · Data · C/C (cost centre) · Motivo do Gasto ·
-  Local · Moeda, plus the Reembolso / Cartão Crédito checkbox.
-- Expense table: one row per statement transaction. Each charge's
-  amount lands in **one of five category columns**:
-  `Combustível-Estacionamento · Despesas com alimentação · Taxi-Correios
-· Material para escritório · Outros`. Columns total at the bottom,
-  plus a grand total.
+- Header band: company logo + form title + Código / Página.
+- Identity band: Nome · VENCIMENTO (due date) · Nº Cartão. (The
+  reimbursement variant shows a "Reembolso de despesas" marker here
+  instead of the card-specific fields.)
+- Expense table columns: Data · Centro de Custo+Uneg · Conta Contábil ·
+  Detalhamento da despesa, then **four category columns** —
+  `Alimentação · Abastecimento/Estac./Taxi · Hospedagem · Outros` — and
+  TOTAL. Each charge's amount lands in exactly one category column;
+  columns total at the bottom, plus a grand total.
+- **Detalhamento** is an auto label from the charge's category (UBER,
+  ALIMENTAÇÃO, HOSPEDAGEM…) and **Centro de Custo+Uneg** comes from the
+  matched receipt / a per-line override / the profile default — all
+  editable (see [Per-line report fields](#per-line-report-fields) and the
+  [Review & edit modal](#review--edit-before-export)).
 - **Open items** (transactions with no matched receipt) render with the
   Detalhamento cell tagged `(sem comprovante — justificativa: ____)`.
   If the user typed a **justification** on the Reconcile board (see
@@ -48,9 +56,10 @@ A single self-contained PDF mirroring the Atlantic Nickel
 - **IOF row**: Brazilian tax on international transactions, pulled live
   from the saved statement PDF (the parser drops it from the txn list,
   but the form shows it as a line in Outros).
-- Footer: bank details (Favorecido / Banco / Agência / Conta Corrente /
-  CPF-RG) + No Cheque / Data pagamento / Valor total, then
-  **Assinatura / Autorizado / Data** signature lines.
+- Footer: a signature line — Data + "Assinatura {nome} + Aprovador
+  imediato". The reimbursement variant instead shows a bank-details
+  footer (Favorecido / Banco / Agência / Conta Corrente / CPF-RG) so the
+  payee can be reimbursed.
 
 **Open-items page** (only when there are unmatched charges)
 
@@ -83,16 +92,15 @@ grid automatically.
 
 Each charge's receipt/transaction category maps onto a form column:
 
-| Form column                 | Mapped from                                                                      |
-| --------------------------- | -------------------------------------------------------------------------------- |
-| Combustível, Estacionamento | `fuel`, or parking/fuel keywords (estacion, posto, parking, parkchamp, shell, …) |
-| Despesas com alimentação    | `meals`                                                                          |
-| Taxi / Correios             | `transportation` (uber, taxi, lyft)                                              |
-| Material para escritório    | `office_supplies`                                                                |
-| Outros                      | `travel`, `lodging`, `other`, unknown, and IOF                                   |
+| Form column                   | Mapped from                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| Alimentação                   | `meals`                                                                                            |
+| Abastecimento / Estac. / Taxi | `fuel`, `transportation`, or parking/fuel keywords (estacion, posto, parking, parkchamp, shell, …) |
+| Hospedagem                    | `lodging`                                                                                          |
+| Outros                        | `travel`, `office_supplies`, `other`, unknown, and IOF                                             |
 
-The parking/fuel keyword check runs first so a `transportation` charge
-that's actually parking lands in the right column. Mapping logic is
+`meals` wins first; fuel, transport and the parking/fuel keyword check
+all fold into the single Abastecimento column. Mapping logic is
 `expense_report_pdf._bucket()`.
 
 ### Conta Contábil (GL accounts)
@@ -102,12 +110,14 @@ expense column. These are **company-wide** — the same chart of accounts
 for every cardholder — so they live in the global config
 (`report_profile.json`), not on individual users.
 
-- Six fields: a default (`conta_contabil`) plus one per column
-  (`conta_combustivel`, `conta_alimentacao`, `conta_taxi`,
-  `conta_material`, `conta_outros`). A row uses its column's account,
-  falling back to the default when that's blank.
-- Edit them on the **Reports tab → Accounts** ("Contas contábeis"
-  modal), saved via `PUT /api/report-profile`.
+- Five fields: a default (`conta_contabil`) plus one per column
+  (`conta_alimentacao`, `conta_abastecimento`, `conta_hospedagem`,
+  `conta_outros`). A row uses its column's account, falling back to the
+  default when that's blank. (Legacy `conta_combustivel` / `conta_taxi` /
+  `conta_material` are migrated to `conta_abastecimento` on load.)
+- Edit them — plus the default **Centro de Custo+Uneg** — on the
+  **Reports tab → Accounts** ("Contas & centro de custo" modal), saved
+  via `PUT /api/report-profile`.
 - At build time `_with_global_accounts()` overlays these onto whichever
   cardholder generated the report, so they're identical regardless of
   who it's for.
@@ -129,8 +139,9 @@ board.
 On the Reconcile board, each **unmatched** transaction card has a
 category dropdown (Meals · Transport · Fuel/Parking · Travel · Lodging ·
 Office · Other) — pick one to move the charge to another report column.
-The `fuel` option reaches Combustível/Estacionamento directly. Matched
-cards show the receipt's category as a locked badge instead.
+Fuel/Parking and Transport both reach the Abastecimento column; Lodging
+reaches Hospedagem. Matched cards show the receipt's category as a locked
+badge instead.
 
 - Overrides are keyed by `(statement_id, transaction_index)` in
   `data/statement_categories.json` (gitignored), survive re-parses, and
@@ -156,6 +167,52 @@ the blank `justificativa: ____` line.
   `{note}`. The note also comes back on each transaction from
   `GET /api/statements/{id}/transactions`.
 - Deleting the statement clears its notes.
+
+## Per-line report fields
+
+- **Detalhamento da despesa** — the label printed in the Detalhamento
+  column. Defaults to an auto label from the charge's category (`UBER`,
+  `ALIMENTAÇÃO`, `HOSPEDAGEM`, `ABASTECIMENTO`…); type to override for
+  specifics like `MOTORISTA RAYLANDER` or `WI-FI ON BOARD`. Editable per
+  line on the Reconcile board (every card). Stored in
+  `data/statement_labels.json`; endpoint
+  `PUT /api/statements/{id}/transactions/{index}/detalhe` `{detalhe}`.
+  The **open-items page** still shows the raw bank descriptor (not the
+  auto label) so an unmatched charge stays identifiable.
+
+- **Centro de Custo+Uneg** — precedence per line:
+  1. **Matched** → the matched receipt(s)' `cost_centers` (set on the
+     Receipts tab; comma-separate to **list several** on the line for a
+     split bill — multiple receipts on one charge are joined, deduped).
+     On the Reconcile board a matched card shows this read-only (a chip).
+  2. **Open item** (no receipt) → the per-line board override
+     (`data/statement_costcenters.json`,
+     `PUT …/transactions/{index}/cost-center`).
+  3. Either, when blank → the cardholder profile `centro_custo` default.
+
+  The **Review & edit** modal (below) can edit CC on any row — it routes
+  a matched row's edit to the receipt, an open item's to the line override.
+
+The form header's **Vencimento** (due date) is set when generating the
+report (the Generate-report / Review-&-edit flow has a date field) and
+passed as the `vencimento` query param — it isn't stored on the statement.
+
+## Review & edit before export
+
+The **Generate report** modal has a **Review & edit** button (alongside
+**Download PDF**). It opens a table of the assembled front-page rows —
+Data · Centro de Custo+Uneg · Conta · Detalhamento · Coluna · Valor — with
+live per-column totals. Editable cells: **Detalhamento**, **Centro de
+Custo+Uneg**, and **Coluna** (the category column). Amount, date and Conta
+are read-only (reconciled from the statement).
+
+Edits **persist** through the same stores the board uses, so they stick
+and also show on the board: Detalhamento → the label override; for
+**Centro de Custo** and **Coluna**, a matched row writes to the
+receipt(s) (`PATCH /api/receipts/{id}` — `cost_centers` / `category`) and
+an open item writes the per-line override. **Export PDF** then builds the
+report, which re-derives the same values. Backed by
+`GET /api/statements/{id}/report-rows` (see [api.md](api.md)).
 
 ## Cardholders (Users tab)
 
@@ -226,9 +283,12 @@ can't be reconciled. The **Reports tab → "Reimbursement report"**
 button builds the same form from those receipts directly:
 
 - One row per reimbursement receipt (date · vendor · category column ·
-  amount). Every row is "matched" — the receipt is the proof, so there's
-  no `(sem comprovante)` justification line and no IOF.
-- The **Reembolso despesa** checkbox is ticked instead of Cartão Crédito.
+  amount). The Detalhamento is the vendor name (not an auto label). Every
+  row is "matched" — the receipt is the proof, so there's no
+  `(sem comprovante)` justification line and no IOF.
+- The identity band shows a **Reembolso de despesas** marker instead of
+  the card's Vencimento / Nº Cartão, and the footer carries the
+  bank-details block (Favorecido / Banco / …) so the payee can be paid.
 - Receipt grid is the same — each reimbursement receipt's image.
 
 **Single currency per report.** The form has one Total / Moeda column,

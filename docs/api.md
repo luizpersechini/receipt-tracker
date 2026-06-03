@@ -70,7 +70,9 @@ Remove a receipt and any matches that reference it.
 
 Edit metadata. Body keys go into the JSON blob: `vendor_name`,
 `total_amount`, `currency`, `date`, `country`, `category`,
-`description`, `expense_type`, etc.
+`description`, `expense_type`, `cost_centers` (the report's "Centro de
+Custo+Uneg" — free text; comma-separate to list several for a split
+bill), etc.
 
 ### `PATCH /api/receipts/{id}/expense-type`
 
@@ -150,7 +152,12 @@ pairing), so read `matches` (array). `match` is the first entry,
 retained for older callers. `category` is the **effective** category
 (matched → receipt's; else override; else parser) and `category_locked`
 is true when a receipt is driving it; `note` is the open-item
-justification.
+justification. `detalhe` is the report "Detalhamento da despesa" label
+(per-line override → auto label from category). `cost_center` is the
+effective "Centro de Custo+Uneg" — matched → the receipt(s)' value, else
+the per-line override (blank → profile default on the report); and
+`cost_center_locked` is true when a matched receipt drives it (edit the
+receipt, not the line).
 
 ```json
 {
@@ -165,6 +172,9 @@ justification.
       "category": "transportation",
       "category_locked": false,
       "note": "",
+      "detalhe": "UBER",
+      "cost_center": "",
+      "cost_center_locked": false,
       "city": null,
       "original_amount": null,
       "original_currency": null,
@@ -221,6 +231,19 @@ Body `{category}` — one of `meals`, `transportation`, `fuel`, `travel`,
 effect while the transaction is matched (the receipt's category wins).
 The effective `category` + a `category_locked` flag come back on each
 transaction from `GET …/transactions`.
+
+### `PUT /api/statements/{id}/transactions/{index}/detalhe`
+
+Override the "Detalhamento da despesa" label that prints for this line on
+the report. Body `{detalhe}`; blank clears the override (the report falls
+back to the auto label derived from the category). 400 if the index is
+out of range, 404 if the statement is gone.
+
+### `PUT /api/statements/{id}/transactions/{index}/cost-center`
+
+Override the "Centro de Custo+Uneg" value for this line. Body
+`{cost_center}`; blank clears it (the report falls back to the profile's
+`centro_custo` default). 400 / 404 as above.
 
 ## Matching
 
@@ -301,12 +324,28 @@ Stream a previously-generated report by id.
 
 See [reports.md](reports.md) for the full picture. Endpoints:
 
-### `GET /api/statements/{id}/report?user_id=`
+### `GET /api/statements/{id}/report?user_id=&vencimento=`
 
 Build + stream the combined "Prestação de Contas" PDF (categorised
 front page + receipt-image grid) for one statement. `user_id` picks a
 roster cardholder's profile; omitted → guess by name → global default.
-`Content-Type: application/pdf`, attachment download.
+`vencimento` (optional, ISO or free text) is the statement due date
+printed in the form header. `Content-Type: application/pdf`, attachment
+download.
+
+### `GET /api/statements/{id}/report-rows?user_id=&vencimento=`
+
+JSON view of the front-page expense table, for the **Review & edit**
+modal that opens before PDF export. Resolves exactly like the PDF
+(cardholder profile, GL accounts, cost-center default), so what's edited
+here is what the PDF prints. Returns `columns` (the four category columns
+with labels), `rows` (each with `index`, `receipt_ids`, `matched`,
+`date`, `cost_center`, `cost_center_effective`, `conta`, `detalhe`,
+`col`, `amount`, `note`), per-column `totals`, `grand_total`, `iof`, and
+the resolved `nome` / `vencimento`. Edits are saved through the existing
+per-line PUTs (detalhe / cost-center / category) for open items, or a
+`PATCH /api/receipts/{id}` for matched rows (the receipt drives CC +
+category). 404 if the statement is gone.
 
 ### `GET /api/reports/reimbursement`
 
@@ -321,10 +360,13 @@ single Total). 404 when no receipts match. `application/pdf` attachment.
 Get / save the **global** report config: the front-page defaults
 (company code, nome, C/C, bank details, …) used as the template for new
 cardholders and the no-match fallback, **and** the company-wide GL
-accounts (`conta_contabil` default + `conta_combustivel` /
-`conta_alimentacao` / `conta_taxi` / `conta_material` / `conta_outros`).
-The Reports-tab "Accounts" modal PUTs just the `conta_*` fields here.
-Stored in `data/report_profile.json`.
+accounts (`conta_contabil` default + `conta_alimentacao` /
+`conta_abastecimento` / `conta_hospedagem` / `conta_outros`, one per form
+column) plus the default `centro_custo` (Centro de Custo+Uneg). The
+Reports-tab "Accounts" modal PUTs the `conta_*` + `centro_custo` fields
+here. Legacy `conta_combustivel` / `conta_taxi` / `conta_material` keys
+are migrated to `conta_abastecimento` on load. Stored in
+`data/report_profile.json`.
 
 ### `GET /api/report-users`
 

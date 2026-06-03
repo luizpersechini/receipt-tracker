@@ -22,18 +22,41 @@ from src.services import expense_report_pdf as erp
     "category,label,expected",
     [
         ("meals", "Restaurant X", "alimentacao"),
-        ("transportation", "UBER* TRIP", "taxi"),
-        ("transportation", "PARKCHAMP PARKING", "combustivel"),
-        ("office_supplies", "Staples", "material"),
+        # Fuel, parking and taxi/transport share the Abastecimento column.
+        ("transportation", "UBER* TRIP", "abastecimento"),
+        ("transportation", "PARKCHAMP PARKING", "abastecimento"),
+        ("fuel", "Posto BR", "abastecimento"),
+        ("office_supplies", "Staples", "outros"),
         ("travel", "VISTO LONDRES", "outros"),
-        ("lodging", "Sutton Place Hotel", "outros"),
+        # Lodging now has its own dedicated column.
+        ("lodging", "Sutton Place Hotel", "hospedagem"),
         ("other", "Whatever", "outros"),
-        (None, "Posto Shell combustível", "combustivel"),
+        (None, "Posto Shell combustível", "abastecimento"),
         (None, "", "outros"),
     ],
 )
 def test_bucket(category, label, expected):
     assert erp._bucket(category, label) == expected
+
+
+@pytest.mark.parametrize(
+    "category,label,expected",
+    [
+        ("meals", "Restaurante Z", "ALIMENTAÇÃO"),
+        ("transportation", "UBER* TRIP", "UBER"),
+        ("transportation", "TAXI RIO SUL", "TAXI"),
+        ("transportation", "DL *UBERRIDES", "UBER"),
+        ("transportation", "99 POP", "TRANSPORTE"),
+        ("lodging", "Hilton", "HOSPEDAGEM"),
+        ("fuel", "Posto", "ABASTECIMENTO"),
+        ("office_supplies", "Kalunga", "MATERIAL"),
+        ("travel", "LATAM", "VIAGEM"),
+        ("other", "Wi-Fi on board", "WI-FI ON BOARD"),
+        (None, "", "—"),
+    ],
+)
+def test_auto_detalhe(category, label, expected):
+    assert erp.auto_detalhe(category, label) == expected
 
 
 # ─── pt-BR formatting ───────────────────────────────────────────────────────
@@ -232,7 +255,7 @@ def test_statement_note_prints_on_report(report_env):
     fitz = pytest.importorskip("fitz")
     doc = fitz.open(stream=pdf, filetype="pdf")
     try:
-        front = doc[0].get_text()
+        front = " ".join(doc[0].get_text().split())  # normalise PDF line wraps
         # The typed note replaces the blank "justificativa: ___" placeholder.
         assert "recibo perdido" in front
         assert "justificativa: ____" not in front
@@ -268,8 +291,10 @@ def test_open_items_page_lists_charges_and_justifications(report_env):
     fitz = pytest.importorskip("fitz")
     doc = fitz.open(stream=pdf, filetype="pdf")
     try:
-        full = "\n".join(p.get_text() for p in doc)
+        full = " ".join(("\n".join(p.get_text() for p in doc)).split())
         # The dedicated open-items page heading + both charges + the note.
+        # The open-items page shows the raw bank descriptor (identifying),
+        # not the generic auto label.
         assert "Lançamentos sem comprovante" in full
         assert "MYSTERY CHARGE" in full
         assert "LOST TAXI" in full
@@ -301,9 +326,12 @@ def test_category_override_changes_report_column(report_env):
     statement_categories.set_category(sid, 0, "meals")
     data = erp._assemble(sid)
     assert data["rows"][0]["col"] == "alimentacao"
-    # `fuel` override reaches the Combustível column.
+    # `fuel` override reaches the Abastecimento column.
     statement_categories.set_category(sid, 0, "fuel")
-    assert erp._assemble(sid)["rows"][0]["col"] == "combustivel"
+    assert erp._assemble(sid)["rows"][0]["col"] == "abastecimento"
+    # `lodging` override reaches the Hospedagem column.
+    statement_categories.set_category(sid, 0, "lodging")
+    assert erp._assemble(sid)["rows"][0]["col"] == "hospedagem"
 
 
 def test_matched_receipt_category_beats_override(report_env):
@@ -334,8 +362,8 @@ def test_matched_receipt_category_beats_override(report_env):
         "x",
     )
     db.save_match(rid, sid, txns[0], 0.9, match_kind="manual", transaction_index=0)
-    # Receipt (transportation → Taxi) wins over the meals override.
-    assert erp._assemble(sid)["rows"][0]["col"] == "taxi"
+    # Receipt (transportation → Abastecimento) wins over the meals override.
+    assert erp._assemble(sid)["rows"][0]["col"] == "abastecimento"
 
 
 def test_no_open_items_page_when_all_matched(report_env):
@@ -380,5 +408,173 @@ def test_open_item_without_note_shows_blank_placeholder(report_env):
     try:
         front = doc[0].get_text()
         assert "sem comprovante" in front.lower()
+    finally:
+        doc.close()
+
+
+# ─── Detalhamento + Centro de Custo per-line overrides ──────────────────────
+
+
+def test_detalhe_defaults_to_auto_label(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-04-05",
+            "description": "UBER* TRIP",
+            "amount": 20.0,
+            "category": "transportation",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("d.csv", "d.csv", txns)
+    row = erp._assemble(sid)["rows"][0]
+    assert row["detalhe"] == "UBER"  # auto label from category + descriptor
+    assert row["cost_center"] == ""  # no override yet
+
+
+def test_detalhe_and_cost_center_overrides(report_env):
+    db = report_env
+    from src.services import statement_costcenters, statement_labels
+
+    txns = [
+        {
+            "date": "2026-04-05",
+            "description": "POSTO XYZ",
+            "amount": 400.0,
+            "category": "transportation",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("d2.csv", "d2.csv", txns)
+    statement_labels.set_label(sid, 0, "MOTORISTA RAYLANDER")
+    statement_costcenters.set_cost_center(sid, 0, "20101/AA7")
+    row = erp._assemble(sid)["rows"][0]
+    assert row["detalhe"] == "MOTORISTA RAYLANDER"  # override wins over auto label
+    assert row["cost_center"] == "20101/AA7"
+
+
+# ─── Cost center at the receipt level ───────────────────────────────────────
+
+
+def _match(db, sid, txn, meta):
+    rid = db.save_receipt("r.jpg", "", meta, "x")
+    db.save_match(rid, sid, txn, 0.9, match_kind="manual", transaction_index=0)
+    return rid
+
+
+def test_matched_receipt_cost_centers_drive_line(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-04-01",
+            "description": "UBER",
+            "amount": 50.0,
+            "category": "transportation",
+            "raw_data": {"section": "domestic"},
+        }
+    ]
+    sid = db.save_statement("cc.csv", "cc.csv", txns)
+    _match(
+        db,
+        sid,
+        txns[0],
+        {
+            "vendor_name": "Uber",
+            "total_amount": 50.0,
+            "currency": "BRL",
+            "date": "2026-04-01",
+            "category": "transportation",
+            "cost_centers": "20101/AA1",
+        },
+    )
+    assert erp._assemble(sid)["rows"][0]["cost_center"] == "20101/AA1"
+
+
+def test_multiple_receipts_join_cost_centers(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-04-01",
+            "description": "HOTEL",
+            "amount": 300.0,
+            "category": "lodging",
+            "raw_data": {"section": "domestic"},
+        }
+    ]
+    sid = db.save_statement("cc2.csv", "cc2.csv", txns)
+    base = {"total_amount": 100.0, "currency": "BRL", "date": "2026-04-01", "category": "lodging"}
+    _match(db, sid, txns[0], {**base, "vendor_name": "A", "cost_centers": "20101/AA1"})
+    _match(db, sid, txns[0], {**base, "vendor_name": "B", "cost_centers": "20101/AA2, 20101/AA1"})
+    # Unique, order-preserving join across both matched receipts.
+    assert erp._assemble(sid)["rows"][0]["cost_center"] == "20101/AA1, 20101/AA2"
+
+
+def test_blank_receipt_cc_falls_back_to_profile(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-04-01",
+            "description": "UBER",
+            "amount": 50.0,
+            "category": "transportation",
+            "raw_data": {"section": "domestic"},
+        }
+    ]
+    sid = db.save_statement("cc3.csv", "cc3.csv", txns)
+    _match(
+        db,
+        sid,
+        txns[0],
+        {
+            "vendor_name": "Uber",
+            "total_amount": 50.0,
+            "currency": "BRL",
+            "date": "2026-04-01",
+            "category": "transportation",
+        },  # no cost_centers
+    )
+    data = erp._assemble(sid)
+    assert data["rows"][0]["cost_center"] == ""  # blank → render fills profile default
+    from src.services.report_profile import DEFAULT_PROFILE
+
+    prof = erp._with_global_accounts({**DEFAULT_PROFILE, "centro_custo": "20101/AA9"})
+    assert "20101/AA9" in erp._front_page_html(data, prof)
+
+
+def test_front_page_has_form_structure(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-03-03",
+            "description": "ALMOCO",
+            "amount": 45.0,
+            "category": "meals",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("f.csv", "f.csv", txns)
+    pdf = erp.build_statement_report(sid, vencimento="2026-03-20")
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        front = " ".join(doc[0].get_text().split())  # normalise PDF line wraps
+        # New column headers from the MMB-F-REG-0101-001-00 form.
+        for header in (
+            "Centro de Custo+Uneg",
+            "Conta Contábil",
+            "Detalhamento da despesa",
+            "Alimentação",
+            "Abastecimento",
+            "Hospedagem",
+            "Outros",
+        ):
+            assert header in front, header
+        # Header band fields.
+        assert "MMB-F-REG-0101-001-00" in front
+        assert "VENCIMENTO" in front.upper()
+        assert "20/03/2026" in front  # vencimento formatted pt-BR
+        assert "Aprovador imediato" in front
+        # Old layout bits are gone.
+        assert "Motivo do Gasto" not in front
     finally:
         doc.close()
