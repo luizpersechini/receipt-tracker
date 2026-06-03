@@ -430,7 +430,8 @@ def get_matches_for_statement(statement_id: int) -> list:
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT m.*, r.filename as receipt_filename, r.metadata as receipt_metadata
+        SELECT m.*, r.filename as receipt_filename, r.metadata as receipt_metadata,
+               r.description as receipt_description
         FROM matches m
         JOIN receipts r ON m.receipt_id = r.id
         WHERE m.statement_id = ?

@@ -59,6 +59,22 @@ def test_auto_detalhe(category, label, expected):
     assert erp.auto_detalhe(category, label) == expected
 
 
+@pytest.mark.parametrize(
+    "override,category,stmt,rdescs,expected",
+    [
+        ("MOTORISTA X", "meals", "REST", ["whatever"], "MOTORISTA X"),  # override wins
+        (None, "transportation", "UBER* TRIP", ["Bagagem"], "BAGAGEM"),  # receipt desc
+        (None, "meals", "REST", ["imported from folder scan"], "ALIMENTAÇÃO"),  # placeholder
+        (None, "meals", "REST", [None, "", "   "], "ALIMENTAÇÃO"),  # blanks → auto
+        (None, "transportation", "UBER* TRIP", [], "UBER"),  # no receipts → auto
+        (None, "other", "MYSTERY", ["test"], "MYSTERY"),  # 'test' placeholder skipped
+        (None, "meals", "X", ["imported from gmail", "Real note"], "REAL NOTE"),  # 1st meaningful
+    ],
+)
+def test_effective_detalhe(override, category, stmt, rdescs, expected):
+    assert erp.effective_detalhe(override, category, stmt, rdescs) == expected
+
+
 # ─── pt-BR formatting ───────────────────────────────────────────────────────
 
 
@@ -539,6 +555,39 @@ def test_blank_receipt_cc_falls_back_to_profile(report_env):
 
     prof = erp._with_global_accounts({**DEFAULT_PROFILE, "centro_custo": "20101/AA9"})
     assert "20101/AA9" in erp._front_page_html(data, prof)
+
+
+def test_assemble_orders_rows_by_date(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-04-10",
+            "description": "C",
+            "amount": 3.0,
+            "category": "other",
+            "raw_data": {},
+        },
+        {
+            "date": "2026-04-02",
+            "description": "A",
+            "amount": 1.0,
+            "category": "other",
+            "raw_data": {},
+        },
+        {
+            "date": "2026-04-05",
+            "description": "B",
+            "amount": 2.0,
+            "category": "other",
+            "raw_data": {},
+        },
+    ]
+    sid = db.save_statement("o.csv", "o.csv", txns)
+    rows = erp._assemble(sid)["rows"]
+    # Date-ascending order…
+    assert [r["date"] for r in rows] == ["02/04/2026", "05/04/2026", "10/04/2026"]
+    # …but each row keeps its original transaction_index (for matches/editing).
+    assert [r["index"] for r in rows] == [1, 2, 0]
 
 
 # ─── XLSX export ────────────────────────────────────────────────────────────

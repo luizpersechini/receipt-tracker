@@ -15,7 +15,7 @@ from ..services import (
     statement_labels,
     statement_notes,
 )
-from ..services.expense_report_pdf import _joined_cost_centers, auto_detalhe
+from ..services.expense_report_pdf import _joined_cost_centers, effective_detalhe
 from ..services.matching_engine import match_receipts_to_statements
 
 router = APIRouter(prefix="/api", tags=["matches"])
@@ -238,7 +238,12 @@ async def get_statement_transactions(statement_id: int):
             "note": notes.get(i) or "",
             # Report "Detalhamento" label (override → auto label) and the
             # "Centro de Custo+Uneg" override (blank → profile default).
-            "detalhe": label_overrides.get(i) or auto_detalhe(category, t.get("description")),
+            "detalhe": effective_detalhe(
+                label_overrides.get(i),
+                category,
+                t.get("description"),
+                [m.get("receipt_description") for m in ms],
+            ),
             "cost_center": cost_center,
             "cost_center_locked": cost_center_locked,
             # `matches` is the new shape; `match` keeps the first entry for

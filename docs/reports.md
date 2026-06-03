@@ -42,7 +42,8 @@ A single self-contained PDF mirroring the Atlantic Nickel
   Detalhamento da despesa, then **four category columns** —
   `Alimentação · Abastecimento/Estac./Taxi · Hospedagem · Outros` — and
   TOTAL. Each charge's amount lands in exactly one category column;
-  columns total at the bottom, plus a grand total.
+  columns total at the bottom, plus a grand total. Rows are ordered by
+  **date ascending** (each keeps its transaction index for editing).
 - **Detalhamento** is an auto label from the charge's category (UBER,
   ALIMENTAÇÃO, HOSPEDAGEM…) and **Centro de Custo+Uneg** comes from the
   matched receipt / a per-line override / the profile default — all
@@ -171,11 +172,13 @@ the blank `justificativa: ____` line.
 ## Per-line report fields
 
 - **Detalhamento da despesa** — the label printed in the Detalhamento
-  column. Defaults to an auto label from the charge's category (`UBER`,
-  `ALIMENTAÇÃO`, `HOSPEDAGEM`, `ABASTECIMENTO`…); type to override for
-  specifics like `MOTORISTA RAYLANDER` or `WI-FI ON BOARD`. Editable per
-  line on the Reconcile board (every card). Stored in
-  `data/statement_labels.json`; endpoint
+  column. Precedence: a per-line override → the **matched receipt's own
+  description** when it's meaningful (placeholders like `imported from
+folder scan` are skipped) → an auto label from the charge's category
+  (`UBER`, `ALIMENTAÇÃO`, `HOSPEDAGEM`, `ABASTECIMENTO`…). Editable per
+  line on the Reconcile board (every card) and in the Review-&-edit
+  modal; type to override for specifics like `MOTORISTA RAYLANDER`.
+  Stored in `data/statement_labels.json`; endpoint
   `PUT /api/statements/{id}/transactions/{index}/detalhe` `{detalhe}`.
   The **open-items page** still shows the raw bank descriptor (not the
   auto label) so an unmatched charge stays identifiable.

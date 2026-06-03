@@ -116,6 +116,36 @@ def auto_detalhe(category: Optional[str], label: Optional[str]) -> str:
     return up or "—"
 
 
+# Receipt descriptions that are auto-generated placeholders, not real notes —
+# never promoted into the Detalhamento column.
+_PLACEHOLDER_DESC = re.compile(r"^\s*(imported from|test)\b", re.IGNORECASE)
+
+
+def _meaningful_desc(desc: Optional[str]) -> Optional[str]:
+    d = (desc or "").strip()
+    if not d or _PLACEHOLDER_DESC.match(d):
+        return None
+    return d
+
+
+def effective_detalhe(
+    label_override: Optional[str],
+    category: Optional[str],
+    statement_desc: Optional[str],
+    receipt_descs: list,
+) -> str:
+    """Detalhamento precedence: a per-line override → the first meaningful
+    matched-receipt description (uppercased; placeholders like 'imported from
+    folder scan' are skipped) → the auto label from the category."""
+    if label_override:
+        return label_override
+    for rd in receipt_descs:
+        md = _meaningful_desc(rd)
+        if md:
+            return md.upper()
+    return auto_detalhe(category, statement_desc)
+
+
 # ─── Money / date formatting (pt-BR) ────────────────────────────────────────
 
 
@@ -298,7 +328,13 @@ def _assemble(statement_id: int) -> dict[str, Any]:
     rows: list[dict] = []
     receipts_for_grid: list[dict] = []
 
-    for i, t in enumerate(transactions):
+    # Render rows in date-ascending order. We sort the transaction *indices*
+    # (not the list) so each row keeps its original transaction_index for
+    # matches / per-line overrides / editing.
+    order = sorted(range(len(transactions)), key=lambda i: transactions[i].get("date") or "")
+
+    for i in order:
+        t = transactions[i]
         ms = sorted(by_idx.get(i, []), key=lambda m: m.get("id") or 0)
         amount = float(t.get("amount") or 0)
         label = t.get("description") or ""
@@ -316,8 +352,14 @@ def _assemble(statement_id: int) -> dict[str, Any]:
             "receipt_ids": [m.get("receipt_id") for m in ms],
             "date": _fmt_date_br(t.get("date")),
             "conta": "",  # filled from profile below
-            # Detalhamento: per-line override wins, else an auto label.
-            "detalhe": label_overrides.get(i) or auto_detalhe(category, label),
+            # Detalhamento: per-line override → meaningful matched-receipt
+            # description → auto label from the category.
+            "detalhe": effective_detalhe(
+                label_overrides.get(i),
+                category,
+                label,
+                [m.get("receipt_description") for m in ms],
+            ),
             # Raw bank descriptor — kept for the open-items page, which needs
             # the identifying vendor text rather than the generic auto label.
             "desc": label,
