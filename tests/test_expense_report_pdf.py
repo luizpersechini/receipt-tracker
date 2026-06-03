@@ -64,6 +64,13 @@ def test_auto_detalhe(category, label, expected):
     [
         ("MOTORISTA X", "meals", "REST", ["whatever"], "MOTORISTA X"),  # override wins
         (None, "transportation", "UBER* TRIP", ["Bagagem"], "BAGAGEM"),  # receipt desc
+        (
+            None,
+            "transportation",
+            "UBER* TRIP",
+            ["Uber · A St → B St"],
+            "UBER",
+        ),  # uber route skipped
         (None, "meals", "REST", ["imported from folder scan"], "ALIMENTAÇÃO"),  # placeholder
         (None, "meals", "REST", [None, "", "   "], "ALIMENTAÇÃO"),  # blanks → auto
         (None, "transportation", "UBER* TRIP", [], "UBER"),  # no receipts → auto

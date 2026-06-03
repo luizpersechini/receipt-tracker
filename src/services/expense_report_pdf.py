@@ -116,9 +116,11 @@ def auto_detalhe(category: Optional[str], label: Optional[str]) -> str:
     return up or "—"
 
 
-# Receipt descriptions that are auto-generated placeholders, not real notes —
-# never promoted into the Detalhamento column.
-_PLACEHOLDER_DESC = re.compile(r"^\s*(imported from|test)\b", re.IGNORECASE)
+# Receipt descriptions that are auto-generated, not real notes — never
+# promoted into the Detalhamento column. Covers the folder-scan/test
+# placeholders and Uber's verbose pickup→dropoff route text (which always
+# starts with "Uber"); those rows keep the clean "UBER" auto-label.
+_PLACEHOLDER_DESC = re.compile(r"^\s*(imported from|test|uber)\b", re.IGNORECASE)
 
 
 def _meaningful_desc(desc: Optional[str]) -> Optional[str]:
