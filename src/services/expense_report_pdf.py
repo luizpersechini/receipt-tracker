@@ -381,7 +381,7 @@ def _front_page_html(data: dict, profile: dict) -> str:
     grand_total = sum(col_totals.values())
 
     default_conta = profile.get("conta_contabil") or ""
-    default_cc = profile.get("centro_custo") or ""
+    default_cc = profile.get("centro_custo") or profile.get("cost_center") or ""
 
     def _conta_for(col: str) -> str:
         # Per-column GL account, falling back to the single default.
@@ -804,7 +804,7 @@ def report_rows_view(
     if vencimento:
         profile["vencimento"] = vencimento
     default_conta = profile.get("conta_contabil") or ""
-    default_cc = profile.get("centro_custo") or ""
+    default_cc = profile.get("centro_custo") or profile.get("cost_center") or ""
 
     col_totals = {c: 0.0 for c in _COLS}
     out_rows = []
