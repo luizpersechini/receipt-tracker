@@ -2357,7 +2357,10 @@ async function _downloadReport(sid, uid, venc, fmt = "pdf") {
   if (uid) params.set("user_id", uid);
   if (venc) params.set("vencimento", venc);
   const qs = params.toString() ? `?${params}` : "";
-  const path = fmt === "xlsx" ? "report.xlsx" : "report";
+  // Normalise: anything not "xlsx" is the PDF (guards against a stray event
+  // object slipping in as `fmt`).
+  const ext = fmt === "xlsx" ? "xlsx" : "pdf";
+  const path = ext === "xlsx" ? "report.xlsx" : "report";
   const res = await fetch(`/api/statements/${sid}/${path}${qs}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -2367,7 +2370,7 @@ async function _downloadReport(sid, uid, venc, fmt = "pdf") {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `prestacao_contas_statement_${sid}.${fmt}`;
+  a.download = `prestacao_contas_statement_${sid}.${ext}`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -2410,7 +2413,7 @@ async function _generateReport(fmt = "pdf") {
   const xlsx = $("reportXlsxBtn");
   if (xlsx) xlsx.addEventListener("click", () => _generateReport("xlsx"));
   const gen = $("reportGenBtn");
-  if (gen) gen.addEventListener("click", _generateReport);
+  if (gen) gen.addEventListener("click", () => _generateReport("pdf"));
   // No backdrop-click-to-close (avoid discarding a half-filled form).
 })();
 
