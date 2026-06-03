@@ -3201,7 +3201,17 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
 .report-foot {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* Status message sits left; the action buttons group to the right. */
+.report-foot .status-msg {
+  margin-right: auto;
+}
+/* Footer buttons size to their label (don't stretch full-width). */
+.report-foot .btn {
+  flex: 0 0 auto;
+  width: auto;
 }
 
 /* Report modal — cardholder picker */

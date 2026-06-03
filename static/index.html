@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=24" />
+    <link rel="stylesheet" href="/static/css/app.css?v=28" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -1155,7 +1155,6 @@
 
         <div class="report-foot">
           <span class="status-msg" id="userModalStatus"></span>
-          <span style="flex: 1"></span>
           <button class="btn btn-outline" onclick="closeUserModal()">
             Cancel
           </button>
@@ -1198,7 +1197,6 @@
 
         <div class="report-foot">
           <span class="status-msg" id="accountsStatus"></span>
-          <span style="flex: 1"></span>
           <button class="btn btn-outline" onclick="closeAccountsModal()">
             Cancel
           </button>
@@ -1308,7 +1306,7 @@
     <!-- ── STATEMENT DETAIL MODAL (view all parsed transactions) ────────────── -->
     <!-- ── GENERATE REPORT MODAL (pick cardholder, then download) ───────────── -->
     <div class="modal-overlay" id="reportModal">
-      <div class="modal-box" style="width: 440px; max-width: 92vw">
+      <div class="modal-box" style="width: 500px; max-width: 92vw">
         <div class="modal-title">Generate expense report</div>
         <div class="modal-sub">
           The cardholder is auto-detected from the statement. Confirm and
@@ -1329,19 +1327,14 @@
 
         <div class="report-foot" style="margin-top: 18px">
           <span class="status-msg" id="reportStatus"></span>
-          <span style="flex: 1"></span>
           <button class="btn btn-outline" onclick="closeReportModal()">
             Cancel
           </button>
           <button class="btn btn-outline" id="reportReviewBtn">
             Review &amp; edit
           </button>
-          <button class="btn btn-outline" id="reportXlsxBtn">
-            Download XLSX
-          </button>
-          <button class="btn btn-primary" id="reportGenBtn">
-            Download PDF
-          </button>
+          <button class="btn btn-outline" id="reportXlsxBtn">XLSX</button>
+          <button class="btn btn-primary" id="reportGenBtn">PDF</button>
         </div>
       </div>
     </div>
@@ -1374,7 +1367,6 @@
 
         <div class="report-foot" style="margin-top: 14px">
           <span class="status-msg" id="reportEditStatus"></span>
-          <span style="flex: 1"></span>
           <button class="btn btn-outline" onclick="closeReportEditModal()">
             Close
           </button>
@@ -1416,7 +1408,6 @@
 
         <div class="report-foot" style="margin-top: 16px">
           <span class="status-msg" id="reimbStatus"></span>
-          <span style="flex: 1"></span>
           <button class="btn btn-outline" onclick="closeReimbModal()">
             Cancel
           </button>
@@ -1641,7 +1632,6 @@
           <button class="btn btn-outline btn-sm" id="bboxResetBtn">
             Reset to auto
           </button>
-          <span style="flex: 1"></span>
           <button class="btn btn-outline" id="bboxCancelBtn">Cancel</button>
           <button
             class="btn btn-primary"
