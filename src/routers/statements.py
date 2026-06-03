@@ -58,10 +58,17 @@ async def get_statements():
 async def remove_statement(statement_id: int):
     try:
         await asyncio.to_thread(db.delete_statement, statement_id)
-        from ..services import statement_categories, statement_notes
+        from ..services import (
+            statement_categories,
+            statement_costcenters,
+            statement_labels,
+            statement_notes,
+        )
 
         await asyncio.to_thread(statement_notes.clear_statement, statement_id)
         await asyncio.to_thread(statement_categories.clear_statement, statement_id)
+        await asyncio.to_thread(statement_labels.clear_statement, statement_id)
+        await asyncio.to_thread(statement_costcenters.clear_statement, statement_id)
         return JSONResponse({"success": True})
     except Exception as e:
         logger.exception("delete statement failed")

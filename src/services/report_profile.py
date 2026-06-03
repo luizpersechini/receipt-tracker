@@ -32,17 +32,18 @@ DEFAULT_PROFILE: dict[str, Any] = {
     # Employee band
     "nome": "",
     "cost_center": "",  # C/C
+    "centro_custo": "",  # "Centro de Custo+Uneg" default for each row (e.g. 20101/AA1)
+    "num_cartao": "",  # Nº Cartão
     "motivo": "Despesas",  # Motivo do Gasto
     "local": "",
     "moeda": "R$",
     "conta_contabil": "",  # default GL account (fallback when no per-column one)
-    # Per-column GL accounts ("Conta Contábil" differs by expense type).
+    # Per-column GL accounts ("Conta Contábil" can differ by expense type).
     # A row uses the account for its report column, falling back to
-    # `conta_contabil`. Keys mirror the 5 form columns.
-    "conta_combustivel": "",  # Combustível / Estacionamento
-    "conta_alimentacao": "",  # Despesas com alimentação
-    "conta_taxi": "",  # Taxi / Correios
-    "conta_material": "",  # Material para escritório
+    # `conta_contabil`. Keys mirror the 4 form columns.
+    "conta_alimentacao": "",  # Alimentação
+    "conta_abastecimento": "",  # Abastecimento / Estac. / Taxi
+    "conta_hospedagem": "",  # Hospedagem
     "conta_outros": "",  # Outros
     "expense_kind": "cartao",  # "cartao" (Cartão Crédito) or "reembolso"
     # Bank / signature footer
@@ -70,7 +71,22 @@ def load_profile() -> dict[str, Any]:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("report_profile.json unreadable (%s) — using defaults", e)
             data = {}
-    merged = {**DEFAULT_PROFILE, **(data if isinstance(data, dict) else {})}
+    raw = data if isinstance(data, dict) else {}
+    merged = {**DEFAULT_PROFILE, **raw}
+    return _migrate_accounts(merged, raw)
+
+
+def _migrate_accounts(merged: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """Map the legacy 5-column GL accounts onto the current 4-column form.
+
+    Old keys: conta_combustivel / conta_taxi / conta_material.
+    New keys: conta_abastecimento (fuel+parking+taxi) / conta_hospedagem.
+    Material has no column on this form, so its account is dropped.
+    """
+    if not merged.get("conta_abastecimento"):
+        merged["conta_abastecimento"] = raw.get("conta_combustivel") or raw.get("conta_taxi") or ""
+    for old in ("conta_combustivel", "conta_taxi", "conta_material"):
+        merged.pop(old, None)
     return merged
 
 

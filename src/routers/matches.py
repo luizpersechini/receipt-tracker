@@ -9,7 +9,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..db import database as db
-from ..services import statement_categories, statement_notes
+from ..services import (
+    statement_categories,
+    statement_costcenters,
+    statement_labels,
+    statement_notes,
+)
+from ..services.expense_report_pdf import _joined_cost_centers, auto_detalhe
 from ..services.matching_engine import match_receipts_to_statements
 
 router = APIRouter(prefix="/api", tags=["matches"])
@@ -156,6 +162,8 @@ async def get_statement_transactions(statement_id: int):
     matches = await asyncio.to_thread(db.get_matches_for_statement, statement_id)
     notes = await asyncio.to_thread(statement_notes.get_notes, statement_id)
     cat_overrides = await asyncio.to_thread(statement_categories.get_categories, statement_id)
+    label_overrides = await asyncio.to_thread(statement_labels.get_labels, statement_id)
+    cc_overrides = await asyncio.to_thread(statement_costcenters.get_cost_centers, statement_id)
     # Group matches by transaction_index — N:1 is allowed now (multiple
     # receipts cumulatively pay one statement charge, e.g. hotel folio
     # split into room + restaurant + parking receipts).
@@ -204,6 +212,15 @@ async def get_statement_transactions(statement_id: int):
         else:
             category = cat_overrides.get(i) or t.get("category")
             category_locked = False
+        # Effective Centro de Custo+Uneg: matched → the receipt(s)' cost
+        # centers (the receipt drives it, so editing the line is locked);
+        # else the per-line override. Blank → profile default on the report.
+        if ms:
+            cost_center = _joined_cost_centers(ms)
+            cost_center_locked = True
+        else:
+            cost_center = cc_overrides.get(i, "")
+            cost_center_locked = False
         meta = {
             "index": i,
             "date": t.get("date"),
@@ -219,6 +236,11 @@ async def get_statement_transactions(statement_id: int):
             # Justification note for open items (no receipt). Prints on the
             # report in place of the blank "sem comprovante" line.
             "note": notes.get(i) or "",
+            # Report "Detalhamento" label (override → auto label) and the
+            # "Centro de Custo+Uneg" override (blank → profile default).
+            "detalhe": label_overrides.get(i) or auto_detalhe(category, t.get("description")),
+            "cost_center": cost_center,
+            "cost_center_locked": cost_center_locked,
             # `matches` is the new shape; `match` keeps the first entry for
             # any older code paths that hadn't migrated. New consumers
             # should read `matches`.
@@ -273,6 +295,42 @@ async def set_transaction_category(
         statement_categories.set_category, statement_id, transaction_index, category
     )
     return JSONResponse({"success": True, "category": (category or "").strip().lower()})
+
+
+async def _require_txn_index(statement_id: int, transaction_index: int) -> None:
+    """404 if the statement is gone, 400 if the index is out of range."""
+    statement = await asyncio.to_thread(db.get_statement_by_id, statement_id)
+    if not statement:
+        raise HTTPException(status_code=404, detail="Statement not found")
+    n = len(statement.get("transactions") or [])
+    if transaction_index < 0 or transaction_index >= n:
+        raise HTTPException(status_code=400, detail="transaction_index out of range")
+
+
+@router.put("/statements/{statement_id}/transactions/{transaction_index}/detalhe")
+async def set_transaction_detalhe(
+    statement_id: int, transaction_index: int, body: dict = Body(...)
+):
+    """Override the 'Detalhamento da despesa' label for one transaction.
+    Blank clears the override (the report falls back to the auto label)."""
+    await _require_txn_index(statement_id, transaction_index)
+    label = body.get("detalhe") if isinstance(body, dict) else None
+    await asyncio.to_thread(statement_labels.set_label, statement_id, transaction_index, label)
+    return JSONResponse({"success": True, "detalhe": (label or "").strip()})
+
+
+@router.put("/statements/{statement_id}/transactions/{transaction_index}/cost-center")
+async def set_transaction_cost_center(
+    statement_id: int, transaction_index: int, body: dict = Body(...)
+):
+    """Override the 'Centro de Custo+Uneg' value for one transaction. Blank
+    clears the override (the report falls back to the profile default)."""
+    await _require_txn_index(statement_id, transaction_index)
+    value = body.get("cost_center") if isinstance(body, dict) else None
+    await asyncio.to_thread(
+        statement_costcenters.set_cost_center, statement_id, transaction_index, value
+    )
+    return JSONResponse({"success": True, "cost_center": (value or "").strip()})
 
 
 @router.post("/matches")

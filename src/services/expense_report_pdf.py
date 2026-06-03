@@ -1,11 +1,15 @@
 """Build the combined expense-report PDF from a reconciled statement.
 
 Output mirrors the Atlantic Nickel "Prestação de Contas - Cartão
-Corporativo" form the user provided:
+Corporativo" form (code MMB-F-REG-0101-001-00) the user provided:
 
-  Page 1     — front-page form: header + employee band + categorised
-               expense table + IOF row + grand total + bank/signature
-               footer. Unmatched statement transactions render with a
+  Page 1     — front-page form: header (logo · title · código · página) +
+               identity band (Nome / Vencimento / Nº Cartão) + categorised
+               expense table with columns Data · Centro de Custo+Uneg ·
+               Conta Contábil · Detalhamento · Alimentação ·
+               Abastecimento/Estac./Taxi · Hospedagem · Outros · TOTAL,
+               then the IOF row, per-column totals and a signature line.
+               Unmatched statement transactions render with a
                "sem comprovante — justificativa" note so the reviewer can
                hand-write a reason.
   Page 2..N  — every matched receipt as an image, packed into a 3-column
@@ -30,20 +34,26 @@ from typing import Any, Optional
 
 from ..config import settings
 from ..db import database as db
-from . import report_profile, report_users, statement_categories, statement_notes
+from . import (
+    report_profile,
+    report_users,
+    statement_categories,
+    statement_costcenters,
+    statement_labels,
+    statement_notes,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # ─── Category bucketing ─────────────────────────────────────────────────────
 # Maps a receipt/transaction category (+ free-text label) onto one of the
-# five form columns.
-_COLS = ["combustivel", "alimentacao", "taxi", "material", "outros"]
+# four form columns of the "Prestação de Contas - Cartão Corporativo" form.
+_COLS = ["alimentacao", "abastecimento", "hospedagem", "outros"]
 _COL_LABELS = {
-    "combustivel": "Combustível,\nEstacionamento",
-    "alimentacao": "Despesas com\nalimentação",
-    "taxi": "Taxi /\nCorreios",
-    "material": "Material para\nescritório em geral",
+    "alimentacao": "Alimentação",
+    "abastecimento": "Abastecimento\nEstac./Taxi",
+    "hospedagem": "Hospedagem",
     "outros": "Outros",
 }
 
@@ -65,19 +75,45 @@ _FUEL_PARKING_KEYWORDS = (
 def _bucket(category: Optional[str], label: Optional[str]) -> str:
     cat = (category or "").lower()
     text = (label or "").lower()
-    # An explicit `fuel` category (user override) wins over keyword sniffing.
-    if cat == "fuel":
-        return "combustivel"
-    if any(k in text for k in _FUEL_PARKING_KEYWORDS):
-        return "combustivel"
     if cat == "meals":
         return "alimentacao"
-    if cat == "transportation":
-        return "taxi"
-    if cat == "office_supplies":
-        return "material"
-    # travel, lodging, other, unknown → Outros
+    # Fuel, parking and taxi/transport all share one column on this form.
+    if cat in ("fuel", "transportation"):
+        return "abastecimento"
+    if any(k in text for k in _FUEL_PARKING_KEYWORDS):
+        return "abastecimento"
+    if cat == "lodging":
+        return "hospedagem"
+    # travel, office_supplies, other, unknown → Outros
     return "outros"
+
+
+# Default uppercase "Detalhamento da despesa" label by category. The user can
+# override per line (statement_labels) for specifics like "MOTORISTA RAYLANDER".
+_DETALHE_BY_CATEGORY = {
+    "meals": "ALIMENTAÇÃO",
+    "fuel": "ABASTECIMENTO",
+    "lodging": "HOSPEDAGEM",
+    "travel": "VIAGEM",
+    "office_supplies": "MATERIAL",
+}
+
+
+def auto_detalhe(category: Optional[str], label: Optional[str]) -> str:
+    """A sensible default Detalhamento label from the charge's category and
+    description (uppercased). Transport rows resolve to UBER/TAXI when the
+    descriptor says so, else the category term, else the cleaned descriptor."""
+    up = (label or "").strip().upper()
+    cat = (category or "").lower()
+    if cat == "transportation":
+        if "UBER" in up:
+            return "UBER"
+        if "TAXI" in up or "TÁXI" in up:
+            return "TAXI"
+        return "TRANSPORTE"
+    if cat in _DETALHE_BY_CATEGORY:
+        return _DETALHE_BY_CATEGORY[cat]
+    return up or "—"
 
 
 # ─── Money / date formatting (pt-BR) ────────────────────────────────────────
@@ -226,6 +262,20 @@ def _receipt_meta(r: Optional[dict]) -> dict:
         return {}
 
 
+def _joined_cost_centers(ms: list[dict]) -> str:
+    """Comma-joined unique cost centers from a transaction's matched receipts.
+    Empty when none of them carry a `cost_centers` value — the caller then
+    falls back to the per-line override / profile default."""
+    seen: list[str] = []
+    for m in ms:
+        raw = (_receipt_meta_from_match(m).get("cost_centers") or "").strip()
+        for part in raw.split(","):
+            p = part.strip()
+            if p and p not in seen:
+                seen.append(p)
+    return ", ".join(seen)
+
+
 def _assemble(statement_id: int) -> dict[str, Any]:
     """Gather everything the templates need into one dict."""
     statement = db.get_statement_by_id(statement_id)
@@ -235,6 +285,8 @@ def _assemble(statement_id: int) -> dict[str, Any]:
     matches = db.get_matches_for_statement(statement_id)
     notes = statement_notes.get_notes(statement_id)
     cat_overrides = statement_categories.get_categories(statement_id)
+    label_overrides = statement_labels.get_labels(statement_id)
+    cc_overrides = statement_costcenters.get_cost_centers(statement_id)
     # transaction_index → [match rows]
     by_idx: dict[int, list] = {}
     for m in matches:
@@ -260,9 +312,19 @@ def _assemble(statement_id: int) -> dict[str, Any]:
         col = _bucket(category, label)
 
         row = {
+            "index": i,  # transaction_index — used by the editable-table modal
+            "receipt_ids": [m.get("receipt_id") for m in ms],
             "date": _fmt_date_br(t.get("date")),
             "conta": "",  # filled from profile below
-            "detalhe": label.upper().strip() or "—",
+            # Detalhamento: per-line override wins, else an auto label.
+            "detalhe": label_overrides.get(i) or auto_detalhe(category, label),
+            # Raw bank descriptor — kept for the open-items page, which needs
+            # the identifying vendor text rather than the generic auto label.
+            "desc": label,
+            # Centro de Custo+Uneg: matched → the receipt(s)' cost centers
+            # (listed); else the per-line override. Profile default is filled
+            # at render time when this is blank.
+            "cost_center": (_joined_cost_centers(ms) if ms else cc_overrides.get(i, "")),
             "col": col,
             "amount": amount,
             "matched": bool(ms),
@@ -319,7 +381,7 @@ def _front_page_html(data: dict, profile: dict) -> str:
     grand_total = sum(col_totals.values())
 
     default_conta = profile.get("conta_contabil") or ""
-    projeto = escape(profile.get("projeto") or "")
+    default_cc = profile.get("centro_custo") or ""
 
     def _conta_for(col: str) -> str:
         # Per-column GL account, falling back to the single default.
@@ -341,42 +403,41 @@ def _front_page_html(data: dict, profile: dict) -> str:
                 detalhe += f' <span class="noreceipt">(sem comprovante — {escape(note)})</span>'
             else:
                 detalhe += ' <span class="noreceipt">(sem comprovante — justificativa: ____________)</span>'
+        cc = escape(r.get("cost_center") or default_cc)
         body_rows.append(
             f"<tr>"
             f'<td class="dt">{escape(r["date"])}</td>'
+            f'<td class="cc">{cc}</td>'
             f'<td class="ct">{_conta_for(r["col"])}</td>'
             f'<td class="ds">{detalhe}</td>'
             f"{_amount_cells(r['col'], r['amount'])}"
             f'<td class="num tot">{_fmt_brl(r["amount"])}</td>'
-            f'<td class="pj">{projeto}</td>'
             f"</tr>"
         )
 
     if iof:
         body_rows.append(
             f"<tr>"
-            f'<td class="dt"></td><td class="ct">{_conta_for("outros")}</td>'
+            f'<td class="dt"></td><td class="cc">{escape(default_cc)}</td>'
+            f'<td class="ct">{_conta_for("outros")}</td>'
             f'<td class="ds">IOF</td>'
             f"{_amount_cells('outros', iof)}"
             f'<td class="num tot">{_fmt_brl(iof)}</td>'
-            f'<td class="pj"></td>'
             f"</tr>"
         )
 
     # A couple of blank rows like the printed form, then the totals row.
+    # 4 lead columns (Data, CC, Conta, Detalhamento) + category cols + TOTAL.
+    blank_cells = "".join("<td></td>" for _ in range(4 + len(_COLS) + 1))
     for _ in range(2):
-        body_rows.append(
-            '<tr class="blank"><td></td><td></td><td></td>'
-            + "".join("<td></td>" for _ in _COLS)
-            + "<td></td><td></td></tr>"
-        )
+        body_rows.append(f'<tr class="blank">{blank_cells}</tr>')
 
     total_row = (
         '<tr class="grand">'
-        "<td></td><td></td><td></td>"
+        '<td colspan="4" class="totlbl">TOTAL</td>'
         + "".join(f'<td class="num">{_fmt_brl(col_totals[c])}</td>' for c in _COLS)
         + f'<td class="num tot">{_fmt_brl(grand_total)}</td>'
-        + "<td></td></tr>"
+        + "</tr>"
     )
 
     logo = _logo_data_uri()
@@ -386,68 +447,34 @@ def _front_page_html(data: dict, profile: dict) -> str:
         else (f'<div class="logo-text">{escape(profile.get("company_name") or "")}</div>')
     )
 
-    # WeasyPrint doesn't reliably paint native <input checked> boxes, so use
-    # unicode glyphs — ☑ for the active kind, ☐ for the other.
-    is_reembolso = profile.get("expense_kind") == "reembolso"
-    reembolso_box = "☑" if is_reembolso else "☐"
-    cartao_box = "☐" if is_reembolso else "☑"
-
-    stmt_date = ""
-    # Use the latest transaction date as the report date if available.
-    dates = [r["date"] for r in rows if r["date"]]
-    if dates:
-        stmt_date = sorted(dates)[-1]
-
     col_headers = "".join(
         f'<th class="cat">{escape(_COL_LABELS[c]).replace(chr(10), "<br>")}</th>' for c in _COLS
     )
 
-    return f"""
-    <section class="front">
-      <table class="header">
-        <tr>
-          <td class="hl">{logo_html}</td>
-          <td class="ht">{escape(profile.get("report_title") or "")}</td>
-          <td class="hc">
-            <div><span>Código</span><b>{escape(profile.get("codigo") or "")}</b></div>
-            <div><span>Data</span><b>{escape(stmt_date)}</b></div>
-            <div><span>Página</span><b>01 / 01</b></div>
-          </td>
-        </tr>
-      </table>
+    nome = escape(profile.get("nome") or "")
+    # Vencimento may arrive ISO (from a date picker) or as free text; show pt-BR.
+    vencimento = escape(_fmt_date_br(profile.get("vencimento")) or "")
+    num_cartao = escape(profile.get("num_cartao") or "")
+    is_reembolso = profile.get("expense_kind") == "reembolso"
 
-      <table class="emp">
-        <tr>
-          <td class="lbl r">Nome:</td><td class="val"><b>{escape(profile.get("nome") or "")}</b></td>
-          <td class="lbl r">Data:</td><td class="val"><b>{escape(stmt_date)}</b></td>
-          <td class="lbl r">C/C</td><td class="val"><b>{escape(profile.get("cost_center") or "")}</b></td>
-        </tr>
-        <tr>
-          <td class="lbl r">Motivo do Gasto:</td><td class="val"><b>{escape(profile.get("motivo") or "")}</b></td>
-          <td colspan="2" class="chk"><span class="cbx">{reembolso_box}</span> Reembolso despesa</td>
-          <td colspan="2" class="chk"><span class="cbx">{cartao_box}</span> Cartão Crédito</td>
-        </tr>
-        <tr>
-          <td class="lbl r">Local:</td><td class="val"><b>{escape(profile.get("local") or "")}</b></td>
-          <td colspan="2"></td>
-          <td class="lbl r">Moeda:</td><td class="val">{escape(profile.get("moeda") or "R$")}</td>
-        </tr>
-      </table>
+    # Identity band row 2: card → Vencimento + Nº Cartão; reimbursement →
+    # a "Reembolso de despesas" marker instead (no card-specific fields).
+    if is_reembolso:
+        emp_row2 = (
+            '<tr><td class="lbl r">Tipo:</td>'
+            '<td class="val" colspan="3"><b>Reembolso de despesas</b></td></tr>'
+        )
+    else:
+        emp_row2 = (
+            f'<tr><td class="lbl r">VENCIMENTO:</td><td class="val"><b>{vencimento}</b></td>'
+            f'<td class="lbl r">Nº Cartão:</td><td class="val"><b>{num_cartao}</b></td></tr>'
+        )
 
-      <table class="grid">
-        <thead>
-          <tr>
-            <th>Data</th><th>Conta Contábil</th><th>Detalhamento da despesa</th>
-            {col_headers}
-            <th>Total</th><th>Projeto</th>
-          </tr>
-        </thead>
-        <tbody>
-          {"".join(body_rows)}
-          {total_row}
-        </tbody>
-      </table>
-
+    # Footer differs by kind: a reimbursement needs payee / bank details so the
+    # person can be paid back; the corporate-card form just needs the signature
+    # line "Assinatura {nome} + Aprovador imediato".
+    if is_reembolso:
+        footer_html = f"""
       <table class="footer">
         <tr>
           <td class="bank">
@@ -458,23 +485,61 @@ def _front_page_html(data: dict, profile: dict) -> str:
             <div><span>CPF / RG:</span><u>{escape(profile.get("cpf_rg") or "")}</u></div>
           </td>
           <td class="pay">
-            <div><span>No Cheque</span><u></u></div>
-            <div><span>Data pagamento</span><u></u></div>
             <div><span>Valor total</span><u>{_fmt_brl(grand_total)}</u></div>
           </td>
         </tr>
       </table>
-
       <table class="sign">
         <tr>
-          <td><div class="sigline"></div><div class="siglbl">Assinatura</div></td>
-          <td><div class="sigline"></div><div class="siglbl">Autorizado</div></td>
+          <td class="sdate"><div class="sigline"></div><div class="siglbl">Data</div></td>
+          <td><div class="sigline"></div><div class="siglbl">Assinatura {nome} + Aprovador imediato</div></td>
         </tr>
+      </table>"""
+    else:
+        footer_html = f"""
+      <table class="sign cartao">
         <tr>
-          <td><div class="sigline"></div><div class="siglbl">Data</div></td>
-          <td><div class="sigline"></div><div class="siglbl">Data</div></td>
+          <td class="sdate"><div class="sigline"></div><div class="siglbl">Data</div></td>
+          <td><div class="sigline"></div><div class="siglbl">Assinatura {nome} + Aprovador imediato:</div></td>
+        </tr>
+      </table>"""
+
+    return f"""
+    <section class="front">
+      <table class="header">
+        <tr>
+          <td class="hl">{logo_html}</td>
+          <td class="ht">{escape(profile.get("report_title") or "")}</td>
+          <td class="hc">
+            <div><span>Código</span><b>{escape(profile.get("codigo") or "")}</b></div>
+            <div><span>Página</span><b>01 / 01</b></div>
+          </td>
         </tr>
       </table>
+
+      <table class="emp">
+        <tr>
+          <td class="lbl r">Nome:</td><td class="val" colspan="3"><b>{nome}</b></td>
+        </tr>
+        {emp_row2}
+      </table>
+
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Data</th><th>Centro de Custo+Uneg</th><th>Conta Contábil</th>
+            <th>Detalhamento da despesa</th>
+            {col_headers}
+            <th>TOTAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {"".join(body_rows)}
+          {total_row}
+        </tbody>
+      </table>
+
+      {footer_html}
     </section>
     """
 
@@ -501,7 +566,7 @@ def _open_items_html(data: dict) -> str:
             "<div class='oi-item'>"
             "<div class='oi-head'>"
             f"<span class='oi-date'>{escape(r.get('date') or '')}</span>"
-            f"<span class='oi-desc'>{escape(r.get('detalhe') or '—')}</span>"
+            f"<span class='oi-desc'>{escape(r.get('desc') or r.get('detalhe') or '—')}</span>"
             f"<span class='oi-cat'>{escape(col_label)}</span>"
             f"<span class='oi-amt'>{_fmt_brl(r.get('amount'))}</span>"
             "</div>"
@@ -592,15 +657,16 @@ table { border-collapse: collapse; width: 100%; }
 .grid { margin-top: 4px; }
 .grid th, .grid td { border: 1px solid #000; padding: 2px 4px; }
 .grid thead th { background: #fff; font-weight: 700; text-align: center; vertical-align: middle; font-size: 8px; }
-.grid th.cat { width: 8%; }
-.grid td.dt { white-space: nowrap; width: 7%; }
+.grid th.cat { width: 9%; }
+.grid td.dt { white-space: nowrap; width: 7%; text-align: center; }
+.grid td.cc { width: 9%; text-align: center; white-space: nowrap; }
 .grid td.ct { width: 8%; text-align: center; }
-.grid td.ds { width: 26%; }
+.grid td.ds { width: 22%; }
 .grid td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .grid td.tot { font-weight: 600; }
-.grid td.pj { width: 7%; }
 .grid tr.blank td { height: 16px; }
 .grid tr.grand td { border-top: 2px solid #000; font-weight: 700; height: 20px; }
+.grid tr.grand td.totlbl { text-align: right; padding-right: 8px; }
 .noreceipt { color: #b00; font-style: italic; font-size: 7.5px; }
 
 .footer { margin-top: 10px; }
@@ -611,10 +677,12 @@ table { border-collapse: collapse; width: 100%; }
 .footer u, .footer .bank u, .footer .pay u { flex: 1; border-bottom: 1px solid #000; min-height: 12px; text-decoration: none; padding-left: 4px; }
 .footer .pay span { white-space: nowrap; min-width: 80px; }
 
-.sign { margin-top: 22px; }
+.sign { margin-top: 28px; }
 .sign td { width: 50%; padding: 0 24px; border: none; text-align: center; }
+.sign .sdate { width: 22%; }
 .sign .sigline { border-bottom: 1px solid #000; height: 26px; }
 .sign .siglbl { font-weight: 700; margin-top: 2px; margin-bottom: 14px; }
+.sign.cartao { margin-top: 40px; }
 
 /* Receipt grid as a table — each <tr> stays together across page breaks
    so an image is never split from its caption. */
@@ -673,10 +741,9 @@ def cardholder_name(user_id: Optional[int], statement: Optional[dict] = None) ->
 # they always come from the global profile — never the resolved user.
 _ACCOUNT_KEYS = (
     "conta_contabil",
-    "conta_combustivel",
     "conta_alimentacao",
-    "conta_taxi",
-    "conta_material",
+    "conta_abastecimento",
+    "conta_hospedagem",
     "conta_outros",
 )
 
@@ -686,14 +753,21 @@ def _with_global_accounts(profile: dict) -> dict:
     return {**profile, **{k: g.get(k, "") for k in _ACCOUNT_KEYS}}
 
 
-def build_statement_report(statement_id: int, user_id: Optional[int] = None) -> bytes:
+def build_statement_report(
+    statement_id: int,
+    user_id: Optional[int] = None,
+    vencimento: Optional[str] = None,
+) -> bytes:
     """Render the combined expense-report PDF for one statement. Returns the
     PDF as bytes. `user_id` selects a roster user's profile; if omitted we
-    try to guess by cardholder name, then fall back to the global profile."""
+    try to guess by cardholder name, then fall back to the global profile.
+    `vencimento` is the statement due date printed in the header band."""
     from weasyprint import HTML
 
     data = _assemble(statement_id)
     profile = _with_global_accounts(_resolve_profile(user_id, data["statement"]))
+    if vencimento:
+        profile["vencimento"] = vencimento
 
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
@@ -713,6 +787,58 @@ def build_statement_report(statement_id: int, user_id: Optional[int] = None) -> 
         len(pdf_bytes),
     )
     return pdf_bytes
+
+
+def report_rows_view(
+    statement_id: int,
+    user_id: Optional[int] = None,
+    vencimento: Optional[str] = None,
+) -> dict[str, Any]:
+    """JSON-ready view of the front-page expense table for the editable
+    pre-export modal: every row with its effective Conta Contábil, Centro de
+    Custo and column, plus column labels, per-column totals and header fields.
+    The modal renders + edits these, then exports the PDF (which re-derives the
+    same values, so saved edits flow straight through)."""
+    data = _assemble(statement_id)
+    profile = _with_global_accounts(_resolve_profile(user_id, data["statement"]))
+    if vencimento:
+        profile["vencimento"] = vencimento
+    default_conta = profile.get("conta_contabil") or ""
+    default_cc = profile.get("centro_custo") or ""
+
+    col_totals = {c: 0.0 for c in _COLS}
+    out_rows = []
+    for r in data["rows"]:
+        col = r["col"]
+        col_totals[col] += r["amount"]
+        out_rows.append(
+            {
+                "index": r["index"],
+                "receipt_ids": r["receipt_ids"],
+                "matched": r["matched"],
+                "date": r["date"],
+                "cost_center": r["cost_center"],  # raw (receipt-joined or override)
+                "cost_center_effective": r["cost_center"] or default_cc,
+                "conta": profile.get(f"conta_{col}") or default_conta or "",
+                "detalhe": r["detalhe"],
+                "col": col,
+                "amount": r["amount"],
+                "note": r["note"],
+            }
+        )
+    iof = data["iof"]
+    if iof:
+        col_totals["outros"] += iof
+    return {
+        "statement_id": statement_id,
+        "columns": [{"key": c, "label": _COL_LABELS[c].replace("\n", " ")} for c in _COLS],
+        "rows": out_rows,
+        "iof": iof,
+        "totals": col_totals,
+        "grand_total": sum(col_totals.values()),
+        "nome": profile.get("nome") or "",
+        "vencimento": _fmt_date_br(profile.get("vencimento")) or "",
+    }
 
 
 # ─── Reimbursement report (receipts only — no statement, no matching) ────────
@@ -735,7 +861,11 @@ def _assemble_reimbursement(receipts: list) -> dict[str, Any]:
             {
                 "date": _fmt_date_br(meta.get("date")),
                 "conta": "",
+                # Reimbursement receipts have clean vendor names, so the vendor
+                # is the most useful Detalhamento (cf. cryptic card descriptors).
                 "detalhe": label.upper().strip() or "—",
+                "desc": label,
+                "cost_center": "",
                 "col": col,
                 "amount": amount,
                 "matched": True,  # reimbursement rows always have a receipt

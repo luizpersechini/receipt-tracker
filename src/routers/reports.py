@@ -95,14 +95,18 @@ async def guess_statement_user(statement_id: int):
 
 
 @router.get("/statements/{statement_id}/report")
-async def statement_report_pdf(statement_id: int, user_id: int | None = Query(None)):
+async def statement_report_pdf(
+    statement_id: int,
+    user_id: int | None = Query(None),
+    vencimento: str | None = Query(None),
+):
     """Build the combined 'Prestação de Contas' PDF (front-page summary +
     receipt-image grid) for one reconciled statement. `user_id` picks a
     roster user's profile; omitted → guess by cardholder name → global
-    default."""
+    default. `vencimento` is the statement due date printed in the header."""
     try:
         pdf_bytes = await asyncio.to_thread(
-            expense_report_pdf.build_statement_report, statement_id, user_id
+            expense_report_pdf.build_statement_report, statement_id, user_id, vencimento
         )
         statement = await asyncio.to_thread(db.get_statement_by_id, statement_id)
         nome = await asyncio.to_thread(expense_report_pdf.cardholder_name, user_id, statement)
@@ -128,6 +132,27 @@ async def statement_report_pdf(statement_id: int, user_id: int | None = Query(No
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
     )
+
+
+@router.get("/statements/{statement_id}/report-rows")
+async def statement_report_rows(
+    statement_id: int,
+    user_id: int | None = Query(None),
+    vencimento: str | None = Query(None),
+):
+    """JSON view of the front-page expense table for the editable pre-export
+    modal. Same resolution as the PDF (cardholder profile, GL accounts,
+    cost-center default), so what you edit here is what the PDF prints."""
+    try:
+        view = await asyncio.to_thread(
+            expense_report_pdf.report_rows_view, statement_id, user_id, vencimento
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("statement_report_rows failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse(view)
 
 
 @router.get("/reports/reimbursement")
