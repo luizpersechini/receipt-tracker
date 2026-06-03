@@ -642,10 +642,11 @@
                   />
                 </label>
                 <select id="rfStatus" class="fbar-select">
-                  <option value="">All status</option>
-                  <option value="matched">Matched</option>
-                  <option value="unmatched">Unmatched</option>
+                  <option value="active">Active</option>
                   <option value="pending">Pending</option>
+                  <option value="unmatched">Unmatched</option>
+                  <option value="matched">Archived (matched)</option>
+                  <option value="all">All</option>
                 </select>
                 <select id="rfCategory" class="fbar-select">
                   <option value="">Any category</option>
@@ -1815,6 +1816,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=48"></script>
+    <script src="/static/js/app.js?v=49"></script>
   </body>
 </html>

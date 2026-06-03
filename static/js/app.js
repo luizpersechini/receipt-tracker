@@ -177,19 +177,25 @@ const _FILTER_DEFAULTS = {
   to: "",
   min: "",
   max: "",
-  status: "",
+  // "active" = the default bucket: hides matched (archived) receipts.
+  status: "active",
   category: "",
   currency: "",
 };
 let receiptFilters = (() => {
+  let f;
   try {
-    return {
+    f = {
       ..._FILTER_DEFAULTS,
       ...JSON.parse(localStorage.getItem("rt.filter.receipts") || "{}"),
     };
   } catch {
-    return { ..._FILTER_DEFAULTS };
+    f = { ..._FILTER_DEFAULTS };
   }
+  // Migrate the legacy empty "all" status to the new "active" default, so
+  // matched (archived) receipts are hidden from the main bucket by default.
+  if (!f.status) f.status = "active";
+  return f;
 })();
 let receiptSort = (() => {
   try {
@@ -223,7 +229,7 @@ function _saveSort(key, state) {
   localStorage.setItem(`rt.sort.${key}`, JSON.stringify(state));
 }
 
-function applyReceiptFilters(receipts) {
+function applyReceiptFilters(receipts, opts = {}) {
   const f = receiptFilters;
   return receipts.filter((r) => {
     const m = (() => {
@@ -261,7 +267,17 @@ function applyReceiptFilters(receipts) {
       const max = parseFloat(f.max);
       if (isNaN(amt) || amt > max) return false;
     }
-    if (f.status && (r.match_status || "pending") !== f.status) return false;
+    if (!opts.ignoreStatus) {
+      const st = f.status || "active";
+      const ms = r.match_status || "pending";
+      // "active" hides archived (matched) receipts; "all" shows everything;
+      // anything else is an exact status match.
+      if (st === "active") {
+        if (ms === "matched") return false;
+      } else if (st !== "all" && ms !== st) {
+        return false;
+      }
+    }
     if (f.category && (m.category || "other") !== f.category) return false;
     if (f.currency && (m.currency || "") !== f.currency) return false;
     return true;
@@ -315,7 +331,10 @@ function _refreshSortIndicators(tableKey, sort) {
 function _updateFilterBadge() {
   const f = receiptFilters;
   // Count populated filter fields (anything non-empty counts as 1 active).
-  const count = Object.values(f).filter((v) => v !== "" && v != null).length;
+  // The default "active" status is not a user-applied filter, so don't count it.
+  const count = Object.entries(f).filter(
+    ([k, v]) => v !== "" && v != null && !(k === "status" && v === "active"),
+  ).length;
   const badge = $("rfActiveCount");
   const clear = $("rfClearBtn");
   if (!badge || !clear) return;
@@ -364,7 +383,11 @@ function updateProgress(receipts) {
   // Progress chip reflects whatever's currently visible — month + filters.
   // Keeping these in sync avoids confusion when the user narrows to e.g.
   // "category=meals" and the chip would otherwise show all-category counts.
-  const filtered = applyReceiptFilters(filterByMonth(receipts));
+  // Ignore the status filter here so archiving (hiding matched) doesn't zero
+  // out the reconciliation progress — the strip always reflects real counts.
+  const filtered = applyReceiptFilters(filterByMonth(receipts), {
+    ignoreStatus: true,
+  });
   const strip = $("progressStrip");
   if (!filtered.length) {
     strip.classList.remove("visible");
@@ -462,13 +485,25 @@ function renderReceipts(receipts) {
   $("navReceiptCount").textContent = filtered.length;
 
   if (!filtered.length) {
-    const msg =
-      currentMonth === "all" ? "No receipts yet" : "No receipts for this month";
+    // If the active bucket is empty only because matched receipts are
+    // archived, point the user at the Archived/All filter instead of "no
+    // receipts".
+    const hiddenArchived =
+      receiptFilters.status === "active" &&
+      filterByMonth(receipts).some((r) => r.match_status === "matched");
+    const msg = hiddenArchived
+      ? "All receipts here are archived"
+      : currentMonth === "all"
+        ? "No receipts yet"
+        : "No receipts for this month";
+    const sub = hiddenArchived
+      ? "They're matched. Set the status filter to <b>Archived</b> or <b>All</b> to view them."
+      : "Upload a receipt image or PDF to get started.";
     tbody.innerHTML = `<tr class="empty"><td colspan="13">
       <div class="empty-state">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <h3>${msg}</h3>
-        <p>Upload a receipt image or PDF to get started.</p>
+        <p>${sub}</p>
       </div>
     </td></tr>`;
     updateBulkBar();
@@ -4781,9 +4816,9 @@ checkOllama().catch(() => {});
   if (clearBtn) {
     clearBtn.addEventListener("click", () => {
       receiptFilters = { ..._FILTER_DEFAULTS };
-      fields.forEach(([id]) => {
+      fields.forEach(([id, key]) => {
         const el = document.getElementById(id);
-        if (el) el.value = "";
+        if (el) el.value = _FILTER_DEFAULTS[key] || "";
       });
       _saveReceiptFilters();
       _updateFilterBadge();
