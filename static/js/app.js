@@ -2349,14 +2349,16 @@ function closeReportModal() {
   $("reportModal").classList.remove("open");
 }
 
-// Fetch + trigger download of the statement report PDF. Shared by the direct
-// "Download PDF" button and the Review-&-edit modal's "Export PDF".
-async function _downloadReport(sid, uid, venc) {
+// Fetch + trigger download of the statement report. `fmt` is "pdf" (combined
+// PDF) or "xlsx" (front-page spreadsheet). Shared by the report modal and the
+// Review-&-edit modal.
+async function _downloadReport(sid, uid, venc, fmt = "pdf") {
   const params = new URLSearchParams();
   if (uid) params.set("user_id", uid);
   if (venc) params.set("vencimento", venc);
   const qs = params.toString() ? `?${params}` : "";
-  const res = await fetch(`/api/statements/${sid}/report${qs}`);
+  const path = fmt === "xlsx" ? "report.xlsx" : "report";
+  const res = await fetch(`/api/statements/${sid}/${path}${qs}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || res.statusText);
@@ -2365,30 +2367,33 @@ async function _downloadReport(sid, uid, venc) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `prestacao_contas_statement_${sid}.pdf`;
+  a.download = `prestacao_contas_statement_${sid}.${fmt}`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
 }
 
-async function _generateReport() {
+async function _generateReport(fmt = "pdf") {
   const sid = Reconcile.state && Reconcile.state.statementId;
   if (sid == null) return;
-  const btn = $("reportGenBtn");
+  const xlsx = fmt === "xlsx";
+  const btn = $(xlsx ? "reportXlsxBtn" : "reportGenBtn");
   const original = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<span class="spin"></span> Building PDF…';
+  btn.innerHTML = `<span class="spin"></span> Building ${xlsx ? "XLSX" : "PDF"}…`;
   $("reportStatus").className = "status-msg";
-  $("reportStatus").textContent =
-    "Rendering receipts — this can take a moment…";
+  $("reportStatus").textContent = xlsx
+    ? "Building spreadsheet…"
+    : "Rendering receipts — this can take a moment…";
   try {
     const uid = $("reportUserSelect").value;
     const venc = $("reportVencimento") ? $("reportVencimento").value : "";
-    await _downloadReport(sid, uid, venc);
+    await _downloadReport(sid, uid, venc, fmt);
     $("reportStatus").className = "status-msg ok";
-    $("reportStatus").textContent = "Report downloaded.";
-    loadReportHistory().catch(() => {});
+    $("reportStatus").textContent =
+      `${xlsx ? "Spreadsheet" : "Report"} downloaded.`;
+    if (!xlsx) loadReportHistory().catch(() => {});
     setTimeout(closeReportModal, 1200);
   } catch (e) {
     $("reportStatus").className = "status-msg err";
@@ -2402,6 +2407,8 @@ async function _generateReport() {
 (function _wireReportModal() {
   const open = $("reconReportBtn");
   if (open) open.addEventListener("click", openReportModal);
+  const xlsx = $("reportXlsxBtn");
+  if (xlsx) xlsx.addEventListener("click", () => _generateReport("xlsx"));
   const gen = $("reportGenBtn");
   if (gen) gen.addEventListener("click", _generateReport);
   // No backdrop-click-to-close (avoid discarding a half-filled form).
@@ -2603,16 +2610,24 @@ async function _reportEditSave(el, kind, value) {
   }
 }
 
-async function _reportEditExport() {
-  const btn = $("reportEditExportBtn");
+async function _reportEditExport(fmt = "pdf") {
+  const xlsx = fmt === "xlsx";
+  const btn = $(xlsx ? "reportEditXlsxBtn" : "reportEditExportBtn");
   const orig = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<span class="spin"></span> Building PDF…';
-  _reportEditStatus("Rendering — this can take a moment…");
+  btn.innerHTML = `<span class="spin"></span> Building ${xlsx ? "XLSX" : "PDF"}…`;
+  _reportEditStatus(
+    xlsx ? "Building spreadsheet…" : "Rendering — this can take a moment…",
+  );
   try {
-    await _downloadReport(_reportEdit.sid, _reportEdit.uid, _reportEdit.venc);
-    _reportEditStatus("Report downloaded.", "ok");
-    loadReportHistory().catch(() => {});
+    await _downloadReport(
+      _reportEdit.sid,
+      _reportEdit.uid,
+      _reportEdit.venc,
+      fmt,
+    );
+    _reportEditStatus(`${xlsx ? "Spreadsheet" : "Report"} downloaded.`, "ok");
+    if (!xlsx) loadReportHistory().catch(() => {});
   } catch (e) {
     _reportEditStatus("Failed: " + e.message, "err");
   } finally {
@@ -2629,7 +2644,9 @@ async function _reportEditExport() {
       openReportEditModal();
     });
   const exp = $("reportEditExportBtn");
-  if (exp) exp.addEventListener("click", _reportEditExport);
+  if (exp) exp.addEventListener("click", () => _reportEditExport("pdf"));
+  const expx = $("reportEditXlsxBtn");
+  if (expx) expx.addEventListener("click", () => _reportEditExport("xlsx"));
 })();
 
 // ─── Reimbursement report (receipts only, no statement) ─────────────────────

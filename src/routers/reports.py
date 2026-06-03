@@ -11,6 +11,7 @@ from ..db import database as db
 from ..schemas.reports import ExpenseReportRequest
 from ..services import (
     expense_report_pdf,
+    expense_report_xlsx,
     report_history,
     report_profile,
     report_users,
@@ -130,6 +131,32 @@ async def statement_report_pdf(
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
+
+
+@router.get("/statements/{statement_id}/report.xlsx")
+async def statement_report_xlsx(
+    statement_id: int,
+    user_id: int | None = Query(None),
+    vencimento: str | None = Query(None),
+):
+    """Build + stream the front-page expense table as an **editable .xlsx**
+    (no receipt images). Same cardholder/profile/cost-center resolution as the
+    PDF, so the spreadsheet matches it."""
+    try:
+        xlsx = await asyncio.to_thread(
+            expense_report_xlsx.build_statement_xlsx, statement_id, user_id, vencimento
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("statement_report_xlsx failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    fname = f"prestacao_contas_statement_{statement_id}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type=XLSX_MEDIA_TYPE,
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
     )
 

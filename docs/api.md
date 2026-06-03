@@ -333,6 +333,16 @@ roster cardholder's profile; omitted → guess by name → global default.
 printed in the form header. `Content-Type: application/pdf`, attachment
 download.
 
+### `GET /api/statements/{id}/report.xlsx?user_id=&vencimento=`
+
+Build + stream the **front-page expense table as an editable `.xlsx`** —
+the spreadsheet twin of the PDF front page (header band, the categorised
+table with live `=SUM` column totals, signature line; **no** receipt
+images). Same `user_id` / `vencimento` resolution as the PDF, so the
+numbers match. `Content-Type:
+application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`,
+attachment download. Not recorded in report history (direct download).
+
 ### `GET /api/statements/{id}/report-rows?user_id=&vencimento=`
 
 JSON view of the front-page expense table, for the **Review & edit**

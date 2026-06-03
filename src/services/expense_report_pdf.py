@@ -838,6 +838,9 @@ def report_rows_view(
         "grand_total": sum(col_totals.values()),
         "nome": profile.get("nome") or "",
         "vencimento": _fmt_date_br(profile.get("vencimento")) or "",
+        "codigo": profile.get("codigo") or "",
+        "num_cartao": profile.get("num_cartao") or "",
+        "report_title": profile.get("report_title") or "",
     }
 
 

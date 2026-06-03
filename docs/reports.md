@@ -214,6 +214,16 @@ an open item writes the per-line override. **Export PDF** then builds the
 report, which re-derives the same values. Backed by
 `GET /api/statements/{id}/report-rows` (see [api.md](api.md)).
 
+## XLSX export
+
+Both the **Generate report** modal (**Download XLSX**) and the **Review &
+edit** modal (**Export XLSX**) can download the front-page table as an
+editable `.xlsx` — same layout and numbers as the PDF front page (header
+band + the categorised table with live `=SUM` totals + signature line),
+but **no receipt images**, and built with `openpyxl`. Useful when the
+finance team needs to tweak the spreadsheet in Excel. Endpoint
+`GET /api/statements/{id}/report.xlsx`; not saved to report history.
+
 ## Cardholders (Users tab)
 
 A company has several cardholders, each with their own name, cost centre

@@ -541,6 +541,59 @@ def test_blank_receipt_cc_falls_back_to_profile(report_env):
     assert "20101/AA9" in erp._front_page_html(data, prof)
 
 
+# ─── XLSX export ────────────────────────────────────────────────────────────
+
+
+def test_build_statement_xlsx(report_env):
+    db = report_env
+    import io
+
+    from src.services.expense_report_xlsx import build_statement_xlsx
+
+    txns = [
+        {
+            "date": "2026-03-03",
+            "description": "ALMOCO",
+            "amount": 45.0,
+            "category": "meals",
+            "raw_data": {"section": "domestic"},
+        },
+        {
+            "date": "2026-03-04",
+            "description": "UBER* TRIP",
+            "amount": 20.0,
+            "category": "transportation",
+            "raw_data": {"section": "domestic"},
+        },
+    ]
+    sid = db.save_statement("x.csv", "x.csv", txns)
+    data = build_statement_xlsx(sid, vencimento="2026-03-20")
+    assert data[:2] == b"PK"  # .xlsx is a zip container
+
+    import openpyxl
+
+    ws = openpyxl.load_workbook(io.BytesIO(data)).active
+    assert ws["D1"].value == "Prestação de Contas - Cartão Corporativo"
+    assert ws["A8"].value == "Data"
+    assert ws.cell(row=8, column=2).value == "Centro de Custo+Uneg"
+    assert ws.cell(row=8, column=9).value == "TOTAL"
+    # Row 9: meals → ALIMENTAÇÃO auto label, amount in the Alimentação col (E)
+    # and the TOTAL col (I).
+    assert ws.cell(row=9, column=4).value == "ALIMENTAÇÃO"
+    assert ws.cell(row=9, column=5).value == 45.0
+    assert ws.cell(row=9, column=9).value == 45.0
+    # Row 10: transport → UBER, amount in Abastecimento (F).
+    assert ws.cell(row=10, column=4).value == "UBER"
+    assert ws.cell(row=10, column=6).value == 20.0
+    # A totals row with live SUM formulas exists below the data.
+    sums = [
+        ws.cell(row=rr, column=9).value
+        for rr in range(11, ws.max_row + 1)
+        if isinstance(ws.cell(row=rr, column=9).value, str)
+    ]
+    assert any(s.startswith("=SUM") for s in sums)
+
+
 def test_front_page_has_form_structure(report_env):
     db = report_env
     txns = [
