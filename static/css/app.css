@@ -2445,6 +2445,154 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
+/* Detalhamento + Centro de Custo inline fields (print on every report line) */
+.recon-form-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.recon-detalhe-input,
+.recon-cc-input {
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 7px;
+  min-width: 0;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.recon-detalhe-input {
+  flex: 2;
+  text-transform: uppercase;
+}
+.recon-cc-input {
+  flex: 1;
+}
+.recon-detalhe-input::placeholder,
+.recon-cc-input::placeholder {
+  color: var(--text-3);
+  text-transform: none;
+}
+.recon-detalhe-input:hover,
+.recon-cc-input:hover {
+  border-color: var(--accent-border);
+}
+.recon-detalhe-input:focus,
+.recon-cc-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+.recon-cc-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Review & edit report — editable table modal */
+.report-edit-box {
+  width: min(1080px, 96vw);
+  max-width: 96vw;
+}
+.report-edit-wrap {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 8px;
+}
+.report-edit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.report-edit-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-2);
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.report-edit-table th.num,
+.report-edit-table td.num {
+  text-align: right;
+}
+.report-edit-table tbody td {
+  padding: 4px 9px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: middle;
+}
+.report-edit-table td.re-date,
+.report-edit-table td.re-conta {
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.report-edit-table td.re-amt {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.report-edit-table input,
+.report-edit-table select {
+  width: 100%;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 3px 6px;
+}
+.report-edit-table input:hover,
+.report-edit-table select:hover {
+  border-color: var(--border);
+}
+.report-edit-table input:focus,
+.report-edit-table select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
+}
+.report-edit-table .re-cc {
+  text-transform: uppercase;
+}
+.report-edit-table .re-cc::placeholder {
+  text-transform: none;
+  color: var(--text-3);
+}
+.report-edit-table tfoot .re-tot td {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface-2);
+  border-top: 2px solid var(--border);
+  font-weight: 700;
+  padding: 8px 9px;
+}
+.report-edit-table .re-loading {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-2);
+}
+
 /* Justification editor for open items (unmatched transactions) */
 .recon-note-add {
   margin-top: 6px;

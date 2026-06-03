@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=22" />
+    <link rel="stylesheet" href="/static/css/app.css?v=24" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -1129,6 +1129,12 @@
           <label
             >C/C (cost center)<input type="text" data-k="cost_center"
           /></label>
+          <label
+            >Centro de Custo+Uneg<input
+              type="text"
+              data-k="centro_custo"
+              placeholder="ex.: 20101/AA1"
+          /></label>
           <label>Motivo do Gasto<input type="text" data-k="motivo" /></label>
           <label>Local<input type="text" data-k="local" /></label>
           <label>Projeto<input type="text" data-k="projeto" /></label>
@@ -1166,9 +1172,9 @@
       <div class="modal-box" style="width: 460px; max-width: 92vw">
         <div class="modal-title">Contas contábeis</div>
         <div class="modal-sub">
-          GL accounts used in the report's Conta Contábil column. These are
-          company-wide (shared across all cardholders). A category falls back to
-          the default account when left blank.
+          GL accounts for the report's Conta Contábil column (one per form
+          column). Company-wide — shared across all cardholders. A column falls
+          back to the default account when left blank.
         </div>
 
         <div
@@ -1180,18 +1186,15 @@
             >Conta padrão<input type="text" data-k="conta_contabil"
           /></label>
           <label
-            >Combustível / Estacionamento<input
-              type="text"
-              data-k="conta_combustivel"
-          /></label>
-          <label
             >Alimentação<input type="text" data-k="conta_alimentacao"
           /></label>
           <label
-            >Taxi / Correios<input type="text" data-k="conta_taxi"
+            >Abastecimento / Estac. / Taxi<input
+              type="text"
+              data-k="conta_abastecimento"
           /></label>
           <label
-            >Material escritório<input type="text" data-k="conta_material"
+            >Hospedagem<input type="text" data-k="conta_hospedagem"
           /></label>
           <label>Outros<input type="text" data-k="conta_outros" /></label>
         </div>
@@ -1319,14 +1322,64 @@
         <select class="report-picker" id="reportUserSelect"></select>
         <div class="report-picker-hint" id="reportGuessHint"></div>
 
+        <label class="report-picker-lbl" for="reportVencimento"
+          >Vencimento (due date)</label
+        >
+        <input type="date" class="report-picker" id="reportVencimento" />
+        <div class="report-picker-hint">
+          Prints in the form header. Optional.
+        </div>
+
         <div class="report-foot" style="margin-top: 18px">
           <span class="status-msg" id="reportStatus"></span>
           <span style="flex: 1"></span>
           <button class="btn btn-outline" onclick="closeReportModal()">
             Cancel
           </button>
+          <button class="btn btn-outline" id="reportReviewBtn">
+            Review &amp; edit
+          </button>
           <button class="btn btn-primary" id="reportGenBtn">
             Download PDF
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── REVIEW & EDIT REPORT MODAL (editable table before export) ────────── -->
+    <div class="modal-overlay" id="reportEditModal">
+      <div class="modal-box report-edit-box">
+        <div class="modal-title">Review &amp; edit report</div>
+        <div class="modal-sub">
+          Edit Detalhamento, Centro de Custo+Uneg and the column before
+          exporting. Changes are saved and also show on the Reconcile board.
+        </div>
+
+        <div class="report-edit-wrap">
+          <table class="report-edit-table">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Centro de Custo+Uneg</th>
+                <th>Conta</th>
+                <th>Detalhamento</th>
+                <th>Coluna</th>
+                <th class="num">Valor</th>
+              </tr>
+            </thead>
+            <tbody id="reportEditBody"></tbody>
+            <tfoot id="reportEditFoot"></tfoot>
+          </table>
+        </div>
+
+        <div class="report-foot" style="margin-top: 14px">
+          <span class="status-msg" id="reportEditStatus"></span>
+          <span style="flex: 1"></span>
+          <button class="btn btn-outline" onclick="closeReportEditModal()">
+            Close
+          </button>
+          <button class="btn btn-primary" id="reportEditExportBtn">
+            Export PDF
           </button>
         </div>
       </div>
@@ -1682,6 +1735,16 @@
           </label>
 
           <label class="full"
+            >Centro de Custo+Uneg
+            <input
+              type="text"
+              id="editCostCenters"
+              autocomplete="off"
+              placeholder="ex.: 20101/AA1 — comma-separate to split: 20101/AA1, 20101/AA2"
+            />
+          </label>
+
+          <label class="full"
             >Description
             <textarea id="editDescription" rows="2"></textarea>
           </label>
@@ -1759,6 +1822,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=42"></script>
+    <script src="/static/js/app.js?v=46"></script>
   </body>
 </html>

@@ -1365,10 +1365,35 @@ const Reconcile = (() => {
           ${isIntl ? `<span class="badge badge-accent recon-cur">${_esc(t.original_currency)}</span>` : ""}
           ${progressHtml}
         </div>
+        ${_renderFormFields(t)}
         ${ms.map(_renderMatchTag).join("")}
         ${isMatched ? "" : _renderNoteArea(t)}
       </div>
     `;
+  }
+
+  // Report form fields that print on every line of the front page:
+  // "Detalhamento da despesa" (label) and "Centro de Custo+Uneg". Both are
+  // editable inline and saved per (statement, transaction). Blank cost-center
+  // falls back to the profile default on the report.
+  function _renderFormFields(t) {
+    // Matched rows take their Centro de Custo from the receipt(s) — show it
+    // read-only (edit on the Receipts tab). Unmatched rows keep the editable
+    // per-line override.
+    const cc = t.cost_center_locked
+      ? `<span class="recon-cc-chip" title="From the matched receipt — edit it on the Receipts tab">${
+          t.cost_center ? _esc(t.cost_center) : "CC: profile default"
+        }</span>`
+      : `<input class="recon-cc-input" data-index="${t.index}"
+          value="${_esc(t.cost_center || "")}" placeholder="C. Custo+Uneg"
+          title="Centro de Custo+Uneg (blank = default)" />`;
+    return `
+      <div class="recon-form-row">
+        <input class="recon-detalhe-input" data-index="${t.index}"
+          value="${_esc(t.detalhe || "")}" placeholder="Detalhamento"
+          title="Report 'Detalhamento da despesa' label" />
+        ${cc}
+      </div>`;
   }
 
   // Category control: matched cards show the receipt's category (locked —
@@ -1772,6 +1797,19 @@ const Reconcile = (() => {
         _saveCategory(+sel.dataset.index, sel.value),
       );
     });
+    // Detalhamento + Centro de Custo inline edits (save on change/blur).
+    document.querySelectorAll(".recon-detalhe-input").forEach((inp) => {
+      inp.addEventListener("mousedown", (e) => e.stopPropagation());
+      inp.addEventListener("change", () =>
+        _saveDetalhe(+inp.dataset.index, inp.value),
+      );
+    });
+    document.querySelectorAll(".recon-cc-input").forEach((inp) => {
+      inp.addEventListener("mousedown", (e) => e.stopPropagation());
+      inp.addEventListener("change", () =>
+        _saveCostCenter(+inp.dataset.index, inp.value),
+      );
+    });
   }
 
   async function _saveCategory(txnIndex, category) {
@@ -1785,6 +1823,34 @@ const Reconcile = (() => {
       );
     } catch (e) {
       _flash("err", `Couldn't save category: ${e.message}`);
+    }
+  }
+
+  async function _saveDetalhe(txnIndex, label) {
+    const txn = reconState.txns.find((t) => t.index === txnIndex);
+    if (txn) txn.detalhe = label; // optimistic
+    try {
+      await api(
+        "PUT",
+        `/api/statements/${reconState.statementId}/transactions/${txnIndex}/detalhe`,
+        { detalhe: label },
+      );
+    } catch (e) {
+      _flash("err", `Couldn't save detalhamento: ${e.message}`);
+    }
+  }
+
+  async function _saveCostCenter(txnIndex, value) {
+    const txn = reconState.txns.find((t) => t.index === txnIndex);
+    if (txn) txn.cost_center = value; // optimistic
+    try {
+      await api(
+        "PUT",
+        `/api/statements/${reconState.statementId}/transactions/${txnIndex}/cost-center`,
+        { cost_center: value },
+      );
+    } catch (e) {
+      _flash("err", `Couldn't save cost center: ${e.message}`);
     }
   }
 
@@ -2039,7 +2105,14 @@ const Reconcile = (() => {
     }, 3000);
   }
 
-  return { init, state: reconState };
+  // Re-fetch the current statement's transactions + re-render. Used after
+  // the Review-&-edit modal persists changes so the board reflects them.
+  async function reload() {
+    if (reconState.statementId != null)
+      await _selectStatement(reconState.statementId);
+  }
+
+  return { init, reload, state: reconState };
 })();
 
 // ─── Users (cardholder roster) ─────────────────────────────────────────────
@@ -2049,6 +2122,7 @@ const Reconcile = (() => {
 const _USER_FIELDS = [
   "nome",
   "cost_center",
+  "centro_custo",
   "motivo",
   "local",
   "projeto",
@@ -2110,11 +2184,8 @@ async function _saveAccounts() {
   if (open) open.addEventListener("click", openAccountsModal);
   const save = $("accountsSaveBtn");
   if (save) save.addEventListener("click", _saveAccounts);
-  const overlay = $("accountsModal");
-  if (overlay)
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) closeAccountsModal();
-    });
+  // No backdrop-click-to-close: an accidental outside click shouldn't
+  // discard a half-filled form. Dismiss via Cancel/Save.
 })();
 
 async function loadUsers() {
@@ -2224,11 +2295,7 @@ async function deleteUser(uid) {
   if (add) add.addEventListener("click", () => openUserModal(null));
   const save = $("userSaveBtn");
   if (save) save.addEventListener("click", _saveUser);
-  const overlay = $("userModal");
-  if (overlay)
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) closeUserModal();
-    });
+  // No backdrop-click-to-close (avoid discarding a half-filled form).
 })();
 
 // ─── Expense report (PDF) ──────────────────────────────────────────────────
@@ -2282,6 +2349,29 @@ function closeReportModal() {
   $("reportModal").classList.remove("open");
 }
 
+// Fetch + trigger download of the statement report PDF. Shared by the direct
+// "Download PDF" button and the Review-&-edit modal's "Export PDF".
+async function _downloadReport(sid, uid, venc) {
+  const params = new URLSearchParams();
+  if (uid) params.set("user_id", uid);
+  if (venc) params.set("vencimento", venc);
+  const qs = params.toString() ? `?${params}` : "";
+  const res = await fetch(`/api/statements/${sid}/report${qs}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || res.statusText);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `prestacao_contas_statement_${sid}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function _generateReport() {
   const sid = Reconcile.state && Reconcile.state.statementId;
   if (sid == null) return;
@@ -2294,21 +2384,8 @@ async function _generateReport() {
     "Rendering receipts — this can take a moment…";
   try {
     const uid = $("reportUserSelect").value;
-    const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : "";
-    const res = await fetch(`/api/statements/${sid}/report${qs}`);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail || res.statusText);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `prestacao_contas_statement_${sid}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const venc = $("reportVencimento") ? $("reportVencimento").value : "";
+    await _downloadReport(sid, uid, venc);
     $("reportStatus").className = "status-msg ok";
     $("reportStatus").textContent = "Report downloaded.";
     loadReportHistory().catch(() => {});
@@ -2327,11 +2404,232 @@ async function _generateReport() {
   if (open) open.addEventListener("click", openReportModal);
   const gen = $("reportGenBtn");
   if (gen) gen.addEventListener("click", _generateReport);
-  const overlay = $("reportModal");
-  if (overlay)
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) closeReportModal();
+  // No backdrop-click-to-close (avoid discarding a half-filled form).
+})();
+
+// ─── Review & edit report (editable table before PDF export) ────────────────
+// Loads the assembled report rows, lets you edit Detalhamento / Centro de
+// Custo / column inline (persisted via the same stores the board uses), then
+// exports the PDF — which re-derives the same values, so edits flow through.
+const _reportEdit = { sid: null, uid: "", venc: "", view: null };
+const _COL_TO_CAT = {
+  alimentacao: "meals",
+  abastecimento: "transportation",
+  hospedagem: "lodging",
+  outros: "other",
+};
+
+function _brl(n) {
+  if (n == null || isNaN(n)) return "";
+  return (
+    "R$ " +
+    Number(n).toLocaleString("pt-BR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  );
+}
+
+function _reportEditStatus(msg, kind) {
+  const el = $("reportEditStatus");
+  el.textContent = msg || "";
+  el.className = "status-msg" + (kind ? " " + kind : "");
+}
+
+function closeReportEditModal() {
+  $("reportEditModal").classList.remove("open");
+  // Reflect any persisted edits on the Reconcile board.
+  if (
+    _reportEdit.dirty &&
+    typeof Reconcile !== "undefined" &&
+    typeof Reconcile.reload === "function"
+  ) {
+    Reconcile.reload().catch(() => {});
+  }
+  _reportEdit.dirty = false;
+}
+
+async function openReportEditModal() {
+  const sid = Reconcile.state && Reconcile.state.statementId;
+  if (sid == null) {
+    alert("Pick a statement on the Reconcile tab first.");
+    return;
+  }
+  _reportEdit.sid = sid;
+  _reportEdit.uid = $("reportUserSelect").value || "";
+  _reportEdit.venc = $("reportVencimento") ? $("reportVencimento").value : "";
+  _reportEditStatus("");
+  $("reportEditBody").innerHTML =
+    '<tr><td colspan="6" class="re-loading">Loading…</td></tr>';
+  $("reportEditModal").classList.add("open");
+  await _loadReportEdit();
+}
+
+async function _loadReportEdit() {
+  const { sid, uid, venc } = _reportEdit;
+  const params = new URLSearchParams();
+  if (uid) params.set("user_id", uid);
+  if (venc) params.set("vencimento", venc);
+  const qs = params.toString() ? `?${params}` : "";
+  try {
+    const view = await api("GET", `/api/statements/${sid}/report-rows${qs}`);
+    _reportEdit.view = view;
+    _renderReportEdit(view);
+  } catch (e) {
+    $("reportEditBody").innerHTML =
+      `<tr><td colspan="6" class="re-loading">Failed to load: ${_esc(
+        e.message,
+      )}</td></tr>`;
+  }
+}
+
+function _renderReportEdit(view) {
+  const colOpts = (sel) =>
+    view.columns
+      .map(
+        (c) =>
+          `<option value="${c.key}"${c.key === sel ? " selected" : ""}>${_esc(
+            c.label,
+          )}</option>`,
+      )
+      .join("");
+  $("reportEditBody").innerHTML = view.rows
+    .map(
+      (r) => `
+      <tr data-index="${r.index}" data-matched="${r.matched ? 1 : 0}" data-receipts="${(
+        r.receipt_ids || []
+      ).join(",")}">
+        <td class="re-date">${_esc(r.date)}</td>
+        <td><input class="re-cc" value="${_esc(r.cost_center)}" placeholder="${_esc(
+          r.cost_center_effective || "padrão",
+        )}" title="${r.matched ? "Saved on the matched receipt" : "Per-line override"}" /></td>
+        <td class="re-conta">${_esc(r.conta)}</td>
+        <td><input class="re-detalhe" value="${_esc(r.detalhe)}" /></td>
+        <td><select class="re-col">${colOpts(r.col)}</select></td>
+        <td class="num re-amt">${_brl(r.amount)}</td>
+      </tr>`,
+    )
+    .join("");
+  const breakdown = view.columns
+    .map((c) => `${c.label.split(" ")[0]} ${_brl(view.totals[c.key] || 0)}`)
+    .join(" · ");
+  $("reportEditFoot").innerHTML = `
+    <tr class="re-tot">
+      <td colspan="5">${breakdown}${
+        view.iof ? ` · IOF ${_brl(view.iof)}` : ""
+      }</td>
+      <td class="num">${_brl(view.grand_total)}</td>
+    </tr>`;
+  _wireReportEditCells();
+}
+
+function _wireReportEditCells() {
+  document
+    .querySelectorAll("#reportEditBody .re-detalhe")
+    .forEach((inp) =>
+      inp.addEventListener("change", () =>
+        _reportEditSave(inp, "detalhe", inp.value),
+      ),
+    );
+  document
+    .querySelectorAll("#reportEditBody .re-cc")
+    .forEach((inp) =>
+      inp.addEventListener("change", () =>
+        _reportEditSave(inp, "cost_center", inp.value),
+      ),
+    );
+  document
+    .querySelectorAll("#reportEditBody .re-col")
+    .forEach((sel) =>
+      sel.addEventListener("change", () =>
+        _reportEditSave(sel, "column", sel.value),
+      ),
+    );
+}
+
+async function _reportEditSave(el, kind, value) {
+  const tr = el.closest("tr");
+  const idx = +tr.dataset.index;
+  const matched = tr.dataset.matched === "1";
+  const receiptIds = (tr.dataset.receipts || "")
+    .split(",")
+    .filter(Boolean)
+    .map(Number);
+  const sid = _reportEdit.sid;
+  _reportEditStatus("Saving…");
+  try {
+    if (kind === "detalhe") {
+      await api("PUT", `/api/statements/${sid}/transactions/${idx}/detalhe`, {
+        detalhe: value,
+      });
+    } else if (kind === "cost_center") {
+      if (matched && receiptIds.length) {
+        // Matched line → the receipt(s) drive the CC. Set all of them.
+        await Promise.all(
+          receiptIds.map((rid) =>
+            api("PATCH", `/api/receipts/${rid}`, {
+              cost_centers: value || null,
+            }),
+          ),
+        );
+      } else {
+        await api(
+          "PUT",
+          `/api/statements/${sid}/transactions/${idx}/cost-center`,
+          { cost_center: value },
+        );
+      }
+    } else if (kind === "column") {
+      const cat = _COL_TO_CAT[value] || "other";
+      if (matched && receiptIds.length) {
+        await Promise.all(
+          receiptIds.map((rid) =>
+            api("PATCH", `/api/receipts/${rid}`, { category: cat }),
+          ),
+        );
+      } else {
+        await api(
+          "PUT",
+          `/api/statements/${sid}/transactions/${idx}/category`,
+          { category: cat },
+        );
+      }
+      await _loadReportEdit(); // column shift changes Conta + totals
+    }
+    _reportEdit.dirty = true; // board reloads on close to reflect this
+    _reportEditStatus("Saved.", "ok");
+  } catch (e) {
+    _reportEditStatus("Failed: " + e.message, "err");
+  }
+}
+
+async function _reportEditExport() {
+  const btn = $("reportEditExportBtn");
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Building PDF…';
+  _reportEditStatus("Rendering — this can take a moment…");
+  try {
+    await _downloadReport(_reportEdit.sid, _reportEdit.uid, _reportEdit.venc);
+    _reportEditStatus("Report downloaded.", "ok");
+    loadReportHistory().catch(() => {});
+  } catch (e) {
+    _reportEditStatus("Failed: " + e.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
+
+(function _wireReportEditModal() {
+  const review = $("reportReviewBtn");
+  if (review)
+    review.addEventListener("click", () => {
+      closeReportModal();
+      openReportEditModal();
     });
+  const exp = $("reportEditExportBtn");
+  if (exp) exp.addEventListener("click", _reportEditExport);
 })();
 
 // ─── Reimbursement report (receipts only, no statement) ─────────────────────
@@ -2467,11 +2765,7 @@ async function _generateReimb() {
     const el = $(id);
     if (el) el.addEventListener("change", _refreshReimbCount);
   });
-  const overlay = $("reimbModal");
-  if (overlay)
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) closeReimbModal();
-    });
+  // No backdrop-click-to-close (avoid discarding a half-filled form).
 })();
 
 // ─── Report history (Reports tab) ──────────────────────────────────────────
@@ -3521,6 +3815,7 @@ function openEditModal(r) {
   $("editCity").value = meta.city || "";
   $("editState").value = meta.state || "";
   $("editCountry").value = (meta.country || "").toUpperCase();
+  $("editCostCenters").value = meta.cost_centers || "";
   $("editExpenseType").value = r.expense_type || "corp_card";
   $("editDescription").value = r.description || "";
   $("editStatus").textContent = "";
@@ -3548,9 +3843,7 @@ function _normalizeDate(s) {
 }
 
 $("editCancelBtn").addEventListener("click", closeEditModal);
-$("editModal").addEventListener("click", (e) => {
-  if (e.target === $("editModal")) closeEditModal();
-});
+// No backdrop-click-to-close (avoid discarding a half-filled form).
 
 $("editSaveBtn").addEventListener("click", async () => {
   if (editingReceiptId == null) return;
@@ -3570,6 +3863,7 @@ $("editSaveBtn").addEventListener("click", async () => {
     city: orNull(trim($("editCity").value)),
     state: orNull(trim($("editState").value)),
     country: orNull(trim($("editCountry").value).toUpperCase()),
+    cost_centers: orNull(trim($("editCostCenters").value)),
     description: orNull(trim($("editDescription").value)),
     expense_type: $("editExpenseType").value || null,
   };
