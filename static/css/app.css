@@ -3397,3 +3397,37 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   color: var(--text-3);
   margin-top: 1px;
 }
+
+/* OCR / Vision model picker (sidebar card) */
+#ocrModelCard .ocr-select {
+  width: 100%;
+  margin-top: 2px;
+}
+.ocr-textmodel {
+  margin-top: 8px;
+}
+.ocr-textmodel label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 3px;
+}
+.ocr-model-status {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.ocr-model-status .ocr-warn {
+  color: var(--red);
+}
+.ocr-model-status .ocr-ok {
+  color: var(--text-3);
+}
+.ocr-model-status code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 10.5px;
+}

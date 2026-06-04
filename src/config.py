@@ -22,12 +22,18 @@ class Settings(BaseSettings):
 
     # OCR safety rails — prevent the Mac from getting stuck on a huge model
     # or a huge image. See docs/ollama section in .env.example.
-    ocr_max_image_dim: int = 1536          # longest-edge resize before OCR (px)
-    ocr_max_model_gb: float = 6.0          # refuse to load any model bigger than this
-    ocr_timeout_seconds: float = 120.0     # hard timeout on a single ollama.chat call
-    ocr_concurrency: int = 1               # max simultaneous OCR jobs
-    ocr_warmup: bool = True                # preload the vision model at server start
-    ocr_preprocess: bool = True            # auto-rotate + CLAHE + unsharp before OCR
+    ocr_max_image_dim: int = 1536  # longest-edge resize before OCR (px)
+    ocr_max_model_gb: float = 6.0  # refuse to load any model bigger than this
+    ocr_timeout_seconds: float = 120.0  # hard timeout on a single ollama.chat call
+    ocr_num_ctx: int = 8192  # cap Ollama context window. Without this,
+    # Ollama uses the model's default (128K for
+    # llama3.2/3.1), whose KV cache alone can eat
+    # 20GB+ on a 24GB Mac. Receipt prompts are
+    # short; 8K is ample. Complements ocr_max_model_gb,
+    # which only guards weight size, not the KV cache.
+    ocr_concurrency: int = 1  # max simultaneous OCR jobs
+    ocr_warmup: bool = True  # preload the vision model at server start
+    ocr_preprocess: bool = True  # auto-rotate + CLAHE + unsharp before OCR
 
     # OCR backend selector. "ollama_vision" runs the prior glm-ocr/llava
     # path. "apple_vision" runs Apple's on-device Vision framework + a
@@ -35,7 +41,7 @@ class Settings(BaseSettings):
     # much faster on Apple Silicon, and no large vision encoder resident
     # in RAM.
     ocr_backend: str = "ollama_vision"
-    ocr_text_model: str = "llama3.2:3b"    # used when ocr_backend=apple_vision
+    ocr_text_model: str = "llama3.2:3b"  # used when ocr_backend=apple_vision
 
     # Gmail ingestion (Phase B of the Uber integration)
     # Set up: see scripts/gmail_auth.py for the one-time OAuth dance.
@@ -61,6 +67,10 @@ settings = Settings()
 
 
 def ensure_dirs() -> None:
-    for d in (settings.data_dir, settings.receipts_dir,
-              settings.statements_dir, settings.reports_dir):
+    for d in (
+        settings.data_dir,
+        settings.receipts_dir,
+        settings.statements_dir,
+        settings.reports_dir,
+    ):
         d.mkdir(parents=True, exist_ok=True)

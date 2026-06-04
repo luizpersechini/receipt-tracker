@@ -26,6 +26,7 @@ from typing import Optional
 import requests
 
 from ..config import settings
+from . import ocr_settings
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,9 @@ def _ollama_chat(model: str, prompt: str) -> dict:
         "messages": [{"role": "user", "content": prompt}],
         # Encourage JSON output via Ollama's format hint when available.
         "format": "json",
+        # Cap context so Ollama doesn't allocate the model's full default
+        # window (128K → 20GB+ KV cache). See settings.ocr_num_ctx.
+        "options": {"num_ctx": settings.ocr_num_ctx},
     }
     resp = requests.post(
         f"{host}/api/chat",
@@ -140,7 +144,7 @@ def structure_text_as_receipt(text: str, *, model: Optional[str] = None) -> dict
     if not text:
         return {"error": "no OCR text to structure"}
 
-    model = model or settings.ocr_text_model
+    model = model or ocr_settings.effective_text_model()
     prompt = PROMPT.replace("{text}", text)
     try:
         response = _ollama_chat(model, prompt)

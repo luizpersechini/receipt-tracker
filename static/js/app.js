@@ -4774,6 +4774,122 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// ─── OCR / Vision model picker (sidebar) ───────────────────────────────────
+let _ocrCfg = null;
+
+async function loadOcrConfig() {
+  const card = $("ocrModelCard");
+  if (!card) return;
+  try {
+    _ocrCfg = await api("GET", "/api/ocr/config");
+    _renderOcrPicker(_ocrCfg);
+  } catch (e) {
+    $("ocrModelStatus").innerHTML =
+      '<span class="ocr-warn">Couldn\'t load OCR config</span>';
+  }
+}
+
+function _renderOcrPicker(cfg) {
+  const sel = $("ocrModelSelect");
+  if (!sel) return;
+  const models = cfg.models || [];
+  const vision = models.filter((m) => m.vision && !m.over_cap);
+  const opts = [
+    `<option value="apple"${cfg.backend === "apple_vision" ? " selected" : ""}>Apple Vision (on-device)</option>`,
+  ];
+  if (vision.length) {
+    opts.push('<optgroup label="Ollama vision (one-shot)">');
+    vision.forEach((m) => {
+      const seld =
+        cfg.backend === "ollama_vision" && cfg.vision_model === m.name
+          ? " selected"
+          : "";
+      opts.push(
+        `<option value="ollama:${_esc(m.name)}"${seld}>${_esc(m.name)} · ${m.size_gb} GB</option>`,
+      );
+    });
+    opts.push("</optgroup>");
+  }
+  sel.innerHTML = opts.join("");
+
+  // Structuring-model dropdown (only relevant for Apple Vision). Prefer
+  // non-vision (text) models, else show all installed.
+  const tsel = $("ocrTextModelSelect");
+  const textModels = models.filter((m) => !m.vision);
+  const list = textModels.length ? textModels : models;
+  tsel.innerHTML = list
+    .map(
+      (m) =>
+        `<option value="${_esc(m.name)}"${m.name === cfg.text_model ? " selected" : ""}>${_esc(m.name)} · ${m.size_gb} GB</option>`,
+    )
+    .join("");
+  if (![...tsel.options].some((o) => o.value === cfg.text_model)) {
+    tsel.insertAdjacentHTML(
+      "afterbegin",
+      `<option value="${_esc(cfg.text_model)}" selected>${_esc(cfg.text_model)} (not installed)</option>`,
+    );
+  }
+  $("ocrTextModelRow").style.display = sel.value === "apple" ? "" : "none";
+  _renderOcrStatus(cfg);
+}
+
+function _renderOcrStatus(cfg) {
+  const el = $("ocrModelStatus");
+  if (!el) return;
+  if (!cfg.ollama_reachable) {
+    el.innerHTML =
+      '<span class="ocr-warn">Ollama not reachable — start it on :11434</span>';
+    return;
+  }
+  const hasVision = (cfg.models || []).some((m) => m.vision && !m.over_cap);
+  if (cfg.backend === "ollama_vision" && !hasVision) {
+    el.innerHTML =
+      '<span class="ocr-warn">No vision model installed — run <code>ollama pull glm-ocr</code></span>';
+  } else if (
+    cfg.backend === "apple_vision" &&
+    !(cfg.models || []).some((m) => m.name === cfg.text_model)
+  ) {
+    el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed</span>`;
+  } else {
+    el.innerHTML = '<span class="ocr-ok">Applies on next OCR.</span>';
+  }
+}
+
+async function _saveOcrConfig() {
+  const sel = $("ocrModelSelect");
+  let patch;
+  if (sel.value === "apple") {
+    patch = {
+      backend: "apple_vision",
+      text_model: $("ocrTextModelSelect").value,
+    };
+  } else {
+    patch = {
+      backend: "ollama_vision",
+      vision_model: sel.value.replace(/^ollama:/, ""),
+    };
+  }
+  try {
+    _ocrCfg = await api("PUT", "/api/ocr/config", patch);
+    // Re-fetch the model list so status reflects reality.
+    await loadOcrConfig();
+  } catch (e) {
+    $("ocrModelStatus").innerHTML =
+      '<span class="ocr-warn">Failed: ' + _esc(e.message) + "</span>";
+  }
+}
+
+(function _wireOcrPicker() {
+  const sel = $("ocrModelSelect");
+  if (sel)
+    sel.addEventListener("change", () => {
+      $("ocrTextModelRow").style.display = sel.value === "apple" ? "" : "none";
+      _saveOcrConfig();
+    });
+  const tsel = $("ocrTextModelSelect");
+  if (tsel) tsel.addEventListener("change", _saveOcrConfig);
+})();
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 loadStats().catch(() => {});
 loadReceipts().catch(() => {});
@@ -4785,6 +4901,7 @@ loadUsers().catch(() => {});
 loadReportHistory().catch(() => {});
 restoreLastSync();
 checkOllama().catch(() => {});
+loadOcrConfig().catch(() => {});
 
 // ─── Filter bar + sortable column wiring (runs once at load) ────────────────
 (function _wireReceiptFiltersAndSort() {

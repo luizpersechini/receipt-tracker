@@ -10,7 +10,18 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import ensure_dirs, settings
 from .db.database import init_db
-from .routers import fx, gmail, matches, preview, receipts, reports, statements, uber, watch
+from .routers import (
+    fx,
+    gmail,
+    matches,
+    ocr,
+    preview,
+    receipts,
+    reports,
+    statements,
+    uber,
+    watch,
+)
 from .services.folder_watcher import start_watcher, stop_watcher
 from .services.llm_processor import warmup as warmup_ocr
 
@@ -29,6 +40,7 @@ async def lifespan(app: FastAPI):
         # Run in a thread so the (slow) model load doesn't block the event
         # loop during startup. Server is ready as soon as warmup is dispatched.
         import asyncio
+
         asyncio.create_task(asyncio.to_thread(warmup_ocr))
     try:
         yield
@@ -60,6 +72,7 @@ app.include_router(fx.router)
 app.include_router(reports.router)
 app.include_router(watch.router)
 app.include_router(preview.router)
+app.include_router(ocr.router)
 
 
 @app.get("/")

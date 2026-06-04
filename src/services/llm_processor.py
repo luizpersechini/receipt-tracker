@@ -16,6 +16,7 @@ import requests
 from PIL import Image
 
 from ..config import settings
+from . import ocr_settings
 
 try:
     import pillow_heif
@@ -100,7 +101,7 @@ def _pick_model(available: Optional[dict] = None) -> str:
         )
 
     max_bytes = int(settings.ocr_max_model_gb * GB)
-    configured = settings.ollama_model
+    configured = ocr_settings.effective_vision_model()
 
     # 1) explicit configured model wins if installed and within size cap
     if configured in available:
@@ -976,8 +977,8 @@ def warmup() -> Optional[str]:
       (settings.ocr_text_model). Apple Vision itself has no warmup since
       it's a system framework, not an Ollama model.
     """
-    if settings.ocr_backend == "apple_vision":
-        model = settings.ocr_text_model
+    if ocr_settings.effective_backend() == "apple_vision":
+        model = ocr_settings.effective_text_model()
     else:
         try:
             model = _pick_model()
@@ -997,7 +998,7 @@ def warmup() -> Optional[str]:
         # or loading is pathologically slow, don't block server start.
         resp = requests.post(f"{host}/api/generate", json=payload, timeout=60)
         resp.raise_for_status()
-        logger.info("OCR warmup complete: %s (backend=%s)", model, settings.ocr_backend)
+        logger.info("OCR warmup complete: %s (backend=%s)", model, ocr_settings.effective_backend())
         return model
     except requests.RequestException as e:
         logger.warning("OCR warmup failed for %s: %s", model, e)
@@ -1020,6 +1021,9 @@ def _ollama_chat(model: str, prompt: str, image_bytes: bytes) -> dict:
                 "images": [base64.b64encode(image_bytes).decode("ascii")],
             }
         ],
+        # Cap context so Ollama doesn't allocate the model's full default
+        # window (128K → 20GB+ KV cache). See settings.ocr_num_ctx.
+        "options": {"num_ctx": settings.ocr_num_ctx},
     }
     resp = requests.post(
         f"{host}/api/chat",
@@ -1219,7 +1223,7 @@ def process_with_segments(image_path: str, *, skip_segmentation: bool = False) -
 
             segments = segment_receipts(image_path)
         is_multi = len(segments) > 1
-        backend = settings.ocr_backend
+        backend = ocr_settings.effective_backend()
         logger.info(
             "OCR: backend=%s segments=%d skip_seg=%s path=%s",
             backend,
@@ -1303,14 +1307,18 @@ def _process_via_apple_vision(segments: list, is_multi: bool) -> list:
             continue
 
         raw = structure_text_as_receipt(text)
+        # Always keep the raw OCR text — even when structuring fails (model not
+        # installed, timeout, bad JSON) — so the extracted text isn't silently
+        # lost and the row arrives with content to re-OCR or hand-edit instead
+        # of fully blank.
+        raw["ocr_text"] = text
         if not raw.get("error"):
-            # Stash the raw OCR so downstream code (and humans) can debug
-            # mismatches between what was read and what was extracted.
-            raw["ocr_text"] = text
             # Post-processing fallbacks recover information the LLM missed
             # (null date, wrong currency, generic "other" category, …).
             _post_process_with_ocr_text(raw, text)
-        normalised = _normalize_one_receipt(raw) if not raw.get("error") else raw
+            normalised = _normalize_one_receipt(raw)
+        else:
+            normalised = raw
         results.append({"metadata": normalised, "crop": img if is_multi else None})
 
     return results

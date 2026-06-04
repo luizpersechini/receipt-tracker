@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=28" />
+    <link rel="stylesheet" href="/static/css/app.css?v=29" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -205,6 +205,24 @@
       <div class="content">
         <!-- Side upload panel -->
         <div class="side-panel" id="sidePanelEl">
+          <!-- OCR / Vision model picker -->
+          <div class="card" id="ocrModelCard">
+            <div class="card-head">Vision / OCR model</div>
+            <select id="ocrModelSelect" class="fbar-select ocr-select"></select>
+            <div
+              id="ocrTextModelRow"
+              class="ocr-textmodel"
+              style="display: none"
+            >
+              <label>Structuring model</label>
+              <select
+                id="ocrTextModelSelect"
+                class="fbar-select ocr-select"
+              ></select>
+            </div>
+            <div class="ocr-model-status" id="ocrModelStatus"></div>
+          </div>
+
           <!-- Upload Receipt -->
           <div class="card">
             <div class="card-head">Add Receipt</div>
@@ -1816,6 +1834,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=49"></script>
+    <script src="/static/js/app.js?v=50"></script>
   </body>
 </html>

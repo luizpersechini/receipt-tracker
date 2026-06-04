@@ -5,7 +5,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Body, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from ..db import database as db
@@ -392,4 +392,6 @@ async def delete_match(match_id: int):
     remaining = await asyncio.to_thread(db.get_all_matches)
     if not any(m["receipt_id"] == receipt_id for m in remaining):
         await asyncio.to_thread(db.update_receipt_match_status, receipt_id, "pending")
-    return JSONResponse(None, status_code=204)
+    # 204 carries no body — JSONResponse(None) would emit "null" and trip
+    # uvicorn's "Response content longer than Content-Length".
+    return Response(status_code=204)

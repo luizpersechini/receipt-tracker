@@ -15,18 +15,27 @@ from src.config import settings
 from src.services import llm_processor as llm
 
 
-GB = 1024 ** 3
+GB = 1024**3
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ocr_override(monkeypatch):
+    """`_pick_model` now reads the runtime model via `ocr_settings`. Pin it to
+    `settings.ollama_model` so the persisted override file (data/ocr_config.json,
+    set by the sidebar picker) can't shadow the values these tests monkeypatch."""
+    monkeypatch.setattr(llm.ocr_settings, "effective_vision_model", lambda: settings.ollama_model)
 
 
 # ─── _pick_model safety rails ────────────────────────────────────────────────
+
 
 def test_picks_configured_model_when_installed_and_under_cap(monkeypatch):
     monkeypatch.setattr(settings, "ollama_model", "glm-ocr:latest")
     monkeypatch.setattr(settings, "ocr_max_model_gb", 6.0)
     available = {
         "glm-ocr:latest": 2 * GB,
-        "llama3:latest": 4 * GB,        # text-only, must be ignored
-        "gemma4:latest": 9 * GB,        # over the cap, must be ignored
+        "llama3:latest": 4 * GB,  # text-only, must be ignored
+        "gemma4:latest": 9 * GB,  # over the cap, must be ignored
     }
     assert llm._pick_model(available=available) == "glm-ocr:latest"
 
@@ -81,6 +90,7 @@ def test_rejects_unknown_family_even_if_under_cap(monkeypatch):
 
 # ─── _resize_for_ocr — guard against pushing 12 MP images to Ollama ─────────
 
+
 def test_resize_shrinks_large_image_to_max_dim():
     big = Image.new("RGB", (4032, 3024), color="white")
     out = llm._resize_for_ocr(big, max_dim=1536)
@@ -105,6 +115,7 @@ def test_resize_handles_portrait_aspect_ratio():
 
 
 # ─── _refine_currency — country-aware fallback ─────────────────────────────
+
 
 def test_currency_filled_from_country_when_missing():
     """No currency detected on receipt → use country's currency."""
@@ -143,6 +154,7 @@ def test_country_trumps_currency_even_when_currency_looks_unambiguous():
 
 # ─── _normalize_country — coerce whatever the LLM returns to ISO-2 ─────────
 
+
 def test_normalize_country_accepts_iso2_verbatim():
     assert llm._normalize_country("CA") == "CA"
     assert llm._normalize_country("ca") == "CA"
@@ -177,6 +189,7 @@ def test_normalize_country_promotes_province_codes_to_country():
 
 # ─── Post-processing fallbacks reading raw OCR text ─────────────────────────
 
+
 def test_scan_currency_finds_explicit_cad_marker():
     """Vancouver receipts often print 'CAD$' or 'CA$' explicitly — that
     should override whatever the LLM guessed."""
@@ -195,6 +208,7 @@ def test_scan_date_finds_common_patterns():
 
 
 # ─── _strip_time_from_date — keep only calendar date ───────────────────────
+
 
 def test_strip_time_removes_seconds_with_ampm():
     """Trees Coffee Gastown prints '10-Mar-2026 1:44:53p.m.' — drop the time."""
@@ -237,6 +251,7 @@ def test_strip_time_chops_trailing_comma_or_dash():
 
 # ─── _scan_total_in_text — pick the final-charged amount ───────────────────
 
+
 def test_scan_total_prefers_final_charged_over_pre_tip_total():
     """Trees Coffee Gastown: printed 'Total $13.97' followed by 'VENTA: CRÉDITO
     $16.46'. The VENTA line is what the card was actually charged."""
@@ -255,11 +270,7 @@ def test_scan_total_prefers_final_charged_over_pre_tip_total():
 def test_scan_total_picks_total_cad_over_amount():
     """SSP America Whistler Brewing: 'Amount $32.29' then 'TOTAL CAD$38.10'.
     TOTAL CAD$ is the final charged amount."""
-    text = (
-        "Amount        $32.29\n"
-        "Tip           $5.81\n"
-        "TOTAL CAD$    38.10\n"
-    )
+    text = "Amount        $32.29\nTip           $5.81\nTOTAL CAD$    38.10\n"
     assert llm._scan_total_in_text(text) == 38.10
 
 
@@ -298,11 +309,7 @@ def test_scan_total_returns_none_for_empty_or_nothing_useful():
 def test_post_process_overrides_undersized_total_with_scanned_final():
     """LLM picked the subtotal — post-processing rescues with VENTA line."""
     data = {"vendor_name": "Trees", "total_amount": 13.97, "currency": "CAD"}
-    text = (
-        "Total      $13.97\n"
-        "Propina    $2.10\n"
-        "VENTA: CRÉDITO  $16.46\n"
-    )
+    text = "Total      $13.97\nPropina    $2.10\nVENTA: CRÉDITO  $16.46\n"
     llm._post_process_with_ocr_text(data, text)
     assert data["total_amount"] == 16.46
 
@@ -347,8 +354,12 @@ def test_post_process_currency_does_not_change_when_matching():
 
 def test_post_process_rescues_other_category_via_keywords():
     """LLM defaulted to 'other' but the vendor name screams coffee shop."""
-    data = {"vendor_name": "Trees Coffee Gastown", "currency": "CAD",
-            "category": "other", "items": []}
+    data = {
+        "vendor_name": "Trees Coffee Gastown",
+        "currency": "CAD",
+        "category": "other",
+        "items": [],
+    }
     llm._post_process_with_ocr_text(data, "Espresso · cappuccino · pastry")
     assert data["category"] == "meals"
 
@@ -356,8 +367,7 @@ def test_post_process_rescues_other_category_via_keywords():
 def test_post_process_keeps_non_other_category_untouched():
     """If LLM said something specific, don't override even if other
     keywords pop up in the text."""
-    data = {"vendor_name": "Uber", "currency": "USD",
-            "category": "transportation", "items": []}
+    data = {"vendor_name": "Uber", "currency": "USD", "category": "transportation", "items": []}
     llm._post_process_with_ocr_text(data, "ride · cafe stop on the way")
     assert data["category"] == "transportation"
 
@@ -368,10 +378,14 @@ def test_country_inferred_from_city_when_model_returns_none(monkeypatch):
     _stub_segmentation_to_single_image(monkeypatch)
     monkeypatch.setattr(settings, "ocr_backend", "ollama_vision")
     monkeypatch.setattr(llm, "_pick_model", lambda: "glm-ocr:latest")
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        '{"vendor_name":"Trees Coffee","total_amount":"13.97","currency":"BRL",'
-        '"date":"2026-04-30","city":"Vancouver","country":null}'
-    ))
+    monkeypatch.setattr(
+        llm,
+        "_ollama_chat",
+        lambda *_a, **_k: _stub_ollama_response(
+            '{"vendor_name":"Trees Coffee","total_amount":"13.97","currency":"BRL",'
+            '"date":"2026-04-30","city":"Vancouver","country":null}'
+        ),
+    )
     results = llm.process_receipt_image("/tmp/x.jpg")
     assert len(results) == 1
     # City "Vancouver" → country CA → currency overrides BRL to CAD
@@ -402,10 +416,14 @@ def test_country_falls_back_through_state_then_city(monkeypatch):
     """If both country AND state are null but city is set, city wins."""
     _stub_segmentation_to_single_image(monkeypatch)
     monkeypatch.setattr(llm, "_pick_model", lambda: "glm-ocr:latest")
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        '{"vendor_name":"X","total_amount":"5","currency":"USD","date":"2026-05-01",'
-        '"city":"Toronto","state":null,"country":null}'
-    ))
+    monkeypatch.setattr(
+        llm,
+        "_ollama_chat",
+        lambda *_a, **_k: _stub_ollama_response(
+            '{"vendor_name":"X","total_amount":"5","currency":"USD","date":"2026-05-01",'
+            '"city":"Toronto","state":null,"country":null}'
+        ),
+    )
     results = llm.process_receipt_image("/tmp/x.jpg")
     assert results[0]["country"] == "CA"
     assert results[0]["currency"] == "CAD"
@@ -417,10 +435,14 @@ def test_country_state_wins_over_city_when_state_set(monkeypatch):
     geographic signal."""
     _stub_segmentation_to_single_image(monkeypatch)
     monkeypatch.setattr(llm, "_pick_model", lambda: "glm-ocr:latest")
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        '{"vendor_name":"X","total_amount":"5","currency":"BRL","date":"2026-05-01",'
-        '"city":"London","state":"BC","country":null}'  # London BC in Canada (unusual but possible)
-    ))
+    monkeypatch.setattr(
+        llm,
+        "_ollama_chat",
+        lambda *_a, **_k: _stub_ollama_response(
+            '{"vendor_name":"X","total_amount":"5","currency":"BRL","date":"2026-05-01",'
+            '"city":"London","state":"BC","country":null}'  # London BC in Canada (unusual but possible)
+        ),
+    )
     results = llm.process_receipt_image("/tmp/x.jpg")
     assert results[0]["country"] == "CA"
     assert results[0]["currency"] == "CAD"
@@ -455,6 +477,7 @@ def test_currency_unchanged_when_country_unknown():
 
 # ─── Multi-receipt parsing (single image, multiple receipts on the page) ───
 
+
 def _stub_ollama_response(content: str):
     """Build a fake Ollama /api/chat response body wrapping the given content."""
     return {"message": {"content": content}}
@@ -480,12 +503,16 @@ def test_process_returns_list_when_model_returns_receipts_array(monkeypatch, tmp
     # Skip the picker safety rails by stubbing
     monkeypatch.setattr(llm, "_pick_model", lambda: "glm-ocr:latest")
     _stub_segmentation_to_single_image(monkeypatch)
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        '{"receipts":['
-        '{"vendor_name":"Cafe A","total_amount":"12.50","currency":"USD","date":"2026-05-01","category":"meals","country":"US"},'
-        '{"vendor_name":"Pharmacy B","total_amount":"7.25","currency":"USD","date":"2026-05-01","category":"other","country":"US"}'
-        ']}'
-    ))
+    monkeypatch.setattr(
+        llm,
+        "_ollama_chat",
+        lambda *_a, **_k: _stub_ollama_response(
+            '{"receipts":['
+            '{"vendor_name":"Cafe A","total_amount":"12.50","currency":"USD","date":"2026-05-01","category":"meals","country":"US"},'
+            '{"vendor_name":"Pharmacy B","total_amount":"7.25","currency":"USD","date":"2026-05-01","category":"other","country":"US"}'
+            "]}"
+        ),
+    )
 
     results = llm.process_receipt_image("/tmp/whatever.jpg")
     assert isinstance(results, list)
@@ -500,9 +527,13 @@ def test_process_returns_list_for_back_compat_single_object(monkeypatch):
     """Older outputs may still return a bare receipt object — wrap into list."""
     monkeypatch.setattr(llm, "_pick_model", lambda: "glm-ocr:latest")
     _stub_segmentation_to_single_image(monkeypatch)
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        '{"vendor_name":"Solo Vendor","total_amount":"99.99","currency":"USD","date":"2026-05-01","country":"US"}'
-    ))
+    monkeypatch.setattr(
+        llm,
+        "_ollama_chat",
+        lambda *_a, **_k: _stub_ollama_response(
+            '{"vendor_name":"Solo Vendor","total_amount":"99.99","currency":"USD","date":"2026-05-01","country":"US"}'
+        ),
+    )
     results = llm.process_receipt_image("/tmp/whatever.jpg")
     assert isinstance(results, list)
     assert len(results) == 1
@@ -514,9 +545,9 @@ def test_process_returns_single_error_row_on_parse_failure(monkeypatch):
     """When the model emits unparseable garbage, return [empty + error]."""
     monkeypatch.setattr(llm, "_pick_model", lambda: "glm-ocr:latest")
     _stub_segmentation_to_single_image(monkeypatch)
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        "this is not json at all"
-    ))
+    monkeypatch.setattr(
+        llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response("this is not json at all")
+    )
     results = llm.process_receipt_image("/tmp/whatever.jpg")
     assert isinstance(results, list)
     assert len(results) == 1
@@ -526,9 +557,9 @@ def test_process_returns_single_error_row_on_parse_failure(monkeypatch):
 def test_process_returns_single_error_row_on_empty_receipts_array(monkeypatch):
     monkeypatch.setattr(llm, "_pick_model", lambda: "glm-ocr:latest")
     _stub_segmentation_to_single_image(monkeypatch)
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        '{"receipts": []}'
-    ))
+    monkeypatch.setattr(
+        llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response('{"receipts": []}')
+    )
     results = llm.process_receipt_image("/tmp/whatever.jpg")
     assert isinstance(results, list)
     assert len(results) == 1
@@ -549,10 +580,16 @@ def test_process_with_segments_returns_crop_per_receipt(monkeypatch):
     monkeypatch.setattr(llm, "_image_to_ocr_bytes", lambda *_a, **_k: b"pngbytes")
 
     # Each segment returns its own single-receipt JSON
-    responses = iter([
-        _stub_ollama_response('{"receipts":[{"vendor_name":"A","total_amount":"10","currency":"USD","date":"2026-05-01"}]}'),
-        _stub_ollama_response('{"receipts":[{"vendor_name":"B","total_amount":"20","currency":"USD","date":"2026-05-01"}]}'),
-    ])
+    responses = iter(
+        [
+            _stub_ollama_response(
+                '{"receipts":[{"vendor_name":"A","total_amount":"10","currency":"USD","date":"2026-05-01"}]}'
+            ),
+            _stub_ollama_response(
+                '{"receipts":[{"vendor_name":"B","total_amount":"20","currency":"USD","date":"2026-05-01"}]}'
+            ),
+        ]
+    )
     monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: next(responses))
 
     items = llm.process_with_segments("/tmp/x.jpg")
@@ -575,9 +612,13 @@ def test_process_with_segments_returns_none_crop_for_single_segment(monkeypatch)
         lambda *_a, **_k: [Image.new("RGB", (100, 100))],
     )
     monkeypatch.setattr(llm, "_image_to_ocr_bytes", lambda *_a, **_k: b"pngbytes")
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        '{"vendor_name":"Solo","total_amount":"5","currency":"USD","date":"2026-05-01"}'
-    ))
+    monkeypatch.setattr(
+        llm,
+        "_ollama_chat",
+        lambda *_a, **_k: _stub_ollama_response(
+            '{"vendor_name":"Solo","total_amount":"5","currency":"USD","date":"2026-05-01"}'
+        ),
+    )
     items = llm.process_with_segments("/tmp/x.jpg")
     assert len(items) == 1
     assert items[0]["crop"] is None
@@ -588,12 +629,16 @@ def test_process_normalises_each_receipt_independently(monkeypatch):
     next to a BRL-on-R$ row should each end up with the right currency."""
     monkeypatch.setattr(llm, "_pick_model", lambda: "glm-ocr:latest")
     _stub_segmentation_to_single_image(monkeypatch)
-    monkeypatch.setattr(llm, "_ollama_chat", lambda *_a, **_k: _stub_ollama_response(
-        '{"receipts":['
-        '{"vendor_name":"Vancouver Cafe","total_amount":"12.50","currency":"USD","date":"2026-05-01","country":"Canada","category":"meals"},'
-        '{"vendor_name":"Padaria","total_amount":"41,78","currency":"BRL","date":"30/04/2026","country":"BR","language":"pt","category":"meals"}'
-        ']}'
-    ))
+    monkeypatch.setattr(
+        llm,
+        "_ollama_chat",
+        lambda *_a, **_k: _stub_ollama_response(
+            '{"receipts":['
+            '{"vendor_name":"Vancouver Cafe","total_amount":"12.50","currency":"USD","date":"2026-05-01","country":"Canada","category":"meals"},'
+            '{"vendor_name":"Padaria","total_amount":"41,78","currency":"BRL","date":"30/04/2026","country":"BR","language":"pt","category":"meals"}'
+            "]}"
+        ),
+    )
     results = llm.process_receipt_image("/tmp/whatever.jpg")
     assert len(results) == 2
     # First: USD on a Canadian receipt → swapped to CAD
@@ -606,6 +651,7 @@ def test_process_normalises_each_receipt_independently(monkeypatch):
 
 
 # ─── _preprocess_for_ocr ────────────────────────────────────────────────────
+
 
 def test_preprocess_respects_disable_flag(monkeypatch):
     """When the config knob is off, preprocess is a no-op and returns the
@@ -629,6 +675,7 @@ def test_preprocess_respects_exif_orientation(monkeypatch):
     """A JPEG with EXIF orientation=6 (rotate 90° CW) should come out of
     preprocess physically rotated — vision models can't read sideways."""
     import io
+
     monkeypatch.setattr(settings, "ocr_preprocess", True)
     # Build a JPEG with EXIF orientation tag = 6
     img = Image.new("RGB", (300, 200), color=(120, 120, 120))
@@ -636,11 +683,11 @@ def test_preprocess_respects_exif_orientation(monkeypatch):
     # PIL doesn't write EXIF by default; use piexif-style bytes via save kwargs
     exif_bytes = (
         b"Exif\x00\x00"
-        b"II*\x00"          # little-endian TIFF header
-        b"\x08\x00\x00\x00" # offset to first IFD
-        b"\x01\x00"         # 1 entry
+        b"II*\x00"  # little-endian TIFF header
+        b"\x08\x00\x00\x00"  # offset to first IFD
+        b"\x01\x00"  # 1 entry
         b"\x12\x01\x03\x00\x01\x00\x00\x00\x06\x00\x00\x00"  # Orientation=6 (SHORT, count 1, value 6)
-        b"\x00\x00\x00\x00" # next IFD offset
+        b"\x00\x00\x00\x00"  # next IFD offset
     )
     img.save(buf, format="JPEG", exif=exif_bytes)
     buf.seek(0)
@@ -655,6 +702,7 @@ def test_preprocess_changes_pixels_for_uneven_lighting(monkeypatch):
     We don't assert exact pixel values — just that the output differs from
     the input, proving the contrast op actually ran."""
     import numpy as np
+
     monkeypatch.setattr(settings, "ocr_preprocess", True)
     # Diagonal gradient from 50 (dark) to 200 (bright)
     w, h = 200, 200
@@ -678,7 +726,10 @@ def test_preprocess_fails_open_on_unexpected_error(monkeypatch):
     monkeypatch.setattr(settings, "ocr_preprocess", True)
     # Force the inner cv2 call to blow up
     import cv2
-    monkeypatch.setattr(cv2, "createCLAHE", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    monkeypatch.setattr(
+        cv2, "createCLAHE", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
     img = Image.new("RGB", (100, 100), color="white")
     out = llm._preprocess_for_ocr(img)
     assert isinstance(out, Image.Image)
@@ -696,6 +747,7 @@ def test_load_image_bytes_resizes_and_returns_bounded_png(tmp_path):
     # few KB and not test the budget meaningfully. Smooth gradient with
     # noise is close to what a real downscaled receipt looks like.
     import random
+
     random.seed(0)
     pixels = []
     for y in range(3024):
