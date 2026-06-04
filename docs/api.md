@@ -333,11 +333,11 @@ of supported files sitting in the inbox (not in `processed/` or
 ### `POST /api/watch-folder/scan`
 
 Process every supported file in the inbox. Each file moves to
-`processed/` (on success) or `failed/` (on error). Single-receipt pages
-OCR straight through; any page the segmenter splits into >1 receipt is
-pushed to the box-review queue instead (see above). Returns a summary
-with per-file results plus `queued` (the number of pages deferred for
-review):
+`processed/` (on success) or `failed/` (on error). PDFs queue **every
+page** for box review (same as a direct PDF upload). A dropped image is
+OCR'd straight through unless the segmenter splits it into >1 receipt, in
+which case it's queued too. Returns a summary with per-file results plus
+`queued` (the number of pages deferred for review):
 
 ```json
 {

@@ -361,26 +361,33 @@ def test_is_pdf_helper(tmp_path):
     assert not is_pdf("/x/y/receipt.png")
 
 
-def test_scan_ingests_pdf_via_rasteriser(scan_env, monkeypatch):
-    """End-to-end-ish: a real PDF in the inbox is rendered to an image,
-    OCR is stubbed, and a DB row + processed/ move result."""
+def test_scan_queues_every_pdf_page(scan_env, monkeypatch):
+    """A PDF in the inbox is rasterised and EVERY page is queued for box
+    review (same as a direct PDF upload) — never OCR'd straight through,
+    even a single-region page."""
     fw, inbox, receipts = scan_env["fw"], scan_env["inbox"], scan_env["receipts"]
-    _make_pdf(inbox / "receipt.pdf", pages=1)
-    _stub_segments(
-        monkeypatch,
-        fw,
-        [
-            ({"vendor_name": "PDF Vendor", "total_amount": 9.9, "currency": "USD"}, None),
-        ],
+    _make_pdf(inbox / "receipt.pdf", pages=2)
+    # OCR must not run for a PDF page under the new behaviour.
+    from src.services import llm_processor
+
+    monkeypatch.setattr(
+        llm_processor,
+        "process_with_segments",
+        lambda *_a, **_k: pytest.fail("PDF page must be queued, not OCR'd"),
     )
+
+    from src.services import review_queue
 
     summary = fw.scan_folder()
     assert summary["files_ok"] == 1
-    assert summary["imported_receipts"] == 1
-    # The rasterised page PNG was written into receipts_dir
-    assert list(receipts.glob("*_p1.png"))
+    assert summary["imported_receipts"] == 0
+    assert summary["queued"] == 2
+    # Both rasterised page PNGs written into receipts_dir
+    assert len(list(receipts.glob("*_p*.png"))) == 2
     # Source PDF moved to processed/
     assert (inbox / "processed" / "receipt.pdf").exists()
-    rows = scan_env["db"].get_all_receipts()
-    assert len(rows) == 1
-    assert json.loads(rows[0]["metadata"])["vendor_name"] == "PDF Vendor"
+    # No DB rows; two review-queue items with per-page source labels
+    assert scan_env["db"].get_all_receipts() == []
+    assert review_queue.count() == 2
+    sources = sorted(it["source"] for it in review_queue.list_items())
+    assert sources == ["receipt.pdf · p1/2 (scan)", "receipt.pdf · p2/2 (scan)"]

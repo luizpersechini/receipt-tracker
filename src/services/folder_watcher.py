@@ -207,11 +207,10 @@ def _ingest_file(src: Path) -> dict:
     # 1) Materialise the input as one or more image files in receipts_dir.
     #    PDFs are rasterised page-by-page; images are copied verbatim.
     #
-    # `is_pdf_source` flips the OCR call into "treat the page as a single
-    # receipt" mode below. PDF pages are almost always digital documents
-    # with one receipt per page; running the multi-receipt segmenter on
-    # them tends to shred a single page into many fragments because of
-    # whitespace between text blocks (e.g. hotel folios, invoices).
+    # `is_pdf_source` routes every PDF page to box review below (step 2),
+    # matching a direct PDF upload — a scanned PDF page often holds several
+    # receipts, so the user confirms the boxes before OCR rather than
+    # trusting an auto-split.
     image_paths: list = []
     is_pdf_source = is_pdf(str(src))
     if is_pdf_source:
@@ -228,21 +227,29 @@ def _ingest_file(src: Path) -> dict:
         shutil.copy2(str(src), str(dest_path))
         image_paths.append(dest_path)
 
-    # 2) Per page: segment to count receipts. A page the segmenter splits into
-    #    >1 receipt is queued for box review (the user confirms/adjusts boxes
-    #    before OCR). A single-receipt page is OCR'd as one receipt and saved.
+    # 2) Per page: decide queue-for-review vs OCR-now.
+    #    - PDF pages are ALWAYS queued (same as a direct PDF upload) so the
+    #      user confirms the receipt boxes on every page before OCR.
+    #    - An image page is queued only when the segmenter splits it into >1
+    #      receipt; a single-receipt image is OCR'd straight through.
     all_ids: list = []
     queued_pages = 0
     first_meta: Optional[dict] = None
-    for img_path in image_paths:
+    total_pages = len(image_paths)
+    for i, img_path in enumerate(image_paths, 1):
         boxes, (w, h) = segment_with_boxes(str(img_path))
-        if len(boxes) > 1:
+        if is_pdf_source or len(boxes) > 1:
+            src_label = (
+                f"{src.name} · p{i}/{total_pages} (scan)"
+                if is_pdf_source and total_pages > 1
+                else f"{src.name} (scan)"
+            )
             review_queue.add(
                 filename=img_path.name,
                 image_w=w,
                 image_h=h,
                 bboxes=boxes,
-                source=f"{src.name} (scan)",
+                source=src_label,
                 description="imported from folder scan",
             )
             queued_pages += 1

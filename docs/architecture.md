@@ -83,17 +83,19 @@ upload  →  /api/upload/receipt/preview
                               POST /review-queue/{id}/commit → ocr_crops → save
 
 folder scan → folder_watcher.scan_folder (per page)
-              ├─ 1 receipt   → process_with_segments(skip_segmentation=True) → save
-              └─ >1 receipts → review_queue.add (deferred for box review)
+              ├─ PDF page     → review_queue.add (always — like a PDF upload)
+              ├─ image, 1 rcpt → process_with_segments(skip_segmentation=True) → save
+              └─ image, >1     → review_queue.add (deferred for box review)
 
 review  →  /api/review-queue            (pending pages + suggested boxes)
            /api/review-queue/{id}/commit (OCR confirmed boxes, drop page)
            /api/review-queue/{id}        (DELETE: discard page, no OCR)
 ```
 
-Both the PDF-upload and folder-scan paths funnel multi-receipt pages
-through one **box-review queue** (`services/review_queue.py`, persisted to
-`data/review_queue.json`). The user confirms/adjusts the auto-detected
+Both the PDF-upload and folder-scan paths funnel pages through one
+**box-review queue** (`services/review_queue.py`, persisted to
+`data/review_queue.json`) — every PDF page, plus any image the segmenter
+splits into >1 receipt. The user confirms/adjusts the auto-detected
 receipt boxes before OCR runs, so a page with several receipts becomes
 several correctly-cropped rows instead of one garbled extraction.
 
