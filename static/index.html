@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=30" />
+    <link rel="stylesheet" href="/static/css/app.css?v=31" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -1654,8 +1654,10 @@
         </div>
 
         <div class="bbox-canvas-wrap" id="bboxCanvasWrap">
-          <img id="bboxImg" alt="Upload preview" />
-          <svg id="bboxSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div class="bbox-canvas-inner" id="bboxCanvasInner">
+            <img id="bboxImg" alt="Upload preview" />
+            <svg id="bboxSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+          </div>
         </div>
 
         <div class="bbox-actions">
@@ -1856,6 +1858,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=53"></script>
+    <script src="/static/js/app.js?v=54"></script>
   </body>
 </html>
