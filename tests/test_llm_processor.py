@@ -20,10 +20,14 @@ GB = 1024**3
 
 @pytest.fixture(autouse=True)
 def _isolate_ocr_override(monkeypatch):
-    """`_pick_model` now reads the runtime model via `ocr_settings`. Pin it to
-    `settings.ollama_model` so the persisted override file (data/ocr_config.json,
-    set by the sidebar picker) can't shadow the values these tests monkeypatch."""
+    """The OCR code reads the runtime backend/models via `ocr_settings`. Pin
+    all three effective getters to the `settings` defaults so the persisted
+    override file (data/ocr_config.json, set by the sidebar picker) can't
+    shadow what these tests assume — e.g. a saved `apple_vision` backend
+    would otherwise route ollama-stubbing tests into Apple Vision."""
     monkeypatch.setattr(llm.ocr_settings, "effective_vision_model", lambda: settings.ollama_model)
+    monkeypatch.setattr(llm.ocr_settings, "effective_backend", lambda: settings.ocr_backend)
+    monkeypatch.setattr(llm.ocr_settings, "effective_text_model", lambda: settings.ocr_text_model)
 
 
 # ─── _pick_model safety rails ────────────────────────────────────────────────
@@ -771,3 +775,82 @@ def test_load_image_bytes_resizes_and_returns_bounded_png(tmp_path):
     # the purpose. PNG compresses smooth tones efficiently; receipts at
     # 1536 px land at ~0.5-1.5 MB in practice.
     assert len(out) < 4 * 1024 * 1024, f"OCR payload too large: {len(out)} bytes"
+
+
+# ─── ocr_crops dispatches on the configured backend ──────────────────────────
+# Regression guard: the bbox-editor / review-queue commit path (ocr_crops)
+# was once hardwired to the Ollama vision model regardless of OCR_BACKEND, so
+# a model unsuited to one-shot JSON extraction (e.g. glm-ocr, which loops on
+# the prompt) blanked every reviewed page even when the backend was
+# apple_vision. ocr_crops must route through the same engine as the rest of
+# the app.
+
+
+def _one_crop():
+    return [Image.new("RGB", (40, 60), "white")]
+
+
+def test_ocr_crops_uses_apple_vision_backend(monkeypatch):
+    monkeypatch.setattr(llm.ocr_settings, "effective_backend", lambda: "apple_vision")
+    called = {}
+
+    def fake_apple(crops, is_multi):
+        called["apple"] = (len(crops), is_multi)
+        return [{"metadata": {"vendor_name": "A"}, "crop": crops[0]}]
+
+    monkeypatch.setattr(llm, "_process_via_apple_vision", fake_apple)
+    monkeypatch.setattr(
+        llm,
+        "_process_via_ollama_vision",
+        lambda *a, **k: pytest.fail("ollama path must not run under apple_vision"),
+    )
+    out = llm.ocr_crops(_one_crop())
+    assert called["apple"] == (1, True)  # crops forwarded, treated as pre-segmented
+    assert out[0]["metadata"]["vendor_name"] == "A"
+
+
+def test_ocr_crops_uses_ollama_backend(monkeypatch):
+    monkeypatch.setattr(llm.ocr_settings, "effective_backend", lambda: "ollama_vision")
+    called = {}
+
+    def fake_ollama(crops, is_multi):
+        called["ollama"] = (len(crops), is_multi)
+        return [{"metadata": {"vendor_name": "O"}, "crop": crops[0]}]
+
+    monkeypatch.setattr(llm, "_process_via_ollama_vision", fake_ollama)
+    monkeypatch.setattr(
+        llm,
+        "_process_via_apple_vision",
+        lambda *a, **k: pytest.fail("apple path must not run under ollama_vision"),
+    )
+    out = llm.ocr_crops(_one_crop())
+    assert called["ollama"] == (1, True)
+    assert out[0]["metadata"]["vendor_name"] == "O"
+
+
+def test_ocr_crops_empty_input_returns_error_row(monkeypatch):
+    monkeypatch.setattr(llm.ocr_settings, "effective_backend", lambda: "apple_vision")
+    out = llm.ocr_crops([])
+    assert len(out) == 1 and out[0]["metadata"]["error"] == "no crops"
+
+
+def test_ollama_chat_payload_caps_output_tokens(monkeypatch):
+    """num_predict guardrail is sent so a looping model can't burn the timeout."""
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "{}"}}
+
+    def _fake_post(url, json=None, timeout=None):
+        captured["payload"] = json
+        return _Resp()
+
+    monkeypatch.setattr(llm.requests, "post", _fake_post)
+    llm._ollama_chat("glm-ocr:latest", "prompt", b"imgbytes")
+    opts = captured["payload"]["options"]
+    assert opts["num_predict"] == settings.ocr_num_predict
+    assert opts["num_ctx"] == settings.ocr_num_ctx

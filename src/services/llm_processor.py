@@ -1022,8 +1022,14 @@ def _ollama_chat(model: str, prompt: str, image_bytes: bytes) -> dict:
             }
         ],
         # Cap context so Ollama doesn't allocate the model's full default
-        # window (128K → 20GB+ KV cache). See settings.ocr_num_ctx.
-        "options": {"num_ctx": settings.ocr_num_ctx},
+        # window (128K → 20GB+ KV cache). num_predict caps OUTPUT so a model
+        # that ignores the JSON instruction and loops (e.g. a pure-OCR model
+        # fed the extraction prompt) fails fast instead of burning the whole
+        # timeout. See settings.ocr_num_ctx / ocr_num_predict.
+        "options": {
+            "num_ctx": settings.ocr_num_ctx,
+            "num_predict": settings.ocr_num_predict,
+        },
     }
     resp = requests.post(
         f"{host}/api/chat",
@@ -1723,34 +1729,28 @@ def ocr_crops(crops: list) -> list:
     """
     OCR a caller-provided list of PIL crops, in order. Returns a list of
     `{"metadata": <dict>, "crop": <PIL.Image>}` items — one per receipt
-    extracted. Used by the bbox-editor commit endpoint where the user has
-    already split the image into segments and we just need to OCR each.
+    extracted. Used by the bbox-editor commit and review-queue endpoints,
+    where the user has already split the page into receipt boxes.
 
-    Falls back to a single `_empty_receipt()` row on model/pick failure so
-    the caller never gets an empty list.
+    Dispatches on the configured backend exactly like `process_with_segments`
+    (each crop is treated as one already-segmented receipt), so the review
+    flow uses the SAME OCR engine as the rest of the app — crucially
+    including `apple_vision`. Previously this path was hardwired to the
+    Ollama vision model regardless of backend, so a vision model unsuited to
+    one-shot JSON extraction (e.g. glm-ocr, a pure transcription model that
+    loops on the prompt) produced timeouts/blank rows for every reviewed
+    page. Falls back to a single `_empty_receipt()` row so the caller never
+    gets an empty list.
     """
     if not crops:
         empty = _empty_receipt()
         empty["error"] = "no crops"
         return [{"metadata": empty, "crop": None}]
-    try:
-        model = _pick_model()
-    except OCRConfigError as e:
-        logger.error("OCR config error: %s", e)
-        empty = _empty_receipt()
-        empty["error"] = str(e)
-        # Attach the first crop so the caller still has something to save
-        return [{"metadata": empty, "crop": crops[0]}]
 
-    results: list = []
-    for i, img in enumerate(crops, 1):
-        image_bytes = _image_to_ocr_bytes(img)
-        logger.info("OCR (user-crop): %d/%d image_bytes=%d", i, len(crops), len(image_bytes))
-        # Use the verbose PROMPT here too — the per-field examples ("e.g.
-        # 30/04/2026", "e.g. 41,78 or 1.234,56") meaningfully anchor the
-        # model's parsing. Empirically the shorter SINGLE_RECEIPT_PROMPT
-        # saved only a few seconds per call but dropped accuracy on
-        # vendor/currency/category. Speed gain wasn't worth the regression.
-        for r in _ocr_one_crop(model, image_bytes):
-            results.append({"metadata": r, "crop": img})
+    backend = ocr_settings.effective_backend()
+    logger.info("OCR (user-crops): backend=%s crops=%d", backend, len(crops))
+    if backend == "apple_vision":
+        results = _process_via_apple_vision(crops, is_multi=True)
+    else:
+        results = _process_via_ollama_vision(crops, is_multi=True)
     return results or [{"metadata": _empty_receipt(), "crop": crops[0]}]

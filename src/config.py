@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     ocr_max_image_dim: int = 1536  # longest-edge resize before OCR (px)
     ocr_max_model_gb: float = 6.0  # refuse to load any model bigger than this
     ocr_timeout_seconds: float = 120.0  # hard timeout on a single ollama.chat call
+    ocr_num_predict: int = 2048  # cap output tokens per OCR call. A receipt's
+    # JSON is small; without a cap a model that ignores
+    # the JSON instruction (e.g. a pure-OCR transcription
+    # model fed the extraction prompt) loops to its max
+    # length and burns the entire timeout per crop.
     ocr_num_ctx: int = 8192  # cap Ollama context window. Without this,
     # Ollama uses the model's default (128K for
     # llama3.2/3.1), whose KV cache alone can eat
