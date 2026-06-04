@@ -3023,6 +3023,7 @@ $("scanFolderBtn").addEventListener("click", async () => {
     loadReceipts();
     loadStats();
     loadWatchFolder();
+    loadReviewQueue();
   } catch (e) {
     $("scanTitle").textContent = "Scan failed";
     $("scanModalSub").textContent = e.message || "Unknown error";
@@ -3078,6 +3079,7 @@ function renderScanResults(res) {
   const ok = res.files_ok || 0;
   const imported = res.imported_receipts || 0;
   const scanned = res.scanned || ok + failed;
+  const queued = res.queued || 0;
   const allOk = failed === 0;
 
   $("scanTitle").textContent = allOk
@@ -3093,11 +3095,15 @@ function renderScanResults(res) {
 
   const summary = $("scanSummary");
   summary.style.display = "flex";
+  const queuedBadge = queued
+    ? `<span class="badge badge-amber">${queued} to review</span>`
+    : "";
   if (allOk) {
     summary.innerHTML = `
       <span class="scan-summary-main">${imported} receipt${imported === 1 ? "" : "s"}</span>
       <span style="color:var(--text-3)">from ${scanned} file${scanned === 1 ? "" : "s"}</span>
       <span style="flex:1"></span>
+      ${queuedBadge}
       <span class="badge badge-green">${ok} ok</span>`;
   } else {
     summary.innerHTML = `
@@ -3121,7 +3127,9 @@ function renderScanResults(res) {
 
       let meta = "";
       if (okRow) {
-        if (r.vendor && r.amount != null) {
+        if (r.queued && !r.count) {
+          meta = `${r.queued} page${r.queued === 1 ? "" : "s"} to review`;
+        } else if (r.vendor && r.amount != null) {
           meta = `<span class="scan-vendor">${_escape(r.vendor)}</span>${fmt.currency(r.amount, r.currency)}`;
         } else if (r.count && r.count > 1) {
           meta = `${r.count} receipts`;
@@ -3148,7 +3156,19 @@ function renderScanResults(res) {
     .join("");
 
   $("scanCloseBtn").disabled = false;
-  if (allOk) {
+  if (queued) {
+    // Multi-receipt pages need box review before OCR — don't auto-close;
+    // offer to jump straight into the review flow.
+    $("scanFootMsg").className = "scan-foot-msg ok";
+    $("scanFootMsg").innerHTML =
+      `<button class="btn btn-primary btn-sm" id="scanReviewBtn">Review ${queued} page${queued === 1 ? "" : "s"}</button>`;
+    const rb = $("scanReviewBtn");
+    if (rb)
+      rb.addEventListener("click", () => {
+        closeScanModal();
+        openReviewQueue();
+      });
+  } else if (allOk) {
     let n = 4;
     $("scanFootMsg").className = "scan-foot-msg ok";
     $("scanFootMsg").innerHTML =
@@ -3782,13 +3802,20 @@ function _bboxUpdateCount() {
   $("bboxCommitBtn").disabled = n < 1;
 }
 
+const _BBOX_CHECK = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+
 function openBBoxEditor(state) {
   _bboxState = state;
+  const isReview = state.reviewItemId != null;
   $("bboxStatus").textContent = "";
   $("bboxStatus").className = "status-msg";
+  $("bboxSub").textContent =
+    state.reviewSub ||
+    "Drag boxes to adjust, drag corners to resize, × to delete, Add to draw a new one.";
+  $("bboxDiscardBtn").style.display = isReview ? "" : "none";
   $("bboxCommitBtn").disabled = false;
   $("bboxCommitBtn").innerHTML =
-    `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Run OCR`;
+    `${_BBOX_CHECK} ${isReview ? "OCR &amp; next" : "Run OCR"}`;
   $("bboxModal").classList.add("open");
   if (!_bboxEditor) {
     _bboxEditor = new BBoxEditor({
@@ -3818,6 +3845,7 @@ $("bboxCommitBtn").addEventListener("click", async () => {
   if (!_bboxEditor || !_bboxState) return;
   const boxes = _bboxEditor.getBoxes();
   if (!boxes.length) return;
+  const isReview = _bboxState.reviewItemId != null;
   const btn = $("bboxCommitBtn");
   const status = $("bboxStatus");
   btn.disabled = true;
@@ -3825,29 +3853,106 @@ $("bboxCommitBtn").addEventListener("click", async () => {
   status.textContent = `Running OCR on ${boxes.length} crop${boxes.length === 1 ? "" : "s"}…`;
   status.className = "status-msg load";
   try {
-    const res = await api("POST", "/api/upload/receipt/commit", {
-      filename: _bboxState.filename,
-      description: _bboxState.description || null,
-      bboxes: boxes,
-    });
+    const res = isReview
+      ? await api(
+          "POST",
+          `/api/review-queue/${_bboxState.reviewItemId}/commit`,
+          { bboxes: boxes },
+        )
+      : await api("POST", "/api/upload/receipt/commit", {
+          filename: _bboxState.filename,
+          description: _bboxState.description || null,
+          bboxes: boxes,
+        });
     status.textContent = `Saved ${res.count} receipt${res.count === 1 ? "" : "s"}`;
     status.className = "status-msg ok";
-    // Mirror the summary down in the side-panel uploader so it's still
-    // visible after the editor closes.
     $("receiptStatus").textContent =
-      `Saved ${res.count} receipt${res.count === 1 ? "" : "s"} from this image`;
+      `Saved ${res.count} receipt${res.count === 1 ? "" : "s"}`;
     $("receiptStatus").className = "status-msg ok";
     loadReceipts();
     loadStats();
-    setTimeout(closeBBoxEditor, 600);
+    if (isReview) {
+      _reviewAdvance();
+    } else {
+      setTimeout(closeBBoxEditor, 600);
+    }
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.className = "status-msg err";
   } finally {
     btn.disabled = false;
-    btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Run OCR`;
+    btn.innerHTML = `${_BBOX_CHECK} ${isReview ? "OCR &amp; next" : "Run OCR"}`;
   }
 });
+
+// ── Box-review queue: multi-receipt pages from PDF upload / folder scan ──
+let _reviewQueue = [];
+let _reviewIdx = 0;
+
+async function loadReviewQueue() {
+  const card = $("reviewQueueCard");
+  if (!card) return;
+  try {
+    const { items, count } = await api("GET", "/api/review-queue");
+    _reviewQueue = items || [];
+    card.style.display = (count || 0) > 0 ? "" : "none";
+    $("reviewQueueCount").textContent = count || 0;
+  } catch {
+    card.style.display = "none";
+  }
+}
+
+async function openReviewQueue() {
+  await loadReviewQueue();
+  if (!_reviewQueue.length) return;
+  _reviewIdx = 0;
+  _reviewLoadCurrent();
+}
+
+function _reviewLoadCurrent() {
+  if (_reviewIdx >= _reviewQueue.length) {
+    closeBBoxEditor();
+    loadReviewQueue();
+    return;
+  }
+  const it = _reviewQueue[_reviewIdx];
+  openBBoxEditor({
+    filename: it.filename || "",
+    image_url: it.image_url,
+    image_size: it.image_size,
+    initialBoxes: it.bboxes || [],
+    description: it.description || null,
+    reviewItemId: it.id,
+    reviewSub: `Page ${_reviewIdx + 1} of ${_reviewQueue.length}${it.source ? " · " + it.source : ""} — confirm the receipt boxes`,
+  });
+}
+
+function _reviewAdvance() {
+  _reviewIdx += 1;
+  if (_reviewIdx < _reviewQueue.length) {
+    _reviewLoadCurrent();
+  } else {
+    closeBBoxEditor();
+    loadReviewQueue();
+    loadReceipts();
+    loadStats();
+  }
+}
+
+$("bboxDiscardBtn").addEventListener("click", async () => {
+  if (!_bboxState || _bboxState.reviewItemId == null) return;
+  try {
+    await api("DELETE", `/api/review-queue/${_bboxState.reviewItemId}`);
+  } catch (e) {
+    $("bboxStatus").textContent = "Discard failed: " + e.message;
+    $("bboxStatus").className = "status-msg err";
+    return;
+  }
+  _reviewAdvance();
+});
+
+const _reviewBtn = $("reviewQueueBtn");
+if (_reviewBtn) _reviewBtn.addEventListener("click", openReviewQueue);
 
 // ─── Edit Receipt Modal ───────────────────────────────────────────────────────
 let editingReceiptId = null;
@@ -4109,38 +4214,34 @@ async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
   try {
     const preview = await api("POST", "/api/upload/receipt/preview", fd);
 
-    // ── PDF fast path ───────────────────────────────────────────────
-    // The /preview endpoint rasterised + OCR'd every page server-side
-    // (one receipt per page, no segmentation). Skip the bbox editor and
-    // jump straight to a "done" state so the user sees the result.
-    if (preview.auto_processed) {
+    // ── PDF path ─────────────────────────────────────────────────────
+    // The /preview endpoint rasterised every page and queued each one for
+    // box review (no OCR yet). The user confirms the receipt boxes per page
+    // in the bbox editor before OCR runs. Single upload → jump straight into
+    // the review flow; bulk → just refresh the queue card and move on.
+    if (preview.review_queued) {
+      const pages = preview.pages || preview.review_queued;
       setAiStep(
         0,
         "done",
-        `PDF received · ${preview.pages} page${preview.pages === 1 ? "" : "s"}`,
+        `PDF received · ${pages} page${pages === 1 ? "" : "s"}`,
       );
       setAiStep(
         1,
         "done",
-        `Extracted ${preview.count} receipt${preview.count === 1 ? "" : "s"}`,
+        `Queued ${preview.review_queued} page${preview.review_queued === 1 ? "" : "s"} for review`,
       );
-      setAiStep(
-        2,
-        "done",
-        `Saved ${preview.count} row${preview.count === 1 ? "" : "s"}`,
-      );
-      const metas = (preview.receipts || []).map((r) => r.metadata || {});
-      if (!bulk && metas.length) showAiResult(metas);
-      const summary = `${preview.count} receipt${preview.count === 1 ? "" : "s"} from ${preview.pages} page${preview.pages === 1 ? "" : "s"}`;
+      setAiStep(2, "active", "Confirm receipt boxes before OCR…");
+      const summary = `${preview.review_queued} page${preview.review_queued === 1 ? "" : "s"} queued for box review`;
       if (!bulk) {
-        $("aiModalSub").textContent = `Done — ${summary}`;
-        $("receiptStatus").textContent = `Saved — ${summary}`;
+        $("receiptStatus").textContent = summary;
         $("receiptStatus").className = "status-msg ok";
-        loadReceipts();
-        loadStats();
-        setTimeout(closeAiModal, 4000);
+        closeAiModal();
+        await openReviewQueue();
+      } else {
+        loadReviewQueue();
       }
-      return { ok: true, deferred: false, count: preview.count, metas };
+      return { ok: true, deferred: true, queued: preview.review_queued };
     }
 
     setAiStep(
@@ -4902,6 +5003,7 @@ loadReportHistory().catch(() => {});
 restoreLastSync();
 checkOllama().catch(() => {});
 loadOcrConfig().catch(() => {});
+loadReviewQueue().catch(() => {});
 
 // ─── Filter bar + sortable column wiring (runs once at load) ────────────────
 (function _wireReceiptFiltersAndSort() {

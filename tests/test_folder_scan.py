@@ -28,6 +28,7 @@ def scan_env(tmp_path, monkeypatch):
     inbox.mkdir()
     monkeypatch.setattr(settings, "db_path", db_file)
     monkeypatch.setattr(settings, "receipts_dir", receipts)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(settings, "watch_folder", str(inbox))
     monkeypatch.setattr(settings, "watch_log_path", tmp_path / "watch_log.jsonl")
 
@@ -152,6 +153,69 @@ def test_scan_saves_one_row_per_segment_with_crops(scan_env, monkeypatch):
     assert len(seg_files) == 2
     for r in rows:
         assert Path(r["filepath"]).exists()
+
+
+def test_scan_queues_multireceipt_page_instead_of_ocr(scan_env, monkeypatch):
+    """A page the segmenter splits into >1 receipt is queued for box review —
+    not OCR'd. No DB row; the page lands in the review queue; summary counts it."""
+    fw, inbox, receipts = scan_env["fw"], scan_env["inbox"], scan_env["receipts"]
+    _make_image(inbox / "multi.png")
+
+    from src.services import receipt_segmenter, review_queue
+
+    monkeypatch.setattr(
+        receipt_segmenter,
+        "segment_with_boxes",
+        lambda _p: (
+            [{"x": 0, "y": 0, "w": 10, "h": 10}, {"x": 0, "y": 20, "w": 10, "h": 10}],
+            (400, 600),
+        ),
+    )
+    # OCR must not run for a queued page.
+    from src.services import llm_processor
+
+    monkeypatch.setattr(
+        llm_processor,
+        "process_with_segments",
+        lambda *_a, **_k: pytest.fail("queued page must not be OCR'd"),
+    )
+
+    summary = fw.scan_folder()
+    assert summary["queued"] == 1
+    assert summary["imported_receipts"] == 0
+    assert summary["files_ok"] == 1  # file handled cleanly, just deferred
+    assert review_queue.count() == 1
+    qitem = review_queue.list_items()[0]
+    assert qitem["source"] == "multi.png (scan)"
+    assert len(qitem["bboxes"]) == 2
+    # No receipts persisted; source moved to processed/
+    assert scan_env["db"].get_all_receipts() == []
+    assert (inbox / "processed" / "multi.png").exists()
+
+
+def test_scan_single_receipt_page_still_ocrs(scan_env, monkeypatch):
+    """A page with <=1 detected box bypasses the queue and OCRs as before."""
+    fw, inbox = scan_env["fw"], scan_env["inbox"]
+    _make_image(inbox / "single.png")
+
+    from src.services import receipt_segmenter, review_queue
+
+    monkeypatch.setattr(
+        receipt_segmenter,
+        "segment_with_boxes",
+        lambda _p: ([{"x": 0, "y": 0, "w": 10, "h": 10}], (400, 600)),
+    )
+    _stub_segments(
+        monkeypatch,
+        fw,
+        [({"vendor_name": "Solo", "total_amount": 3.0, "currency": "CAD"}, None)],
+    )
+
+    summary = fw.scan_folder()
+    assert summary["queued"] == 0
+    assert summary["imported_receipts"] == 1
+    assert review_queue.count() == 0
+    assert len(scan_env["db"].get_all_receipts()) == 1
 
 
 def test_scan_empty_inbox_returns_zero(scan_env):

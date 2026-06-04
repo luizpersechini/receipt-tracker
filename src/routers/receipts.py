@@ -17,6 +17,7 @@ from ..schemas.receipts import (
     ReceiptCommitRequest,
     ReceiptEdit,
 )
+from ..services import review_queue
 from ..services.llm_processor import ocr_crops, process_with_segments
 from ..services.receipt_segmenter import segment_with_boxes
 
@@ -38,11 +39,10 @@ async def upload_receipt_preview(file: UploadFile = File(...)):
     bbox editor. The user can adjust / add / delete boxes before calling
     /commit, which performs the actual OCR.
 
-    Special case: PDF uploads bypass the bbox editor entirely. PDFs get
-    rasterised page-by-page, then each page is OCR'd as a single receipt
-    (skip_segmentation=True) — same logic as the folder scan. The response
-    carries `auto_processed: True` so the frontend can show a direct
-    summary instead of opening the editor.
+    Special case: PDF uploads are rasterised page-by-page; each page is
+    segmented and queued for box review (no OCR yet). The response carries
+    `review_queued` (count) + `pages` so the frontend opens the review flow,
+    letting the user confirm/adjust receipt boxes per page before OCR.
     """
     # Local imports keep cold start light and let the PDF path be tested
     # without dragging cv2 into image-only flows.
@@ -55,37 +55,35 @@ async def upload_receipt_preview(file: UploadFile = File(...)):
         with open(filepath, "wb") as buf:
             shutil.copyfileobj(file.file, buf)
 
-        # ── PDF path: rasterise → OCR each page as one receipt → save ───
+        # ── PDF path: rasterise → segment each page → queue EVERY page for
+        # box review (no OCR yet). The frontend opens the editor per page so
+        # the user can confirm/adjust receipt boxes before OCR.
         if is_pdf(str(filepath)):
             pages = await asyncio.to_thread(render_pdf_to_images, str(filepath))
             stem = filepath.stem
-            saved = []
+            queued = []
             for i, page in enumerate(pages, 1):
                 page_name = f"{stem}_p{i}.png"
                 page_path = settings.receipts_dir / page_name
                 await asyncio.to_thread(
                     lambda p=page, pp=page_path: p.save(str(pp), "PNG", optimize=True)
                 )
-                async with _ocr_semaphore:
-                    items = await asyncio.to_thread(
-                        process_with_segments, str(page_path), skip_segmentation=True
-                    )
-                for item in items:
-                    meta = item.get("metadata") or {}
-                    rid = db.save_receipt(
-                        filename=page_name,
-                        filepath=str(page_path),
-                        metadata=meta,
-                        description=None,
-                    )
-                    saved.append({"id": rid, "metadata": meta})
+                boxes, (w, h) = await asyncio.to_thread(segment_with_boxes, str(page_path))
+                item = await asyncio.to_thread(
+                    review_queue.add,
+                    filename=page_name,
+                    image_w=w,
+                    image_h=h,
+                    bboxes=boxes,
+                    source=f"{file.filename} · p{i}/{len(pages)}",
+                    description=None,
+                )
+                queued.append(item["id"])
             return JSONResponse(
                 {
                     "success": True,
                     "filename": filename,
-                    "auto_processed": True,
-                    "count": len(saved),
-                    "receipts": saved,
+                    "review_queued": len(queued),
                     "pages": len(pages),
                 }
             )
@@ -112,22 +110,27 @@ async def upload_receipt_preview(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/upload/receipt/commit")
-async def upload_receipt_commit(body: ReceiptCommitRequest):
-    """
-    Second step of the two-phase upload flow: take a file previously saved
-    by /preview and run OCR on each user-provided bounding box. Saves one
-    receipt row per box.
-    """
+def _box_xywh(b) -> tuple:
+    if isinstance(b, dict):
+        return int(b["x"]), int(b["y"]), int(b["w"]), int(b["h"])
+    return int(b.x), int(b.y), int(b.w), int(b.h)
+
+
+async def commit_boxes_to_receipts(filename: str, bboxes: list, description=None) -> list:
+    """OCR each bounding box on a previously-saved page image and persist one
+    receipt per box. Shared by /upload/receipt/commit and the review-queue
+    commit. `bboxes` items may be pydantic BBox objects or {x,y,w,h} dicts.
+    Returns the saved rows; raises HTTPException on bad input."""
     from pathlib import Path
+
     from PIL import Image
 
-    filepath = settings.receipts_dir / body.filename
+    filepath = settings.receipts_dir / filename
     if not filepath.exists() or not filepath.is_file():
-        raise HTTPException(status_code=404, detail=f"Uploaded file not found: {body.filename}")
+        raise HTTPException(status_code=404, detail=f"Uploaded file not found: {filename}")
 
-    # Guard against path traversal — filename is from /preview's response,
-    # but be defensive: ensure it resolves inside receipts_dir.
+    # Guard against path traversal — be defensive even though the filename
+    # comes from our own /preview / review-queue responses.
     try:
         filepath.resolve().relative_to(settings.receipts_dir.resolve())
     except ValueError:
@@ -140,45 +143,47 @@ async def upload_receipt_commit(body: ReceiptCommitRequest):
 
     img_w, img_h = pil.size
     crops = []
-    for box in body.bboxes:
-        # Clamp to image bounds — frontend math can drift by a pixel or two
-        x0 = max(0, min(box.x, img_w - 1))
-        y0 = max(0, min(box.y, img_h - 1))
-        x1 = max(x0 + 1, min(box.x + box.w, img_w))
-        y1 = max(y0 + 1, min(box.y + box.h, img_h))
+    for box in bboxes:
+        bx, by, bw, bh = _box_xywh(box)
+        # Clamp to image bounds — frontend math can drift by a pixel or two.
+        x0 = max(0, min(bx, img_w - 1))
+        y0 = max(0, min(by, img_h - 1))
+        x1 = max(x0 + 1, min(bx + bw, img_w))
+        y1 = max(y0 + 1, min(by + bh, img_h))
         crops.append(pil.crop((x0, y0, x1, y1)))
 
     async with _ocr_semaphore:
         items = await asyncio.to_thread(ocr_crops, crops)
 
-    stem = Path(body.filename).stem
+    stem = Path(filename).stem
     saved = []
     for i, item in enumerate(items):
         meta = item["metadata"]
         crop = item["crop"]
-        if body.description:
-            meta["user_description"] = body.description
+        if description:
+            meta["user_description"] = description
 
         if len(items) > 1 and crop is not None:
-            # Per-receipt crop saved as its own thumbnail
             row_filename = f"{stem}_seg{i + 1}.png"
             row_filepath = settings.receipts_dir / row_filename
             await asyncio.to_thread(crop.save, str(row_filepath), "PNG", optimize=True)
             row_filepath_str = str(row_filepath)
         else:
-            # Single result — point at the original upload
-            row_filename = body.filename
+            row_filename = filename
             row_filepath_str = str(filepath)
 
         receipt_id = await asyncio.to_thread(
-            db.save_receipt,
-            row_filename,
-            row_filepath_str,
-            meta,
-            body.description,
+            db.save_receipt, row_filename, row_filepath_str, meta, description
         )
         saved.append({"receipt_id": receipt_id, "filename": row_filename, "metadata": meta})
+    return saved
 
+
+@router.post("/upload/receipt/commit")
+async def upload_receipt_commit(body: ReceiptCommitRequest):
+    """Second step of the two-phase upload flow: OCR each user-provided box on
+    a file previously saved by /preview. One receipt row per box."""
+    saved = await commit_boxes_to_receipts(body.filename, body.bboxes, body.description)
     return JSONResponse(
         {
             "success": True,

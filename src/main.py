@@ -18,6 +18,7 @@ from .routers import (
     preview,
     receipts,
     reports,
+    review,
     statements,
     uber,
     watch,
@@ -73,6 +74,7 @@ app.include_router(reports.router)
 app.include_router(watch.router)
 app.include_router(preview.router)
 app.include_router(ocr.router)
+app.include_router(review.router)
 
 
 @app.get("/")

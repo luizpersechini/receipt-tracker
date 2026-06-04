@@ -9,9 +9,10 @@ HTTP so curl works.
 ### `POST /api/upload/receipt/preview`
 
 First step of the bbox-editor flow. Saves the file, runs the
-segmenter, returns suggested bounding boxes. PDFs bypass the editor
-entirely — they're rasterised + OCR'd directly and the response sets
-`auto_processed: true`.
+segmenter, returns suggested bounding boxes. PDFs are rasterised
+page-by-page and **every page is queued for box review** (no OCR yet) —
+the frontend opens the review flow so the user confirms/adjusts the
+receipt boxes per page before OCR. See the box-review queue below.
 
 **Body:** multipart `file`.
 
@@ -28,16 +29,15 @@ entirely — they're rasterised + OCR'd directly and the response sets
 }
 ```
 
-**Response (PDF):**
+**Response (PDF):** each page is pushed to the review queue; no receipts
+are persisted yet.
 
 ```json
 {
   "success": true,
   "filename": "receipt_20260526_120402_foo.pdf",
-  "auto_processed": true,
-  "count": 3,
-  "pages": 3,
-  "receipts": [{"id": 1234, "metadata": {...}}]
+  "review_queued": 3,
+  "pages": 3
 }
 ```
 
@@ -57,6 +57,47 @@ Run OCR on user-confirmed bboxes. Body:
 
 One-shot upload — saves file, segments, OCRs, persists. No bbox
 review. Used by the bulk path.
+
+## Box-review queue
+
+Pages that hold more than one receipt wait here for the user to confirm
+the receipt boxes before OCR runs. Two producers fill it: a **PDF
+upload** (every page is queued) and a **folder scan** (only pages the
+segmenter splits into >1 receipt — single-receipt files OCR straight
+through). The frontend drains the queue through the same bbox editor used
+for direct image uploads.
+
+### `GET /api/review-queue`
+
+Pages awaiting review, each with its page image + suggested boxes.
+
+```json
+{
+  "items": [
+    {
+      "id": 7,
+      "image_url": "/api/preview/receipt_20260526_120402_foo_p1.png",
+      "image_size": { "w": 1654, "h": 2339 },
+      "bboxes": [{ "x": 10, "y": 10, "w": 200, "h": 400 }],
+      "source": "foo.pdf · p1/3",
+      "description": null
+    }
+  ],
+  "count": 1
+}
+```
+
+### `POST /api/review-queue/{id}/commit`
+
+OCR the user-confirmed boxes for one queued page (one receipt per box),
+then drop the page from the queue. Body: `{ "bboxes": [{x,y,w,h}, ...] }`.
+Returns `{ success, count, receipts: [...] }`. 404 if the id is gone, 400
+if no boxes are supplied.
+
+### `DELETE /api/review-queue/{id}`
+
+Discard a queued page without OCR (best-effort removal of its page
+image). `204` on success, `404` if the id is unknown.
 
 ### `GET /api/receipts`
 
@@ -292,8 +333,22 @@ of supported files sitting in the inbox (not in `processed/` or
 ### `POST /api/watch-folder/scan`
 
 Process every supported file in the inbox. Each file moves to
-`processed/` (on success) or `failed/` (on error). Returns a
-summary with per-file results.
+`processed/` (on success) or `failed/` (on error). Single-receipt pages
+OCR straight through; any page the segmenter splits into >1 receipt is
+pushed to the box-review queue instead (see above). Returns a summary
+with per-file results plus `queued` (the number of pages deferred for
+review):
+
+```json
+{
+  "scanned": 4,
+  "files_ok": 4,
+  "files_failed": 0,
+  "imported_receipts": 3,
+  "queued": 2,
+  "results": [ ... ]
+}
+```
 
 ## Reports
 

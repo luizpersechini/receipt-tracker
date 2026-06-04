@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=29" />
+    <link rel="stylesheet" href="/static/css/app.css?v=30" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -205,6 +205,21 @@
       <div class="content">
         <!-- Side upload panel -->
         <div class="side-panel" id="sidePanelEl">
+          <!-- Pending box-review queue (shown only when non-empty) -->
+          <div
+            class="card review-card"
+            id="reviewQueueCard"
+            style="display: none"
+          >
+            <div class="card-head">Pages to review</div>
+            <div class="review-card-sub" id="reviewQueueSub">
+              Confirm receipt boxes before OCR.
+            </div>
+            <button class="btn btn-primary" id="reviewQueueBtn">
+              Review <span id="reviewQueueCount">0</span> page(s)
+            </button>
+          </div>
+
           <!-- OCR / Vision model picker -->
           <div class="card" id="ocrModelCard">
             <div class="card-head">Vision / OCR model</div>
@@ -1651,6 +1666,13 @@
           <button class="btn btn-outline btn-sm" id="bboxResetBtn">
             Reset to auto
           </button>
+          <button
+            class="btn btn-outline btn-sm"
+            id="bboxDiscardBtn"
+            style="display: none"
+          >
+            Discard page
+          </button>
           <button class="btn btn-outline" id="bboxCancelBtn">Cancel</button>
           <button
             class="btn btn-primary"
@@ -1834,6 +1856,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=50"></script>
+    <script src="/static/js/app.js?v=51"></script>
   </body>
 </html>

@@ -62,10 +62,11 @@ makes a match invisible there even though the receipt shows `matched`.
 PII): `report_profile.json` (the global report front-page defaults),
 `report_users.json` (the cardholder roster), `report_history.json`
 (saved-report index), `statement_notes.json` (open-item
-justifications), and `statement_categories.json` (per-transaction
-report-category overrides). The last two are keyed by
-`(statement_id, transaction_index)` so they survive a re-parse. See
-[reports.md](reports.md).
+justifications), `statement_categories.json` (per-transaction
+report-category overrides), and `review_queue.json` (pages awaiting box
+review before OCR — see the OCR pipeline below). `statement_notes` /
+`statement_categories` are keyed by `(statement_id, transaction_index)`
+so they survive a re-parse. See [reports.md](reports.md).
 
 ## OCR pipeline
 
@@ -77,9 +78,24 @@ upload  →  /api/upload/receipt/preview
               │              → llm_processor.ocr_crops → save_receipt
               │
               └─ PDF    → pdf_render.render_pdf_to_images (per page)
-                            → llm_processor.process_with_segments(skip_segmentation=True)
-                            → one receipt per page, no bbox editor
+                            → segment_with_boxes per page → review_queue.add
+                            → frontend drains the queue: bbox editor per page,
+                              POST /review-queue/{id}/commit → ocr_crops → save
+
+folder scan → folder_watcher.scan_folder (per page)
+              ├─ 1 receipt   → process_with_segments(skip_segmentation=True) → save
+              └─ >1 receipts → review_queue.add (deferred for box review)
+
+review  →  /api/review-queue            (pending pages + suggested boxes)
+           /api/review-queue/{id}/commit (OCR confirmed boxes, drop page)
+           /api/review-queue/{id}        (DELETE: discard page, no OCR)
 ```
+
+Both the PDF-upload and folder-scan paths funnel multi-receipt pages
+through one **box-review queue** (`services/review_queue.py`, persisted to
+`data/review_queue.json`). The user confirms/adjusts the auto-detected
+receipt boxes before OCR runs, so a page with several receipts becomes
+several correctly-cropped rows instead of one garbled extraction.
 
 `llm_processor` dispatches to one of two backends configured by
 `OCR_BACKEND`:

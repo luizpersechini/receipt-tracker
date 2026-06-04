@@ -3398,6 +3398,20 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   margin-top: 1px;
 }
 
+/* Pending box-review queue (sidebar card) */
+.review-card {
+  border-left: 3px solid var(--amber);
+}
+.review-card-sub {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  margin-bottom: 12px;
+}
+.review-card .btn-primary {
+  width: 100%;
+}
+
 /* OCR / Vision model picker (sidebar card) */
 #ocrModelCard .ocr-select {
   width: 100%;

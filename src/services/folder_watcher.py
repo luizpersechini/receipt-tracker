@@ -186,9 +186,11 @@ def _ingest_file(src: Path) -> dict:
     Returns a result dict. Raises nothing — errors are captured in the dict
     so a batch keeps going.
     """
-    from .llm_processor import process_with_segments
-    from .pdf_render import render_pdf_to_images, is_pdf
     from ..db.database import save_receipt
+    from . import review_queue
+    from .llm_processor import process_with_segments
+    from .pdf_render import is_pdf, render_pdf_to_images
+    from .receipt_segmenter import segment_with_boxes
 
     result = {
         "filename": src.name,
@@ -226,11 +228,27 @@ def _ingest_file(src: Path) -> dict:
         shutil.copy2(str(src), str(dest_path))
         image_paths.append(dest_path)
 
-    # 2) OCR each materialised image; persist a row per detected receipt.
+    # 2) Per page: segment to count receipts. A page the segmenter splits into
+    #    >1 receipt is queued for box review (the user confirms/adjusts boxes
+    #    before OCR). A single-receipt page is OCR'd as one receipt and saved.
     all_ids: list = []
+    queued_pages = 0
     first_meta: Optional[dict] = None
     for img_path in image_paths:
-        items = process_with_segments(str(img_path), skip_segmentation=is_pdf_source)
+        boxes, (w, h) = segment_with_boxes(str(img_path))
+        if len(boxes) > 1:
+            review_queue.add(
+                filename=img_path.name,
+                image_w=w,
+                image_h=h,
+                bboxes=boxes,
+                source=f"{src.name} (scan)",
+                description="imported from folder scan",
+            )
+            queued_pages += 1
+            continue
+
+        items = process_with_segments(str(img_path), skip_segmentation=True)
         if not items:
             items = [
                 {
@@ -266,6 +284,7 @@ def _ingest_file(src: Path) -> dict:
 
     result["status"] = "ok"
     result["count"] = len(all_ids)
+    result["queued"] = queued_pages
     result["receipt_ids"] = all_ids
     if first_meta:
         result["vendor"] = first_meta.get("vendor_name")
@@ -295,6 +314,7 @@ def scan_folder() -> dict:
         "imported_receipts": 0,
         "files_ok": 0,
         "files_failed": 0,
+        "queued": 0,
         "results": [],
     }
 
@@ -318,11 +338,13 @@ def scan_folder() -> dict:
                     "vendor": res.get("vendor"),
                     "amount": res.get("amount"),
                     "currency": res.get("currency"),
+                    "queued": res.get("queued", 0),
                 }
             )
             if res.get("ocr_warning"):
                 entry["ocr_warning"] = res["ocr_warning"]
             summary["imported_receipts"] += res["count"]
+            summary["queued"] += res.get("queued", 0)
             summary["files_ok"] += 1
             _move_into(src, processed_dir)
         except Exception as e:
