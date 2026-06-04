@@ -4216,11 +4216,25 @@ async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
 
     // ── PDF path ─────────────────────────────────────────────────────
     // The /preview endpoint rasterised every page and queued each one for
-    // box review (no OCR yet). The user confirms the receipt boxes per page
-    // in the bbox editor before OCR runs. Single upload → jump straight into
-    // the review flow; bulk → just refresh the queue card and move on.
-    if (preview.review_queued) {
-      const pages = preview.pages || preview.review_queued;
+    // box review (no OCR yet). An image preview always carries `image_url`;
+    // its absence means this was a PDF (or any rasterise-to-queue) response,
+    // so we must NOT fall through to the image auto-commit below (which would
+    // POST /commit with no bboxes → 422). Single upload → jump into the
+    // review flow; bulk → refresh the queue card and move on.
+    if (!preview.image_url) {
+      const queued = preview.review_queued || 0;
+      const pages = preview.pages || queued;
+      if (!queued) {
+        // PDF produced no reviewable pages (empty/corrupt). Surface it
+        // instead of silently auto-committing an undefined bbox set.
+        const msg = "No receipts found in this PDF.";
+        setAiStep(1, "error", msg);
+        if (!bulk) {
+          $("receiptStatus").textContent = msg;
+          $("receiptStatus").className = "status-msg err";
+        }
+        return { ok: false, error: msg };
+      }
       setAiStep(
         0,
         "done",
@@ -4229,10 +4243,10 @@ async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
       setAiStep(
         1,
         "done",
-        `Queued ${preview.review_queued} page${preview.review_queued === 1 ? "" : "s"} for review`,
+        `Queued ${queued} page${queued === 1 ? "" : "s"} for review`,
       );
       setAiStep(2, "active", "Confirm receipt boxes before OCR…");
-      const summary = `${preview.review_queued} page${preview.review_queued === 1 ? "" : "s"} queued for box review`;
+      const summary = `${queued} page${queued === 1 ? "" : "s"} queued for box review`;
       if (!bulk) {
         $("receiptStatus").textContent = summary;
         $("receiptStatus").className = "status-msg ok";
@@ -4241,7 +4255,7 @@ async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
       } else {
         loadReviewQueue();
       }
-      return { ok: true, deferred: true, queued: preview.review_queued };
+      return { ok: true, deferred: true, queued };
     }
 
     setAiStep(
