@@ -3523,9 +3523,13 @@ class BBoxEditor {
       this.onChange();
     };
 
-    // URL-encode the path so filenames with spaces (very common from phone
-    // photos) don't 404. encodeURI keeps the slashes.
-    const safeUrl = encodeURI(imageUrl);
+    // The server already returns a percent-encoded path (quote()). Only
+    // patch a raw space if one slips through — using encodeURI here would
+    // double-encode an existing %20 into %2520 and 404 (e.g. "Recibos
+    // Raylande.pdf" → ..._Recibos%2520Raylande_p1.png).
+    const safeUrl = imageUrl.includes(" ")
+      ? imageUrl.replace(/ /g, "%20")
+      : imageUrl;
 
     // Attach handlers BEFORE assigning .src so we don't miss a cache-hit
     // load that fires synchronously. img.complete handles the case where
