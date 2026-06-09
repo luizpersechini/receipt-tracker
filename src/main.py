@@ -79,4 +79,9 @@ app.include_router(review.router)
 
 @app.get("/")
 async def root():
-    return FileResponse("static/index.html")
+    # no-cache forces the browser to revalidate index.html on every load, so a
+    # new app.js/app.css ?v= bump is always picked up. Without this the browser
+    # serves a stale index.html (with the old ?v=) and never fetches the new
+    # bundle — the cause of repeated "I changed code but the UI didn't update".
+    # The bundles themselves stay cacheable; the ?v= query busts them.
+    return FileResponse("static/index.html", headers={"Cache-Control": "no-cache"})
