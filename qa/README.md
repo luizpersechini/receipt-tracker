@@ -8,13 +8,20 @@ timing, so you can catch regressions before they reach live data.
 ## Run
 
 ```bash
-python qa/run_qa.py                # real OCR (Apple Vision + llama3.2:3b) — needs Ollama up
+python qa/run_qa.py                # real OCR (Apple Vision + your configured text model) — needs Ollama
 python qa/run_qa.py --ocr mock     # stub OCR — fast, deterministic (seconds)
 python qa/run_qa.py --loops 3      # run the battery 3×
 python qa/run_qa.py --until-clean  # loop until a fully green run (cap 5)
 python qa/run_qa.py --keep         # keep the temp sandbox for inspection
 python qa/run_qa.py --report qa/last.json   # also dump JSON results
+python qa/run_qa.py --corpus 8 --corpus-seed 7   # 8 CORD receipts, FIXED sample (reproducible A/B)
+python qa/run_qa.py --text-model llama3.1:8b     # force a specific structuring model
 ```
+
+The structuring model defaults to your **configured effective model** (the
+persisted picker choice), so the corpus measures what your app actually runs.
+`--corpus-seed N` pins the random CORD sample so you can compare a before/after
+algo change on the _same_ receipts; omit it for a fresh sample each run.
 
 Exit code is `0` when every check passes (warnings allowed), `1` otherwise —
 so it drops into CI or a pre-push hook. `--ocr mock` is the right mode for a
