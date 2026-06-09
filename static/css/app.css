@@ -3438,6 +3438,44 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   margin-top: 1px;
 }
 
+/* Transient toast notifications (row-action success/failure) */
+#toastHost {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text);
+  max-width: 360px;
+  box-shadow: 0 6px 20px oklch(0% 0 0 / 0.14);
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+}
+.toast.toast-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+.toast-err {
+  border-left-color: var(--red);
+}
+.toast-ok {
+  border-left-color: var(--green);
+}
+
 /* Statements list — status filter toolbar + completed (archived) rows */
 .stmt-toolbar {
   display: flex;

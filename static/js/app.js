@@ -35,6 +35,27 @@ const api = async (method, path, body) => {
   }
 };
 
+// Transient floating message — use for row-action successes/failures that
+// have no inline status line (delete, archive, …) so an error can never
+// fail silently again.
+function toast(message, kind = "err") {
+  let host = document.getElementById("toastHost");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "toastHost";
+    document.body.appendChild(host);
+  }
+  const el = document.createElement("div");
+  el.className = "toast toast-" + kind;
+  el.textContent = message;
+  host.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("toast-in"));
+  setTimeout(() => {
+    el.classList.remove("toast-in");
+    setTimeout(() => el.remove(), 250);
+  }, 4200);
+}
+
 const fmt = {
   currency: (v, cur) => {
     if (v == null) return "—";
@@ -652,7 +673,12 @@ async function loadReceipts() {
 
 async function deleteReceipt(id) {
   if (!confirm("Remove this receipt?")) return;
-  await api("DELETE", `/api/receipts/${id}`);
+  try {
+    await api("DELETE", `/api/receipts/${id}`);
+  } catch (e) {
+    toast("Couldn't delete receipt: " + e.message);
+    return;
+  }
   allReceipts = allReceipts.filter((r) => r.id !== id);
   renderReceipts(allReceipts);
   updateProgress(allReceipts);
@@ -773,13 +799,25 @@ async function completeStatement(id, openItems) {
       ? `${openItems} transaction${openItems === 1 ? "" : "s"} still unmatched. Mark this statement complete and archive it anyway?`
       : "Mark this statement complete and archive it?";
   if (!confirm(msg)) return;
-  await api("POST", `/api/statements/${id}/archive`, { archived: true });
+  try {
+    await api("POST", `/api/statements/${id}/archive`, { archived: true });
+  } catch (e) {
+    toast("Couldn't complete statement: " + e.message);
+    return;
+  }
+  toast("Statement marked complete", "ok");
   loadStatements();
   loadStats();
 }
 
 async function reopenStatement(id) {
-  await api("POST", `/api/statements/${id}/archive`, { archived: false });
+  try {
+    await api("POST", `/api/statements/${id}/archive`, { archived: false });
+  } catch (e) {
+    toast("Couldn't reopen statement: " + e.message);
+    return;
+  }
+  toast("Statement reopened", "ok");
   loadStatements();
   loadStats();
 }
@@ -788,7 +826,12 @@ $("stmtStatusFilter")?.addEventListener("change", () => loadStatements());
 
 async function deleteStatement(id) {
   if (!confirm("Remove this statement and its match results?")) return;
-  await api("DELETE", `/api/statements/${id}`);
+  try {
+    await api("DELETE", `/api/statements/${id}`);
+  } catch (e) {
+    toast("Couldn't delete statement: " + e.message);
+    return;
+  }
   loadStatements();
   loadReceipts();
   loadStats();
