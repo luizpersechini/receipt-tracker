@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import settings
+from .json_store import locked, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,10 @@ def _read() -> dict:
 
 
 def _write(d: dict) -> None:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    _path().write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_path(), d)
 
 
+@locked(_path)
 def add(
     *,
     filename: str,
@@ -80,6 +81,7 @@ def get(item_id: int) -> Optional[dict]:
     return None
 
 
+@locked(_path)
 def remove(item_id: int) -> bool:
     d = _read()
     before = len(d["items"])

@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 
 from ..config import settings
+from .json_store import locked, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,7 @@ def _read() -> dict:
 
 
 def _write(data: dict) -> None:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    _path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_path(), data)
 
 
 def get_categories(statement_id: int) -> dict[int, str]:
@@ -71,6 +71,7 @@ def get_category(statement_id: int, transaction_index: int) -> str | None:
     return get_categories(statement_id).get(int(transaction_index))
 
 
+@locked(_path)
 def set_category(statement_id: int, transaction_index: int, category: str | None) -> None:
     """Save (or clear, when blank/invalid) a category override."""
     data = _read()
@@ -89,6 +90,7 @@ def set_category(statement_id: int, transaction_index: int, category: str | None
     _write(data)
 
 
+@locked(_path)
 def clear_statement(statement_id: int) -> None:
     data = _read()
     if data.pop(str(statement_id), None) is not None:

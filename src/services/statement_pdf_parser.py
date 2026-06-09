@@ -148,6 +148,7 @@ def parse_statement_pdf(filepath: str) -> list[dict]:
     doc = fitz.open(filepath)
     try:
         year: Optional[int] = None
+        post_md: Optional[tuple] = None  # (month, day) of the Postagem date
         all_lines: list[str] = []
         for page in doc:
             text = page.get_text()
@@ -155,6 +156,7 @@ def parse_statement_pdf(filepath: str) -> list[dict]:
                 m = _POSTAGEM_RE.search(text)
                 if m:
                     year = int(m.group(3))
+                    post_md = (int(m.group(2)), int(m.group(1)))
             # Itaú renders two visual columns per page. `get_text()` reads
             # them in row-by-row "newspaper" order which interleaves a
             # transaction's footer (city / native / ccy / USD / FX) with
@@ -174,7 +176,7 @@ def parse_statement_pdf(filepath: str) -> list[dict]:
         year = datetime.now().year
         logger.warning("PDF statement: Postagem header not found, using current year %d", year)
 
-    txns = _walk_lines(all_lines, year)
+    txns = _walk_lines(all_lines, year, post_md)
     logger.info("PDF statement: parsed %d transaction(s)", len(txns))
     return txns
 
@@ -182,7 +184,7 @@ def parse_statement_pdf(filepath: str) -> list[dict]:
 # ─── State-machine walk over flattened text ────────────────────────────────
 
 
-def _walk_lines(lines: list[str], year: int) -> list[dict]:
+def _walk_lines(lines: list[str], year: int, post_md: Optional[tuple] = None) -> list[dict]:
     """Walk the line list, emitting one dict per detected transaction."""
     txns: list[dict] = []
     in_payments_section = False
@@ -201,14 +203,14 @@ def _walk_lines(lines: list[str], year: int) -> list[dict]:
             continue
 
         # Try the strict international pattern first (8 lines, ends on FX).
-        txn, used = _try_international(lines, i, year)
+        txn, used = _try_international(lines, i, year, post_md)
         if txn:
             txns.append(txn)
             i += used
             continue
 
         # Then the simpler domestic 3-line pattern.
-        txn, used = _try_domestic(lines, i, year)
+        txn, used = _try_domestic(lines, i, year, post_md)
         if txn:
             txns.append(txn)
             i += used
@@ -218,7 +220,7 @@ def _walk_lines(lines: list[str], year: int) -> list[dict]:
     return txns
 
 
-def _try_domestic(lines: list[str], i: int, year: int):
+def _try_domestic(lines: list[str], i: int, year: int, post_md: Optional[tuple] = None):
     """Match a 3-line BRL transaction at position i. Returns (txn, n_used)."""
     if i + 2 >= len(lines):
         return None, 0
@@ -237,7 +239,7 @@ def _try_domestic(lines: list[str], i: int, year: int):
     if not merchant:
         return None, 0
     return {
-        "date": _iso_date(date_m, year),
+        "date": _iso_date(date_m, year, post_md),
         "description": merchant,
         "amount": amount,
         "category": _guess_category(merchant),
@@ -248,7 +250,7 @@ def _try_domestic(lines: list[str], i: int, year: int):
     }, 3
 
 
-def _try_international(lines: list[str], i: int, year: int):
+def _try_international(lines: list[str], i: int, year: int, post_md: Optional[tuple] = None):
     """Match the 8-line int'l pattern at position i. Returns (txn, n_used).
 
     Strict: the last line MUST match "Dólar de Conversão R$ X,XX" — that's
@@ -282,7 +284,7 @@ def _try_international(lines: list[str], i: int, year: int):
     city = lines[i + 3].strip()
 
     return {
-        "date": _iso_date(date_m, year),
+        "date": _iso_date(date_m, year, post_md),
         "description": merchant,
         "amount": brl_amount,
         "category": _guess_category(merchant),
@@ -314,8 +316,13 @@ def _parse_brl(s: str) -> Optional[float]:
         return None
 
 
-def _iso_date(date_m: re.Match, year: int) -> str:
+def _iso_date(date_m: re.Match, year: int, post_md: Optional[tuple] = None) -> str:
     day, month = int(date_m.group(1)), int(date_m.group(2))
+    # Year boundary: a January statement (Postagem 05/01/2026) lists December
+    # purchases as "15/12" — those belong to the PREVIOUS year. Anything dated
+    # after the posting date can't be this billing year.
+    if post_md and (month, day) > post_md:
+        year -= 1
     return f"{year:04d}-{month:02d}-{day:02d}"
 
 

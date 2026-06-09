@@ -2,10 +2,13 @@
 
 import csv
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+
+from .money import parse_money
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +78,7 @@ def parse_statement_csv(filepath: str) -> list:
             if "category" in actual_columns
             else "uncategorized"
         )
-        txn["raw_data"] = row.to_dict()
+        txn["raw_data"] = _json_safe_row(row.to_dict())
         transactions.append(txn)
 
     return transactions
@@ -90,15 +93,27 @@ def _parse_date(date_str: str) -> str:
     return date_str
 
 
+def _json_safe_row(d: dict) -> dict:
+    """JSON-safe copy of a CSV row: pandas NaN/±inf become None (json.dumps
+    would emit the non-standard NaN token, which round-trips into responses
+    FastAPI refuses to serialize), numpy scalars become Python scalars."""
+    out: dict = {}
+    for k, v in d.items():
+        if isinstance(v, float) and not math.isfinite(v):
+            out[k] = None
+        elif hasattr(v, "item") and not isinstance(v, (str, bytes)):
+            out[k] = v.item()
+        else:
+            out[k] = v
+    return out
+
+
 def _parse_amount(value) -> float:
-    s = str(value)
-    for sym in ("R$", "$", "€", "£"):
-        s = s.replace(sym, "")
-    s = s.replace(",", ".").strip()
-    try:
-        return float(s)
-    except ValueError:
+    parsed = parse_money(value)
+    if parsed is None:
+        logger.warning("Unparseable statement amount %r — stored as 0.0", value)
         return 0.0
+    return parsed
 
 
 def _parse_simple_csv(filepath: str) -> list:

@@ -90,3 +90,33 @@ def test_archived_statement_still_listed_by_get(client):
     rows = c.get("/api/statements").json()["statements"]
     row = next(s for s in rows if s["id"] == sid)
     assert row["archived"] == 1
+
+
+def test_delete_statement_releases_matched_receipts(client):
+    """Regression: deleting a statement removed its matches but left the
+    linked receipts 'matched' — orphaned and hidden by the default filter."""
+    _, db = client
+    sid = _make_statement(db)
+    rid = db.save_receipt("r.jpg", "/x/r.jpg", {"total_amount": 10.0}, "")
+    db.save_match(rid, sid, {"amount": 10.0}, 0.9, match_kind="auto", transaction_index=0)
+    db.update_receipt_match_status(rid, "matched")
+
+    db.delete_statement(sid)
+
+    r = db.get_receipt_by_id(rid)
+    assert r["match_status"] == "pending"
+
+
+def test_delete_statement_keeps_receipts_matched_elsewhere(client):
+    _, db = client
+    sid1 = _make_statement(db)
+    sid2 = _make_statement(db)
+    rid = db.save_receipt("r.jpg", "/x/r.jpg", {"total_amount": 10.0}, "")
+    db.save_match(rid, sid1, {"amount": 10.0}, 0.9, match_kind="auto", transaction_index=0)
+    db.save_match(rid, sid2, {"amount": 10.0}, 0.9, match_kind="manual", transaction_index=1)
+    db.update_receipt_match_status(rid, "matched")
+
+    db.delete_statement(sid1)
+
+    r = db.get_receipt_by_id(rid)
+    assert r["match_status"] == "matched"  # still matched on sid2

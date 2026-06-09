@@ -40,9 +40,11 @@ async def lifespan(app: FastAPI):
     if settings.ocr_warmup:
         # Run in a thread so the (slow) model load doesn't block the event
         # loop during startup. Server is ready as soon as warmup is dispatched.
+        # Keep a reference — the loop only holds weak refs to tasks, and a
+        # GC'd task means warmup silently never runs.
         import asyncio
 
-        asyncio.create_task(asyncio.to_thread(warmup_ocr))
+        app.state.warmup_task = asyncio.create_task(asyncio.to_thread(warmup_ocr))
     try:
         yield
     finally:
@@ -53,9 +55,16 @@ ensure_dirs()
 
 app = FastAPI(title="Receipt Tracker", version="1.0.0", lifespan=lifespan)
 
+# The UI is served by this same app, so cross-origin access is never needed
+# in normal use. A wildcard here would let any web page the user visits read
+# receipts/statements and fire destructive POSTs against this (unauthenticated,
+# financial) API from the browser.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

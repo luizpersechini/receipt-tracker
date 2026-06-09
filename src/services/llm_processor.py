@@ -16,6 +16,7 @@ import requests
 from PIL import Image
 
 from ..config import settings
+from .money import parse_money
 from . import ocr_settings
 
 try:
@@ -289,37 +290,63 @@ _COMMA_DECIMAL_LANGUAGES = {
     "ru",
 }
 _COMMA_DECIMAL_CURRENCIES = {"BRL", "EUR", "ARS", "CLP", "COP", "PEN", "UYU"}
+# Locales where '.' is the decimal mark (',' groups). Used only to AVOID
+# guessing — anything in neither set is treated as unknown.
+_DOT_DECIMAL_CURRENCIES = {
+    "USD",
+    "CAD",
+    "GBP",
+    "AUD",
+    "NZD",
+    "HKD",
+    "SGD",
+    "MXN",
+    "INR",
+    "PHP",
+    "MYR",
+    "THB",
+    "JPY",
+    "CNY",
+    "KRW",
+    "TWD",
+    "ILS",
+}
+_DOT_DECIMAL_LANGUAGES = {
+    "english",
+    "en",
+    "en-us",
+    "en-gb",
+    "en-ca",
+    "japanese",
+    "ja",
+    "chinese",
+    "zh",
+    "korean",
+    "ko",
+    "thai",
+    "th",
+}
 
 
-def _uses_comma_decimal(language: Optional[str], currency: Optional[str]) -> bool:
+def _decimal_hint(language: Optional[str], currency: Optional[str]) -> Optional[bool]:
+    """True when ',' is the decimal separator (pt-BR, EUR…), False when '.' is
+    (en/USD…), None when the locale is UNKNOWN. None matters: it tells
+    parse_money to infer from the number's shape, so a foreign receipt with no
+    recognised currency/language (e.g. Indonesian "38.000") reads its 3-digit
+    group as thousands → 38000, instead of being forced to 38.0 by a wrong
+    dot-decimal default."""
     lang = (language or "").lower().strip()
     cur = (currency or "").upper().strip()
-    return lang in _COMMA_DECIMAL_LANGUAGES or cur in _COMMA_DECIMAL_CURRENCIES
+    if lang in _COMMA_DECIMAL_LANGUAGES or cur in _COMMA_DECIMAL_CURRENCIES:
+        return True
+    if lang in _DOT_DECIMAL_LANGUAGES or cur in _DOT_DECIMAL_CURRENCIES:
+        return False
+    return None
 
 
-def _parse_amount(val, comma_decimal: bool) -> Optional[float]:
-    if val is None:
-        return None
-
-    s = str(val).strip()
-    s = re.sub(r"[R$€£¥\s]", "", s)
-    if not s:
-        return None
-
-    if comma_decimal:
-        if "," in s:
-            s = s.replace(".", "").replace(",", ".")
-    else:
-        if "," in s and "." in s:
-            s = s.replace(",", "")
-        elif "," in s and "." not in s:
-            s = s.replace(",", ".")
-
-    try:
-        f = float(s)
-        return f if f > 0 else None
-    except ValueError:
-        return None
+def _parse_amount(val, comma_decimal: Optional[bool]) -> Optional[float]:
+    f = parse_money(val, comma_decimal=comma_decimal)
+    return f if f is not None and f > 0 else None
 
 
 # Currency normalisation
@@ -1094,7 +1121,7 @@ def _normalize_one_receipt(data: dict) -> dict:
     # Disambiguate currency with country once we have both — fixes the
     # "Canadian receipt shows USD because of bare $" case.
     data["currency"] = _refine_currency(data["currency"], data.get("country"))
-    comma_dec = _uses_comma_decimal(data.get("language"), data.get("currency"))
+    comma_dec = _decimal_hint(data.get("language"), data.get("currency"))
 
     # Strip clock time from the date field — receipts often print
     # "10-Mar-2026 1:44:53p.m." or "2026-03-10 10:29 a.m." and we only
@@ -1394,12 +1421,18 @@ _DATE_PATTERNS_FALLBACK = [
 
 
 def _scan_currency_in_text(text: str) -> Optional[str]:
-    """Find the first unambiguous currency token in the OCR text. Case-
-    sensitive on the symbol prefixes (CAD$ vs cad$) but checks both."""
+    """Find the first unambiguous currency token in the OCR text. Symbol
+    prefixes (CAD$, R$, €) match as substrings, case-insensitively; pure
+    letter codes (CAD, EUR) only as whole words, so "CAD" never fires
+    inside "MERCADO" nor "EUR" inside "beurre"."""
     if not text:
         return None
+    lower = text.lower()
     for token, code in _CURRENCY_TOKENS:
-        if token in text or token.lower() in text.lower():
+        if token.isalpha():
+            if re.search(rf"\b{re.escape(token)}\b", text, re.IGNORECASE):
+                return code
+        elif token in text or token.lower() in lower:
             return code
     return None
 

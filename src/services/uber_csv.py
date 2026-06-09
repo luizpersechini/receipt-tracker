@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .money import parse_money
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,58 +33,87 @@ logger = logging.getLogger(__name__)
 # format (trips_data-0.csv) which has snake_case columns and no trip_id.
 
 _HEADER_ALIASES = {
-    "trip_id":        ["trip or order id", "trip id", "request id", "uuid"],
-    "begin_time":     [
-        "begintrip_timestamp_local", "begintrip_timestamp_utc",
-        "request_timestamp_local", "request_timestamp_utc",
-        "begin trip time", "request time", "trip start time", "begin time",
+    "trip_id": ["trip or order id", "trip id", "request id", "uuid"],
+    "begin_time": [
+        "begintrip_timestamp_local",
+        "begintrip_timestamp_utc",
+        "request_timestamp_local",
+        "request_timestamp_utc",
+        "begin trip time",
+        "request time",
+        "trip start time",
+        "begin time",
     ],
-    "end_time":       [
-        "dropoff_timestamp_local", "dropoff_timestamp_utc",
-        "dropoff time", "end trip time", "trip end time", "end time",
+    "end_time": [
+        "dropoff_timestamp_local",
+        "dropoff_timestamp_utc",
+        "dropoff time",
+        "end trip time",
+        "trip end time",
+        "end time",
     ],
-    "begin_address":  [
+    "begin_address": [
         "begintrip_address",
-        "begin trip address", "pickup address", "begin address", "pickup",
+        "begin trip address",
+        "pickup address",
+        "begin address",
+        "pickup",
     ],
-    "end_address":    [
+    "end_address": [
         "dropoff_address",
-        "dropoff address", "drop off address", "end trip address", "end address", "dropoff",
+        "dropoff address",
+        "drop off address",
+        "end trip address",
+        "end address",
+        "dropoff",
     ],
-    "fare":           [
+    "fare": [
         # Most accurate "what the rider paid" comes first.
-        "client_upfront_fare_local", "original_fare_local",
-        "fare amount", "total fare", "fare", "amount", "total charged", "fare_amount",
+        "client_upfront_fare_local",
+        "original_fare_local",
+        "fare amount",
+        "total fare",
+        "fare",
+        "amount",
+        "total charged",
+        "fare_amount",
     ],
-    "currency":       ["currency_code", "fare currency", "currency", "currency code"],
-    "city":           ["city_name", "city"],
+    "currency": ["currency_code", "fare currency", "currency", "currency code"],
+    "city": ["city_name", "city"],
     "payment_method": ["card_number", "payment method", "payment_method", "payment"],
-    "expense_code":   ["expense code", "expense_code", "request type", "profile", "profile_type"],
-    "service_type":   [
-        "global_product_name", "product_type_name",
-        "product type", "service",
+    "expense_code": ["expense code", "expense_code", "request type", "profile", "profile_type"],
+    "service_type": [
+        "global_product_name",
+        "product_type_name",
+        "product type",
+        "service",
     ],
-    "distance":       ["trip_distance_miles", "distance (mi)", "distance (km)", "distance"],
-    "duration":       ["trip_duration_seconds", "duration (min)", "duration"],
-    "status":         ["status", "trip status"],
-    "begin_lat":      ["begintrip_lat"],
-    "begin_lng":      ["begintrip_lng"],
+    "distance": ["trip_distance_miles", "distance (mi)", "distance (km)", "distance"],
+    "duration": ["trip_duration_seconds", "duration (min)", "duration"],
+    "status": ["status", "trip status"],
+    "begin_lat": ["begintrip_lat"],
+    "begin_lng": ["begintrip_lng"],
 }
 
 # Trip statuses we should not import.
 _SKIP_STATUSES = {
-    "canceled", "cancelled",
-    "rider canceled", "driver canceled",
-    "rider_canceled", "driver_canceled",
-    "unfulfilled", "failed",
+    "canceled",
+    "cancelled",
+    "rider canceled",
+    "driver canceled",
+    "rider_canceled",
+    "driver_canceled",
+    "unfulfilled",
+    "failed",
 }
 
 
 @dataclass
 class UberRow:
     """Normalised representation of one ride for downstream insertion."""
+
     trip_id: str
-    date: Optional[str]              # YYYY-MM-DD
+    date: Optional[str]  # YYYY-MM-DD
     begin_time_raw: Optional[str]
     end_time_raw: Optional[str]
     begin_address: Optional[str]
@@ -91,7 +122,7 @@ class UberRow:
     fare: Optional[float]
     currency: Optional[str]
     payment_method: Optional[str]
-    expense_code: Optional[str]      # the column where Uber tags Business profile
+    expense_code: Optional[str]  # the column where Uber tags Business profile
     service_type: Optional[str]
     distance: Optional[str]
     is_business: bool
@@ -122,6 +153,7 @@ class UberRow:
             "tip_amount": None,
             "service_charge": None,
             # Uber-specific extras (kept for transparency / debugging)
+            "uber_source": "csv",
             "uber_trip_id": self.trip_id,
             "uber_service": self.service_type,
             "uber_distance": self.distance,
@@ -130,6 +162,7 @@ class UberRow:
 
 
 # ─── Header detection ────────────────────────────────────────────────────────
+
 
 def _normalise(h: str) -> str:
     return (h or "").strip().lower()
@@ -164,9 +197,7 @@ def is_uber_csv(filepath: str) -> bool:
     # Or:     begin_time + (fare or begin_address) + currency — new format
     has_old = "trip_id" in cols and ("begin_time" in cols or "fare" in cols)
     has_new = (
-        "begin_time" in cols
-        and "currency" in cols
-        and ("fare" in cols or "begin_address" in cols)
+        "begin_time" in cols and "currency" in cols and ("fare" in cols or "begin_address" in cols)
     )
     return has_old or has_new
 
@@ -204,26 +235,8 @@ def _parse_date(raw: Optional[str]) -> Optional[str]:
 
 
 def _parse_amount(raw) -> Optional[float]:
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    if not s:
-        return None
-    # Strip currency symbols, group separators
-    for ch in ("$", "R$", "€", "£", "¥"):
-        s = s.replace(ch, "")
-    s = s.strip()
-    # If both '.' and ',' present, assume '.' is thousands sep
-    if "," in s and "." in s:
-        s = s.replace(",", "")
-    elif "," in s and "." not in s:
-        # comma is decimal separator (locale-dependent)
-        s = s.replace(",", ".")
-    try:
-        v = float(s)
-        return v if v > 0 else None
-    except ValueError:
-        return None
+    v = parse_money(raw)
+    return v if v is not None and v > 0 else None
 
 
 def _is_business(payment_method: Optional[str], expense_code: Optional[str]) -> bool:
@@ -234,8 +247,14 @@ def _is_business(payment_method: Optional[str], expense_code: Optional[str]) -> 
 
 # ─── Main parse ──────────────────────────────────────────────────────────────
 
-def _synthesize_trip_id(*, begin_time: Optional[str], begin_lat: Optional[str],
-                        begin_lng: Optional[str], fare: Optional[float]) -> str:
+
+def _synthesize_trip_id(
+    *,
+    begin_time: Optional[str],
+    begin_lat: Optional[str],
+    begin_lng: Optional[str],
+    fare: Optional[float],
+) -> str:
     """Stable hash for de-duplicating CSV rows that have no native trip id."""
     parts = [
         (begin_time or "").strip(),
@@ -247,9 +266,13 @@ def _synthesize_trip_id(*, begin_time: Optional[str], begin_lat: Optional[str],
     return f"syn-{digest}"
 
 
-def parse_uber_csv(filepath: str, *, business_only: bool = False,
-                   after: Optional[str] = None,
-                   before: Optional[str] = None) -> list:
+def parse_uber_csv(
+    filepath: str,
+    *,
+    business_only: bool = False,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+) -> list:
     """
     Parse an Uber rider CSV into a list of UberRow.
 
@@ -345,7 +368,11 @@ def parse_uber_csv(filepath: str, *, business_only: bool = False,
     logger.info(
         "uber_csv: parsed=%d skipped(cancelled=%d, no_fare=%d, "
         "non_business=%d, out_of_range=%d) headers_count=%d",
-        len(rows), skipped_cancelled, skipped_no_fare,
-        skipped_non_business, skipped_out_of_range, len(headers),
+        len(rows),
+        skipped_cancelled,
+        skipped_no_fare,
+        skipped_non_business,
+        skipped_out_of_range,
+        len(headers),
     )
     return rows

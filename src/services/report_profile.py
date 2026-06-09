@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
+from .json_store import locked, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ def _migrate_accounts(merged: dict[str, Any], raw: dict[str, Any]) -> dict[str, 
     return merged
 
 
+@locked(_profile_path)
 def save_profile(patch: dict[str, Any]) -> dict[str, Any]:
     """Merge `patch` into the saved profile and persist. Unknown keys are
     ignored so a stray field from the client can't bloat the file."""
@@ -97,6 +99,5 @@ def save_profile(patch: dict[str, Any]) -> dict[str, Any]:
     for k, v in (patch or {}).items():
         if k in DEFAULT_PROFILE:
             current[k] = "" if v is None else str(v)
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    _profile_path().write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_profile_path(), current)
     return current

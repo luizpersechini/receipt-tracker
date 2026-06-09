@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..config import settings
+from .json_store import locked, write_json
 from .report_profile import DEFAULT_PROFILE
 
 logger = logging.getLogger(__name__)
@@ -42,8 +43,7 @@ def _read() -> list[dict]:
 
 
 def _write(users: list[dict]) -> None:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    _path().write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_path(), users)
 
 
 def _normalise(data: dict, uid: int) -> dict:
@@ -71,6 +71,7 @@ def get_user(uid: int) -> Optional[dict]:
     return None
 
 
+@locked(_path)
 def create_user(data: dict) -> dict:
     users = _read()
     next_id = max((int(u.get("id", 0)) for u in users), default=0) + 1
@@ -80,6 +81,7 @@ def create_user(data: dict) -> dict:
     return user
 
 
+@locked(_path)
 def update_user(uid: int, patch: dict) -> Optional[dict]:
     users = _read()
     for i, u in enumerate(users):
@@ -99,6 +101,7 @@ def update_user(uid: int, patch: dict) -> Optional[dict]:
     return None
 
 
+@locked(_path)
 def delete_user(uid: int) -> bool:
     users = _read()
     new = [u for u in users if int(u.get("id", -1)) != int(uid)]

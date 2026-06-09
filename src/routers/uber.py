@@ -20,9 +20,15 @@ logger = logging.getLogger(__name__)
 @router.post("/upload/uber-csv")
 async def upload_uber_csv(
     file: UploadFile = File(...),
-    business_only: bool = Query(False, description="Skip rides that don't look like Business Profile rides"),
-    after: Optional[str] = Query(None, description="Only import rides on/after this date (YYYY-MM-DD)"),
-    before: Optional[str] = Query(None, description="Only import rides on/before this date (YYYY-MM-DD)"),
+    business_only: bool = Query(
+        False, description="Skip rides that don't look like Business Profile rides"
+    ),
+    after: Optional[str] = Query(
+        None, description="Only import rides on/after this date (YYYY-MM-DD)"
+    ),
+    before: Optional[str] = Query(
+        None, description="Only import rides on/before this date (YYYY-MM-DD)"
+    ),
 ):
     """
     Upload an Uber rider trip-history CSV (the file Uber emails you when you
@@ -50,8 +56,11 @@ async def upload_uber_csv(
             )
 
         rows = await asyncio.to_thread(
-            parse_uber_csv, str(filepath),
-            business_only=business_only, after=after, before=before,
+            parse_uber_csv,
+            str(filepath),
+            business_only=business_only,
+            after=after,
+            before=before,
         )
     except HTTPException:
         raise
@@ -73,13 +82,26 @@ async def upload_uber_csv(
             skipped_dup += 1
             continue
 
-        # Cross-source dedup: same ride may already be in the DB from Gmail
-        # (which gave it a different filename). Match by (date, amount,
-        # currency). If found, skip — don't create a second row.
-        cross = await asyncio.to_thread(
-            db.find_uber_receipt_by_date_amount,
-            row.date, row.fare, row.currency,
-        )
+        # Cross-source dedup: same ride may already be in the DB from Gmail.
+        # Prefer the exact trip-id link (same synthetic stem, .pdf/.eml ext);
+        # fall back to (date, amount, currency) — restricted to GMAIL rows,
+        # otherwise the second of two legitimate same-day same-fare rides in
+        # this very CSV would dedupe against the first and silently vanish.
+        stem = synthetic_name.rsplit(".", 1)[0]
+        cross = None
+        for ext in (".pdf", ".eml"):
+            cross = await asyncio.to_thread(db.get_receipt_by_filename, stem + ext)
+            if cross:
+                break
+        if not cross:
+            cross = await asyncio.to_thread(
+                db.find_uber_receipt_by_date_amount,
+                row.date,
+                row.fare,
+                row.currency,
+                0.01,
+                "gmail",
+            )
         if cross:
             skipped_cross_source += 1
             continue
@@ -97,12 +119,14 @@ async def upload_uber_csv(
             logger.exception("uber import: row %s failed", row.trip_id)
             errors.append(f"{row.trip_id}: {e}")
 
-    return JSONResponse({
-        "success": True,
-        "imported": imported,
-        "skipped_duplicates": skipped_dup,
-        "skipped_cross_source": skipped_cross_source,
-        "parsed_rows": len(rows),
-        "errors": errors,
-        "business_only": business_only,
-    })
+    return JSONResponse(
+        {
+            "success": True,
+            "imported": imported,
+            "skipped_duplicates": skipped_dup,
+            "skipped_cross_source": skipped_cross_source,
+            "parsed_rows": len(rows),
+            "errors": errors,
+            "business_only": business_only,
+        }
+    )

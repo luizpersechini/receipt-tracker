@@ -317,7 +317,7 @@ async def create_expense_report(body: ExpenseReportRequest):
                 "transaction_date": m.get("transaction_data", {}).get("date"),
                 "transaction_description": m.get("transaction_data", {}).get("description"),
                 "transaction_amount": m.get("transaction_data", {}).get("amount"),
-                "match_score": m.get("match_score", 0),
+                "match_score": m.get("match_score") or 0,
             }
             for m in matches_raw
         ]

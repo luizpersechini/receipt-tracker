@@ -72,10 +72,15 @@ def _converted_label(target_currency: str) -> str:
     return f"Converted ({target_currency})"
 
 
-def _write_receipt_rows(ws, receipts: list, start_row: int,
-                        target_currency: str, fx_rates: dict,
-                        show_expense_type: bool = False,
-                        show_match_status: bool = False) -> int:
+def _write_receipt_rows(
+    ws,
+    receipts: list,
+    start_row: int,
+    target_currency: str,
+    fx_rates: dict,
+    show_expense_type: bool = False,
+    show_match_status: bool = False,
+) -> int:
     row = start_row
     for i, r in enumerate(receipts):
         meta = _parse_meta(r)
@@ -90,7 +95,9 @@ def _write_receipt_rows(ws, receipts: list, start_row: int,
             r.get("id"),
             meta.get("date"),
             meta.get("vendor_name"),
-            meta.get("city") or meta.get("vendor_address", "")[:30] if meta.get("vendor_address") else meta.get("city"),
+            meta.get("city") or meta.get("vendor_address", "")[:30]
+            if meta.get("vendor_address")
+            else meta.get("city"),
             amount,
             currency or None,
             converted,
@@ -114,8 +121,17 @@ def _write_receipt_rows(ws, receipts: list, start_row: int,
 
 
 def _receipt_headers(target_currency: str, show_expense_type=False, show_match_status=False):
-    h = ["ID", "Date", "Vendor", "Location", "Amount", "Currency",
-         _converted_label(target_currency), "Category", "Description"]
+    h = [
+        "ID",
+        "Date",
+        "Vendor",
+        "Location",
+        "Amount",
+        "Currency",
+        _converted_label(target_currency),
+        "Category",
+        "Description",
+    ]
     if show_expense_type:
         h.insert(8, "Type")
     if show_match_status:
@@ -123,8 +139,9 @@ def _receipt_headers(target_currency: str, show_expense_type=False, show_match_s
     return h
 
 
-def _write_category_subtotals(ws, receipts: list, row: int,
-                              target_currency: str, fx_rates: dict) -> int:
+def _write_category_subtotals(
+    ws, receipts: list, row: int, target_currency: str, fx_rates: dict
+) -> int:
     totals: dict = {}
     for r in receipts:
         meta = _parse_meta(r)
@@ -156,9 +173,9 @@ def _write_category_subtotals(ws, receipts: list, row: int,
     return row
 
 
-def generate_excel_report(receipts: list, statements: list,
-                          target_currency: str = "BRL",
-                          fx_rates: Optional[dict] = None) -> str:
+def generate_excel_report(
+    receipts: list, statements: list, target_currency: str = "BRL", fx_rates: Optional[dict] = None
+) -> str:
     if fx_rates is None:
         fx_rates = {}
 
@@ -223,21 +240,27 @@ def _create_summary_sheet(ws, receipts, statements, target_currency, fx_rates):
 def _create_receipts_sheet(ws, receipts, target_currency, fx_rates):
     headers = _receipt_headers(target_currency, show_expense_type=True, show_match_status=True)
     _write_header(ws, 1, headers)
-    next_row = _write_receipt_rows(ws, receipts, 2, target_currency, fx_rates,
-                                   show_expense_type=True, show_match_status=True)
+    next_row = _write_receipt_rows(
+        ws, receipts, 2, target_currency, fx_rates, show_expense_type=True, show_match_status=True
+    )
     _write_category_subtotals(ws, receipts, next_row + 1, target_currency, fx_rates)
     _auto_width(ws)
 
 
 def _create_statements_sheet(ws, statements):
-    headers = ["Statement ID", "Filename", "Transaction Date",
-               "Description", "Amount", "Category"]
+    headers = ["Statement ID", "Filename", "Transaction Date", "Description", "Amount", "Category"]
     _write_header(ws, 1, headers)
     row = 2
     for s in statements:
         for txn in s.get("transactions", []):
-            cells = [s.get("id"), s.get("filename"), txn.get("date"),
-                     txn.get("description"), txn.get("amount"), txn.get("category")]
+            cells = [
+                s.get("id"),
+                s.get("filename"),
+                txn.get("date"),
+                txn.get("description"),
+                txn.get("amount"),
+                txn.get("category"),
+            ]
             for col, val in enumerate(cells, 1):
                 ws.cell(row=row, column=col, value=val).border = THIN_BORDER
             row += 1
@@ -246,10 +269,18 @@ def _create_statements_sheet(ws, statements):
 
 def _create_reconciliation_sheet(ws, receipts, statements, target_currency, fx_rates):
     headers = [
-        "Receipt ID", "Receipt Date", "Receipt Vendor", "Receipt Amount", "Currency",
+        "Receipt ID",
+        "Receipt Date",
+        "Receipt Vendor",
+        "Receipt Amount",
+        "Currency",
         _converted_label(target_currency),
-        "Statement ID", "Txn Date", "Txn Description", "Txn Amount",
-        "Match Score", "Status",
+        "Statement ID",
+        "Txn Date",
+        "Txn Description",
+        "Txn Amount",
+        "Match Score",
+        "Status",
     ]
     _write_header(ws, 1, headers)
 
@@ -262,25 +293,37 @@ def _create_reconciliation_sheet(ws, receipts, statements, target_currency, fx_r
         score = m.get("match_score", 0)
         fill = GREEN_FILL if score >= 0.8 else (YELLOW_FILL if score >= 0.6 else RED_FILL)
         cells = [
-            m.get("receipt_id"), m.get("receipt_date"), m.get("receipt_vendor"),
-            amt, cur, cv,
-            m.get("statement_id"), m.get("transaction_date"),
-            m.get("transaction_description"), m.get("transaction_amount"),
+            m.get("receipt_id"),
+            m.get("receipt_date"),
+            m.get("receipt_vendor"),
+            amt,
+            cur,
+            cv,
+            m.get("statement_id"),
+            m.get("transaction_date"),
+            m.get("transaction_description"),
+            m.get("transaction_amount"),
             score,
         ]
         for col, val in enumerate(cells, 1):
             ws.cell(row=row, column=col, value=val).border = THIN_BORDER
-        status_cell = ws.cell(row=row, column=len(cells) + 1,
-                              value="MATCHED" if score >= 0.8 else "PARTIAL" if score >= 0.6 else "WEAK")
+        status_cell = ws.cell(
+            row=row,
+            column=len(cells) + 1,
+            value="MATCHED" if score >= 0.8 else "PARTIAL" if score >= 0.6 else "WEAK",
+        )
         status_cell.fill = fill
         row += 1
     _auto_width(ws)
 
 
-def generate_expense_report(receipts: list, report_type: str,
-                            target_currency: str = "BRL",
-                            fx_rates: Optional[dict] = None,
-                            matches: Optional[list] = None) -> str:
+def generate_expense_report(
+    receipts: list,
+    report_type: str,
+    target_currency: str = "BRL",
+    fx_rates: Optional[dict] = None,
+    matches: Optional[list] = None,
+) -> str:
     """Generate a typed expense report Excel file. report_type: corp_card|reimbursement|all."""
     if fx_rates is None:
         fx_rates = {}
@@ -335,11 +378,15 @@ def _create_expense_summary(ws, receipts, report_type, target_currency, fx_rates
         if not subset:
             continue
         total_cv = sum(
-            (convert(
-                _fmt_amount(_parse_meta(r).get("total_amount")) or 0,
-                (_parse_meta(r).get("currency") or "BRL").upper(),
-                target_currency, fx_rates
-            ) or 0)
+            (
+                convert(
+                    _fmt_amount(_parse_meta(r).get("total_amount")) or 0,
+                    (_parse_meta(r).get("currency") or "BRL").upper(),
+                    target_currency,
+                    fx_rates,
+                )
+                or 0
+            )
             for r in subset
         )
         ws.cell(row=row, column=1, value=label)
@@ -382,8 +429,12 @@ def _create_corp_card_sheet(ws, receipts, target_currency, fx_rates, matches):
     """Corp card sheet: receipt rows + matched statement transaction column."""
     match_by_receipt = {m["receipt_id"]: m for m in matches}
 
-    headers = _receipt_headers(target_currency, show_match_status=True) + \
-              ["Txn Date", "Txn Description", "Txn Amount", "Match Score"]
+    headers = _receipt_headers(target_currency, show_match_status=True) + [
+        "Txn Date",
+        "Txn Description",
+        "Txn Amount",
+        "Match Score",
+    ]
     _write_header(ws, 1, headers)
 
     row = 2
@@ -396,14 +447,20 @@ def _create_corp_card_sheet(ws, receipts, target_currency, fx_rates, matches):
 
         m = match_by_receipt.get(r["id"])
         base = [
-            r.get("id"), meta.get("date"), meta.get("vendor_name"),
-            meta.get("city"), amount, currency, converted,
-            meta.get("category"), r.get("description"),
+            r.get("id"),
+            meta.get("date"),
+            meta.get("vendor_name"),
+            meta.get("city"),
+            amount,
+            currency,
+            converted,
+            meta.get("category"),
+            r.get("description"),
             r.get("match_status", "pending"),
             m.get("transaction_date") if m else None,
             m.get("transaction_description") if m else None,
             m.get("transaction_amount") if m else None,
-            round(m.get("match_score", 0), 2) if m else None,
+            round(m.get("match_score") or 0, 2) if m else None,
         ]
         for col, val in enumerate(base, 1):
             c = ws.cell(row=row, column=col, value=val)

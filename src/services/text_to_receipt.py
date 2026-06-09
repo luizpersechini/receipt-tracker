@@ -58,21 +58,26 @@ Return exactly this shape:
 }
 
 Rules:
-- total_amount IS THE FINAL AMOUNT CHARGED TO THE CARD (or paid in cash).
+- total_amount IS THE GRAND TOTAL the customer owed — the final amount after
+  tax/service, in ANY language. It is a "total"-type amount, NEVER a line-item
+  price, a quantity, a subtotal, or a tax line.
   Priority order when reading the text:
-    1. Lines tagged with the card transaction: "VENTA", "CHARGED", "AMOUNT",
-       "Total CAD$", "TOTAL CAD", "Card", or the largest amount adjacent to
-       a masked card number (xxxxxxxx2928 etc.). This is the truth source.
-    2. Otherwise a line literally labeled "Total" / "Grand Total" / "Valor
-       Total" — ONLY IF there is no separate Tip/Propina/Service charge/
-       Credit card surcharge line below it that adds value.
-    3. If a "Total" line is followed by a Tip/Propina/Service charge/
-       Surcharge line, the REAL total is "Total + those extras". If the
-       receipt prints the sum on a later line, return that sum. Otherwise
-       return the printed Total but also fill tip_amount and service_charge
-       so downstream code can reconcile.
-  total_amount is NEVER the subtotal. If the only numbers visible are
-  Subtotal and Total, pick the larger.
+    1. A card-transaction line: "VENTA", "CHARGED", "AMOUNT", "Total CAD$",
+       "TOTAL CAD", "Card", or the amount next to a masked card number
+       (xxxxxxxx2928 etc.). This is the truth source.
+    2. Otherwise a line labeled total / grand total / amount due / amount to
+       pay, IN ANY LANGUAGE: "Total", "Grand Total", "Valor Total", "Total a
+       Pagar", "Importe", "Totale", "Jumlah", "Total Bayar", "合計". If several
+       total-type amounts appear (subtotal, tax, total), take the LARGEST —
+       that is the grand total.
+    3. If a "Total" line is followed by Tip/Propina/Service charge/Surcharge
+       lines, the REAL total is "Total + those extras"; return the printed sum
+       if present, otherwise the Total plus fill tip_amount/service_charge.
+  NEVER return a "cash"/"tunai"/"paid"/"tendered" amount or a
+  "change"/"kembali"/"troco" amount as total_amount — those are the money
+  handed over and given back, not the bill. If both are shown, total = cash −
+  change. total_amount is NEVER the subtotal; between Subtotal and Total pick
+  Total (the larger).
 
 - date: return ONLY the transaction date physically printed on the receipt.
   NEVER use today's date. NEVER fabricate. If unclear, return null.

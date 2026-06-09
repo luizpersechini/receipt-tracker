@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..config import settings
+from .json_store import locked, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,23 @@ def _read() -> list[dict]:
 
 
 def _write(records: list[dict]) -> None:
-    _index_path().write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_index_path(), records)
 
 
+def _next_id(records: list[dict]) -> int:
+    """Never reuse an id: consider both the index AND report_*.pdf files on
+    disk, so deleting the newest record can't recycle its id (a stale client
+    holding the old id would download a different report)."""
+    highest = max((int(r.get("id", 0)) for r in records), default=0)
+    for f in _dir().glob("report_*.pdf"):
+        try:
+            highest = max(highest, int(f.stem.split("_")[1]))
+        except (IndexError, ValueError):
+            continue
+    return highest + 1
+
+
+@locked(_index_path)
 def record(
     pdf_bytes: bytes,
     *,
@@ -65,7 +80,7 @@ def record(
     pass a timestamp (tests); defaults to now.
     """
     records = _read()
-    next_id = max((int(r.get("id", 0)) for r in records), default=0) + 1
+    next_id = _next_id(records)
     fname = f"report_{next_id}.pdf"
     (_dir() / fname).write_bytes(pdf_bytes)
 
@@ -108,6 +123,7 @@ def read_pdf(rid: int) -> Optional[bytes]:
     return fp.read_bytes()
 
 
+@locked(_index_path)
 def delete_record(rid: int) -> bool:
     records = _read()
     keep, removed = [], None

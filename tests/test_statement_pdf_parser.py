@@ -249,3 +249,16 @@ def test_parse_statement_dispatcher_routes_pdf(tmp_path):
     txns = parse_statement(str(pdf))
     assert len(txns) == 1
     assert txns[0]["amount"] == 17.81
+
+
+def test_iso_date_rolls_back_year_across_statement_boundary():
+    """Regression: a January statement (Postagem 05/01/2026) lists December
+    purchases as '15/12' — they belong to 2025, not 11 months in the future."""
+    from src.services.statement_pdf_parser import _DATE_RE, _iso_date
+
+    dec = _DATE_RE.match("15/12")
+    jan = _DATE_RE.match("03/01")
+    assert _iso_date(dec, 2026, (1, 5)) == "2025-12-15"
+    assert _iso_date(jan, 2026, (1, 5)) == "2026-01-03"
+    # No Postagem found → behave as before (no rollback guess).
+    assert _iso_date(dec, 2026, None) == "2026-12-15"

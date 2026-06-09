@@ -197,8 +197,20 @@ def test_scan_currency_finds_explicit_cad_marker():
     assert llm._scan_currency_in_text("TOTAL CAD$ 38.10") == "CAD"
     assert llm._scan_currency_in_text("Total CA$ 12.50") == "CAD"
     assert llm._scan_currency_in_text("Net R$ 18,98 (BRL)") == "BRL"
-    assert llm._scan_currency_in_text("$5.99 only here") is None or "USD"
+    # Bare "$" is deliberately ambiguous (USD/CAD/AUD...) — no token for it.
+    assert llm._scan_currency_in_text("$5.99 only here") is None
     assert llm._scan_currency_in_text("") is None
+
+
+def test_scan_currency_ignores_codes_inside_words():
+    """Letter codes must match whole words only: 'CAD' inside 'MERCADO'
+    flipped Brazilian receipts to CAD (real bug)."""
+    assert llm._scan_currency_in_text("SUPERMERCADO EXTRA LTDA\nTOTAL 41,78") is None
+    assert llm._scan_currency_in_text("AVOCADO TOAST 12.00") is None
+    assert llm._scan_currency_in_text("BEURRE DOUX 3,20") is None
+    # ...but standalone codes still match.
+    assert llm._scan_currency_in_text("Total 38.10 CAD") == "CAD"
+    assert llm._scan_currency_in_text("amount due: 12 eur") == "EUR"
 
 
 def test_scan_date_finds_common_patterns():

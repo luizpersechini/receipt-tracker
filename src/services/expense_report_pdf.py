@@ -637,7 +637,7 @@ def _receipt_cell(rc: dict) -> str:
     cap = f"{escape(rc['date'])} · {escape(rc['vendor'])}"
     amt = rc.get("amount")
     if amt is not None:
-        sym = "R$" if (rc.get("currency") or "BRL") == "BRL" else (rc.get("currency") + " ")
+        sym = "R$" if (rc.get("currency") or "BRL") == "BRL" else (escape(rc.get("currency")) + " ")
         cap += f" · {sym} {_fmt_brl(amt)}"
     if rc.get("img"):
         inner = f'<img src="{rc["img"]}" alt="">'

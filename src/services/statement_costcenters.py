@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 
 from ..config import settings
+from .json_store import locked, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,7 @@ def _read() -> dict:
 
 
 def _write(data: dict) -> None:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    _path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_path(), data)
 
 
 def get_cost_centers(statement_id: int) -> dict[int, str]:
@@ -58,6 +58,7 @@ def get_cost_center(statement_id: int, transaction_index: int) -> str | None:
     return get_cost_centers(statement_id).get(int(transaction_index))
 
 
+@locked(_path)
 def set_cost_center(statement_id: int, transaction_index: int, value: str | None) -> None:
     """Save (or, when blank, clear) a cost-center override for one transaction."""
     data = _read()
@@ -76,6 +77,7 @@ def set_cost_center(statement_id: int, transaction_index: int, value: str | None
     _write(data)
 
 
+@locked(_path)
 def clear_statement(statement_id: int) -> None:
     """Drop all cost-center overrides for a statement (called when deleted)."""
     data = _read()

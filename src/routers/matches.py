@@ -357,12 +357,12 @@ async def create_manual_match(body: ManualMatchRequest):
     # A transaction CAN take multiple receipts (cumulative pairing — e.g.
     # one hotel folio charge split across room + restaurant + parking
     # receipts). But a single receipt is still 1:1 — pairing it against
-    # two transactions would double-count it on reports.
-    existing = await asyncio.to_thread(db.get_matches_for_statement, body.statement_id)
-    if any(m.get("receipt_id") == body.receipt_id for m in existing):
+    # two transactions (on ANY statement) would double-count it on reports.
+    all_matches = await asyncio.to_thread(db.get_all_matches)
+    if any(m.get("receipt_id") == body.receipt_id for m in all_matches):
         raise HTTPException(
             status_code=409,
-            detail="That receipt is already matched on this statement.",
+            detail="That receipt is already matched (on this or another statement).",
         )
 
     txn = transactions[body.transaction_index]

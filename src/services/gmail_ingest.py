@@ -28,6 +28,7 @@ from typing import Iterable, Optional
 from bs4 import BeautifulSoup
 
 from ..config import settings
+from .money import parse_money
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ def get_service():
     if not creds:
         return None
     from googleapiclient.discovery import build
+
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
@@ -107,7 +109,9 @@ def _categorise_gmail_error(exc: Exception) -> dict:
         "success": False,
         "error": msg,
         "error_kind": kind,
-        "imported": 0, "skipped": 0, "errors": [],
+        "imported": 0,
+        "skipped": 0,
+        "errors": [],
     }
 
 
@@ -137,7 +141,8 @@ def run_oauth_flow(timeout: int = 300) -> dict:
         from google_auth_oauthlib.flow import InstalledAppFlow
 
         flow = InstalledAppFlow.from_client_secrets_file(
-            str(settings.gmail_credentials_path), SCOPES,
+            str(settings.gmail_credentials_path),
+            SCOPES,
         )
         # port=0 picks a free port; the flow spins up a tiny local server,
         # opens the user's browser, and waits for the redirect.
@@ -145,9 +150,7 @@ def run_oauth_flow(timeout: int = 300) -> dict:
             port=0,
             open_browser=True,
             timeout_seconds=timeout,
-            success_message=(
-                "Gmail connected to Receipt Tracker. You can close this tab."
-            ),
+            success_message=("Gmail connected to Receipt Tracker. You can close this tab."),
         )
         settings.gmail_token_path.write_text(creds.to_json(), encoding="utf-8")
         return {"success": True, "token_path": str(settings.gmail_token_path)}
@@ -158,42 +161,74 @@ def run_oauth_flow(timeout: int = 300) -> dict:
 
 # ─── Label management ────────────────────────────────────────────────────────
 
+
 def _get_or_create_label_id(service, name: str) -> str:
     """Look up a Gmail label by name; create it if missing."""
     labels = service.users().labels().list(userId="me").execute().get("labels", [])
     for lbl in labels:
         if lbl.get("name") == name:
             return lbl["id"]
-    created = service.users().labels().create(
-        userId="me",
-        body={"name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
-    ).execute()
+    created = (
+        service.users()
+        .labels()
+        .create(
+            userId="me",
+            body={
+                "name": name,
+                "labelListVisibility": "labelShow",
+                "messageListVisibility": "show",
+            },
+        )
+        .execute()
+    )
     return created["id"]
 
 
 # ─── Message fetching ────────────────────────────────────────────────────────
 
+
 def list_message_ids(service, query: str, max_results: int) -> list:
-    """Return a list of Gmail message IDs matching `query`."""
-    result = service.users().messages().list(
-        userId="me",
-        q=query,
-        maxResults=max_results,
-    ).execute()
-    return [m["id"] for m in result.get("messages", [])]
+    """Return up to `max_results` Gmail message IDs matching `query`,
+    following nextPageToken — a single list() call silently caps at the
+    API's page size, which starved syncs with large windows."""
+    ids: list = []
+    page_token = None
+    while len(ids) < max_results:
+        result = (
+            service.users()
+            .messages()
+            .list(
+                userId="me",
+                q=query,
+                maxResults=min(max_results - len(ids), 500),
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        ids.extend(m["id"] for m in result.get("messages", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+    return ids[:max_results]
 
 
 def fetch_message(service, msg_id: str) -> dict:
     """Fetch one message with full payload."""
-    return service.users().messages().get(
-        userId="me",
-        id=msg_id,
-        format="full",
-    ).execute()
+    return (
+        service.users()
+        .messages()
+        .get(
+            userId="me",
+            id=msg_id,
+            format="full",
+        )
+        .execute()
+    )
 
 
 def extract_html_body(message: dict) -> Optional[str]:
     """Walk the MIME tree and return the first text/html part decoded as UTF-8."""
+
     def walk(part):
         if part.get("mimeType") == "text/html" and "data" in part.get("body", {}):
             data = part["body"]["data"]
@@ -218,6 +253,7 @@ def extract_plain_body(message: dict) -> Optional[str]:
             if found:
                 return found
         return None
+
     return walk(message.get("payload", {}))
 
 
@@ -232,11 +268,12 @@ def header(message: dict, name: str) -> Optional[str]:
 
 # ─── HTML parsing ────────────────────────────────────────────────────────────
 
+
 @dataclass
 class ParsedUberEmail:
-    msg_id: str                    # Gmail message id — always present, used as dedup fallback
+    msg_id: str  # Gmail message id — always present, used as dedup fallback
     trip_id: Optional[str]
-    date: Optional[str]            # YYYY-MM-DD
+    date: Optional[str]  # YYYY-MM-DD
     total_amount: Optional[float]
     currency: Optional[str]
     pickup: Optional[str]
@@ -284,36 +321,28 @@ class ParsedUberEmail:
 
 _AMOUNT_PATTERNS = [
     # "Total $32.29", "Total: R$ 41,78", "Total CA$ 12.34"
-    re.compile(r"(?:total|amount)\s*[:\-]?\s*([A-Z]{0,3}\$|R\$|€|£|¥|CA\$|US\$)?\s*([0-9][0-9.,]*)", re.IGNORECASE),
+    re.compile(
+        r"(?:total|amount)\s*[:\-]?\s*([A-Z]{0,3}\$|R\$|€|£|¥|CA\$|US\$)?\s*([0-9][0-9.,]*)",
+        re.IGNORECASE,
+    ),
 ]
 
 _CURRENCY_SYMBOL_MAP = {
-    "$":   "USD",
+    "$": "USD",
     "us$": "USD",
     "ca$": "CAD",
-    "r$":  "BRL",
-    "€":   "EUR",
-    "£":   "GBP",
-    "¥":   "JPY",
+    "r$": "BRL",
+    "€": "EUR",
+    "£": "GBP",
+    "¥": "JPY",
 }
 
 _BUSINESS_HINTS = re.compile(r"\bbusiness\s+(profile|trip|ride)\b", re.IGNORECASE)
 
 
 def _parse_amount_str(s: str) -> Optional[float]:
-    s = s.strip()
-    if not s:
-        return None
-    # Detect comma decimal vs thousands separator
-    if "," in s and "." in s:
-        s = s.replace(",", "")
-    elif "," in s and "." not in s:
-        s = s.replace(",", ".")
-    try:
-        v = float(s)
-        return v if v > 0 else None
-    except ValueError:
-        return None
+    v = parse_money(s)
+    return v if v is not None and v > 0 else None
 
 
 def _extract_total(text: str) -> tuple[Optional[float], Optional[str]]:
@@ -349,15 +378,51 @@ def _extract_trip_id(html: str, text: str) -> Optional[str]:
 
 _MONTHS = {
     # English
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
-    "january": 1, "february": 2, "march": 3, "april": 4, "june": 6,
-    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
     # Portuguese
-    "fev": 2, "abr": 4, "mai": 5, "ago": 8, "set": 9, "out": 10, "dez": 12,
-    "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3, "abril": 4, "maio": 5,
-    "junho": 6, "julho": 7, "agosto": 8, "setembro": 9, "outubro": 10,
-    "novembro": 11, "dezembro": 12,
+    "fev": 2,
+    "abr": 4,
+    "mai": 5,
+    "ago": 8,
+    "set": 9,
+    "out": 10,
+    "dez": 12,
+    "janeiro": 1,
+    "fevereiro": 2,
+    "março": 3,
+    "marco": 3,
+    "abril": 4,
+    "maio": 5,
+    "junho": 6,
+    "julho": 7,
+    "agosto": 8,
+    "setembro": 9,
+    "outubro": 10,
+    "novembro": 11,
+    "dezembro": 12,
 }
 
 
@@ -417,6 +482,7 @@ def _extract_date_from_header(date_header: Optional[str]) -> Optional[str]:
     if not date_header:
         return None
     from email.utils import parsedate_to_datetime
+
     try:
         dt = parsedate_to_datetime(date_header)
         return dt.strftime("%Y-%m-%d")
@@ -461,9 +527,14 @@ def _extract_payment_method(text: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
-def parse_uber_email(*, msg_id: str = "unknown",
-                     subject: Optional[str], date_header: Optional[str],
-                     html: Optional[str], plain: Optional[str]) -> ParsedUberEmail:
+def parse_uber_email(
+    *,
+    msg_id: str = "unknown",
+    subject: Optional[str],
+    date_header: Optional[str],
+    html: Optional[str],
+    plain: Optional[str],
+) -> ParsedUberEmail:
     """
     Best-effort extraction of the receipt fields from one Uber email.
     `html` is preferred; `plain` is used as a fallback for text-only scrapes.
@@ -487,9 +558,7 @@ def parse_uber_email(*, msg_id: str = "unknown",
     subj_l = (subject or "").lower()
     # `[Business]` prefix is Uber's unambiguous business-profile marker
     business = (
-        "[business]" in subj_l
-        or "business" in subj_l
-        or bool(_BUSINESS_HINTS.search(visible_text))
+        "[business]" in subj_l or "business" in subj_l or bool(_BUSINESS_HINTS.search(visible_text))
     )
 
     return ParsedUberEmail(
@@ -509,6 +578,7 @@ def parse_uber_email(*, msg_id: str = "unknown",
 
 # ─── Top-level orchestrator ──────────────────────────────────────────────────
 
+
 def _gmail_date(s: Optional[str]) -> Optional[str]:
     """Convert YYYY-MM-DD → YYYY/MM/DD (Gmail's date format). Returns None
     if the input doesn't match a sane ISO date so we never inject garbage
@@ -521,8 +591,13 @@ def _gmail_date(s: Optional[str]) -> Optional[str]:
     return None
 
 
-def build_query(base: str, *, after: Optional[str] = None, before: Optional[str] = None,
-                exclude_label: Optional[str] = None) -> str:
+def build_query(
+    base: str,
+    *,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    exclude_label: Optional[str] = None,
+) -> str:
     """Compose a Gmail search query from the base + optional date / label clauses."""
     parts = [base]
     if exclude_label:
@@ -542,11 +617,14 @@ def build_query(base: str, *, after: Optional[str] = None, before: Optional[str]
     return " ".join(p for p in parts if p)
 
 
-def sync_new_receipts(*, business_only: bool = False,
-                      max_messages: Optional[int] = None,
-                      after: Optional[str] = None,
-                      before: Optional[str] = None,
-                      attach_only: bool = False) -> dict:
+def sync_new_receipts(
+    *,
+    business_only: bool = False,
+    max_messages: Optional[int] = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    attach_only: bool = False,
+) -> dict:
     """
     Fetch unprocessed Uber emails, parse them, save as receipts, mark each as
     processed.
@@ -567,7 +645,9 @@ def sync_new_receipts(*, business_only: bool = False,
         return {
             "success": False,
             "error": "Gmail not authenticated. Run scripts/gmail_auth.py.",
-            "imported": 0, "skipped": 0, "errors": [],
+            "imported": 0,
+            "skipped": 0,
+            "errors": [],
         }
 
     try:
@@ -591,7 +671,8 @@ def sync_new_receipts(*, business_only: bool = False,
     exclude_label = None if attach_only else settings.gmail_processed_label
     query = build_query(
         query_base,
-        after=after, before=before,
+        after=after,
+        before=before,
         exclude_label=exclude_label,
     )
     limit = max_messages or settings.gmail_max_messages_per_sync
@@ -604,8 +685,8 @@ def sync_new_receipts(*, business_only: bool = False,
 
     imported = 0
     skipped = 0
-    unmatched: list = []      # only populated when attach_only=True
-    upgraded = 0              # count of existing rows that gained a PDF
+    unmatched: list = []  # only populated when attach_only=True
+    upgraded = 0  # count of existing rows that gained a PDF
     errors: list[str] = []
 
     for msg_id in msg_ids:
@@ -622,8 +703,10 @@ def sync_new_receipts(*, business_only: bool = False,
 
         parsed = parse_uber_email(
             msg_id=msg_id,
-            subject=subject, date_header=date_hdr,
-            html=html, plain=plain,
+            subject=subject,
+            date_header=date_hdr,
+            html=html,
+            plain=plain,
         )
 
         if business_only and not parsed.is_business:
@@ -653,21 +736,32 @@ def sync_new_receipts(*, business_only: bool = False,
             continue
 
         # Cross-source dedup: the same ride may already be in the DB from a
-        # CSV import. Match by (date, amount, currency). If found, attach our
-        # PDF to that row instead of creating a duplicate.
-        existing = db.find_uber_receipt_by_date_amount(
-            parsed.date, parsed.total_amount, parsed.currency,
-        )
+        # CSV import. Prefer the exact trip-id link (same synthetic stem with
+        # .csv) — amounts legitimately differ between the CSV (upfront fare)
+        # and the email (final charge with tip/adjustments). Fall back to
+        # (date, amount, currency), restricted to CSV rows so two distinct
+        # same-day same-fare rides synced from Gmail can't dedupe against
+        # each other.
+        existing = db.get_receipt_by_filename(parsed.synthetic_filename(".csv"))
+        if not existing:
+            existing = db.find_uber_receipt_by_date_amount(
+                parsed.date,
+                parsed.total_amount,
+                parsed.currency,
+                source="csv",
+            )
 
         if not existing and attach_only:
             # CSV is the source of truth — don't insert a new row.
-            unmatched.append({
-                "msg_id": msg_id,
-                "subject": subject,
-                "date": parsed.date,
-                "amount": parsed.total_amount,
-                "currency": parsed.currency,
-            })
+            unmatched.append(
+                {
+                    "msg_id": msg_id,
+                    "subject": subject,
+                    "date": parsed.date,
+                    "amount": parsed.total_amount,
+                    "currency": parsed.currency,
+                }
+            )
             skipped += 1
             # Deliberately NOT labelling — user may want to retry after
             # uploading a wider CSV that covers these rides.
@@ -697,8 +791,10 @@ def sync_new_receipts(*, business_only: bool = False,
                 filename=filename,
                 filepath=filepath,
                 metadata=parsed.to_metadata(),
-                description=(f"Uber · {parsed.pickup or ''} → {parsed.dropoff or ''}"
-                             .strip(" ·→") or "Uber ride via Gmail"),
+                description=(
+                    f"Uber · {parsed.pickup or ''} → {parsed.dropoff or ''}".strip(" ·→")
+                    or "Uber ride via Gmail"
+                ),
             )
             _apply_label(service, msg_id, label_id)
             imported += 1
@@ -718,8 +814,7 @@ def sync_new_receipts(*, business_only: bool = False,
     }
 
 
-def _persist_receipt_pdf(parsed: "ParsedUberEmail", html: Optional[str],
-                         msg_id: str) -> tuple:
+def _persist_receipt_pdf(parsed: "ParsedUberEmail", html: Optional[str], msg_id: str) -> tuple:
     """
     Try to render the email's HTML as a PDF and save it under
     settings.receipts_dir. On success returns (.pdf filename, absolute path).
@@ -732,6 +827,7 @@ def _persist_receipt_pdf(parsed: "ParsedUberEmail", html: Optional[str],
 
     try:
         from . import receipt_pdf  # local import keeps weasyprint optional
+
         if not receipt_pdf.is_available():
             return eml_filename, f"gmail://{msg_id}"
         pdf_bytes = receipt_pdf.render_html_to_pdf(html)
@@ -765,10 +861,9 @@ def render_pdfs_for_existing(max_messages: int = 200) -> dict:
 
     # Pull every Gmail-sourced receipt that doesn't yet have a real file.
     all_receipts = db.get_all_receipts()
-    targets = [
-        r for r in all_receipts
-        if (r.get("filepath") or "").startswith("gmail://")
-    ][:max_messages]
+    targets = [r for r in all_receipts if (r.get("filepath") or "").startswith("gmail://")][
+        :max_messages
+    ]
 
     if not targets:
         return {"success": True, "rendered": 0, "skipped": 0, "scanned": 0}
@@ -797,7 +892,8 @@ def render_pdfs_for_existing(max_messages: int = 200) -> dict:
             msg_id=msg_id,
             subject=header(msg, "Subject"),
             date_header=header(msg, "Date"),
-            html=html, plain=extract_plain_body(msg),
+            html=html,
+            plain=extract_plain_body(msg),
         )
 
         new_filename, new_path = _persist_receipt_pdf(parsed, html, msg_id)
@@ -866,7 +962,10 @@ def debug_preview(max_messages: int = 5, include_html: bool = False) -> dict:
         plain = extract_plain_body(msg)
         parsed = parse_uber_email(
             msg_id=msg_id,
-            subject=subject, date_header=date_hdr, html=html, plain=plain,
+            subject=subject,
+            date_header=date_hdr,
+            html=html,
+            plain=plain,
         )
         entry = {
             "msg_id": msg_id,
@@ -929,14 +1028,17 @@ def reset_processed_label(only_unimported: bool = True) -> dict:
                 msg_id=msg_id,
                 subject=header(msg, "Subject"),
                 date_header=header(msg, "Date"),
-                html=html, plain=plain,
+                html=html,
+                plain=plain,
             )
             if parsed.trip_id and db.get_receipt_by_filename(parsed.synthetic_filename()):
                 kept += 1
                 continue
         try:
             service.users().messages().modify(
-                userId="me", id=msg_id, body={"removeLabelIds": [label_id]},
+                userId="me",
+                id=msg_id,
+                body={"removeLabelIds": [label_id]},
             ).execute()
             cleared += 1
         except Exception as e:

@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 
 from ..config import settings
+from .json_store import locked, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,7 @@ def _read() -> dict:
 
 
 def _write(data: dict) -> None:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    _path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(_path(), data)
 
 
 def effective_backend() -> str:
@@ -67,6 +67,7 @@ def get_config() -> dict:
     }
 
 
+@locked(_path)
 def set_config(patch: dict) -> dict:
     """Persist an override. Only known keys with sane values are kept; blank
     values fall back to the .env default."""

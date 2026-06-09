@@ -74,8 +74,13 @@ def build_statement_xlsx(
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    def put(row, col, value, *, font=cell_font, align=_LEFT, fmt=None, border=False):
+    def put(row, col, value, *, font=cell_font, align=_LEFT, fmt=None, border=False, formula=False):
         c = ws.cell(row=row, column=col, value=value)
+        if isinstance(value, str) and value.startswith("=") and not formula:
+            # openpyxl stores any "="-prefixed string as a live formula —
+            # user-supplied text (detalhamento, cost center, nome) must never
+            # execute in the exported sheet.
+            c.data_type = "s"
         c.font = font
         c.alignment = align
         if fmt:
@@ -177,6 +182,7 @@ def build_statement_xlsx(
             align=_RIGHT,
             fmt=_BRL_FMT,
             border=True,
+            formula=True,
         )
     tl = get_column_letter(total_col)
     put(
@@ -187,6 +193,7 @@ def build_statement_xlsx(
         align=_RIGHT,
         fmt=_BRL_FMT,
         border=True,
+        formula=True,
     )
 
     # ── Signature line ────────────────────────────────────────────────────

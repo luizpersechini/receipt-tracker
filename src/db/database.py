@@ -10,6 +10,12 @@ from ..config import settings
 def get_connection():
     conn = sqlite3.connect(str(settings.db_path))
     conn.row_factory = sqlite3.Row
+    # Writers arrive from many threads (uvicorn's to_thread pool, the folder
+    # watcher, Gmail sync). WAL lets readers proceed during a write, and the
+    # busy timeout makes bursts queue instead of raising "database is locked".
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -177,12 +183,22 @@ def get_receipts_by_period(
 
 
 def find_uber_receipt_by_date_amount(
-    date: str, amount: float, currency: str, tolerance: float = 0.01
+    date: str,
+    amount: float,
+    currency: str,
+    tolerance: float = 0.01,
+    source: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Find an existing Uber-imported receipt that matches the given
     date / amount (within tolerance) / currency tuple. Used for cross-source
     deduplication when the same ride is imported via both CSV and Gmail.
+
+    `source` restricts the search to rows ingested by that source ("csv" or
+    "gmail"; rows without an `uber_source` field are legacy CSV imports).
+    Cross-source dedup MUST pass the *other* source — otherwise two legitimate
+    same-day same-fare rides from a single import dedupe against each other
+    and the second ride is silently dropped.
     """
     if not date or amount is None or not currency:
         return None
@@ -197,6 +213,8 @@ def find_uber_receipt_by_date_amount(
         try:
             meta = json.loads(row["metadata"] or "{}")
         except json.JSONDecodeError:
+            continue
+        if source and (meta.get("uber_source") or "csv") != source:
             continue
         if meta.get("date") != date:
             continue
@@ -333,25 +351,25 @@ def get_all_statements() -> list:
     return statements
 
 
-def get_statement_by_id(statement_id: int) -> Optional[dict]:
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM statements WHERE id = ?", (statement_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        statement = dict(row)
-        statement["transactions"] = (
-            json.loads(statement["transactions"]) if statement.get("transactions") else []
-        )
-        return statement
-    return None
+# NOTE: get_statement_by_id lives further down (the JSONDecodeError-tolerant
+# version). A second identical-name definition here used to shadow-fight it.
 
 
 def delete_statement(statement_id: int):
     conn = get_connection()
     cursor = conn.cursor()
+    # Deleting the matches must also release their receipts — otherwise they
+    # stay 'matched' with no match row and vanish from the default (active)
+    # receipts view.
+    cursor.execute(
+        "SELECT DISTINCT receipt_id FROM matches WHERE statement_id = ?", (statement_id,)
+    )
+    receipt_ids = [r[0] for r in cursor.fetchall()]
     cursor.execute("DELETE FROM matches WHERE statement_id = ?", (statement_id,))
+    for rid in receipt_ids:
+        cursor.execute("SELECT COUNT(*) FROM matches WHERE receipt_id = ?", (rid,))
+        if cursor.fetchone()[0] == 0:  # no matches left on other statements
+            cursor.execute("UPDATE receipts SET match_status = 'pending' WHERE id = ?", (rid,))
     cursor.execute("DELETE FROM statements WHERE id = ?", (statement_id,))
     conn.commit()
     conn.close()

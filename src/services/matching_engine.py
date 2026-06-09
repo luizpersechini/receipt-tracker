@@ -43,56 +43,74 @@ def match_receipts_to_statements(
                 }
             )
 
-    matched_receipt_ids: set = set()
-    matched_txn_indices: set = set()
-    matches: list = []
-
+    metas: list = []
     for receipt in receipts:
         meta = receipt.get("metadata")
         if isinstance(meta, str):
             meta = json.loads(meta or "{}")
         elif meta is None:
             meta = {}
+        metas.append(meta)
 
-        best_score = 0.0
-        best_idx = None
+    # Score every (receipt, txn) pair, then assign best-first GLOBALLY.
+    # Per-receipt greedy assignment let an early receipt steal a transaction
+    # from a later receipt that matched it far better.
+    pairs: list = []
+    for r_i, receipt in enumerate(receipts):
+        meta = metas[r_i]
+        for t_i, txn in enumerate(all_transactions):
+            amount_s, date_s, vendor_s = _score_parts(meta, txn)
+            total = amount_s * 0.50 + date_s * 0.30 + vendor_s * 0.20
+            # Gate: an exact amount alone scores 0.5 (plus fuzzy-vendor
+            # noise) and used to clear the threshold — round amounts are
+            # common enough that unrelated receipts months apart paired up.
+            # Require date support, or a genuinely similar vendor for
+            # receipts with no usable date.
+            if total >= 0.5 and (date_s > 0 or vendor_s >= 0.5):
+                pairs.append((total, r_i, t_i))
+    pairs.sort(key=lambda p: (-p[0], p[1], p[2]))
 
-        for idx, txn in enumerate(all_transactions):
-            if idx in matched_txn_indices:
-                continue
-            score = _score(meta, txn)
-            if score > best_score:
-                best_score = score
-                best_idx = idx
+    matched_receipt_ids: set = set()
+    matched_txn_indices: set = set()
+    used_receipts: set = set()
+    matches: list = []
 
-        # 0.5 allows amount+date hit even without vendor name
-        if best_idx is not None and best_score >= 0.5:
-            txn = all_transactions[best_idx]
-            matched_receipt_ids.add(receipt["id"])
-            matched_txn_indices.add(best_idx)
-            matches.append(
-                {
-                    "receipt_id": receipt["id"],
-                    "receipt_filename": receipt["filename"],
-                    "receipt_date": meta.get("date"),
-                    "receipt_vendor": meta.get("vendor_name", ""),
-                    "receipt_amount": meta.get("total_amount"),
-                    "statement_id": txn["_statement_id"],
-                    "transaction_index": txn["_txn_index"],
-                    "transaction_date": txn.get("date"),
-                    "transaction_description": txn.get("description", ""),
-                    "transaction_amount": txn.get("amount"),
-                    "match_score": round(best_score, 3),
-                    "transaction_data": {
-                        k: v for k, v in txn.items() if k not in ("_statement_id", "_txn_index")
-                    },
-                }
-            )
+    for total, r_i, t_i in pairs:
+        if r_i in used_receipts or t_i in matched_txn_indices:
+            continue
+        receipt = receipts[r_i]
+        meta = metas[r_i]
+        txn = all_transactions[t_i]
+        used_receipts.add(r_i)
+        matched_receipt_ids.add(receipt["id"])
+        matched_txn_indices.add(t_i)
+        matches.append(
+            {
+                "receipt_id": receipt["id"],
+                "receipt_filename": receipt["filename"],
+                "receipt_date": meta.get("date"),
+                "receipt_vendor": meta.get("vendor_name", ""),
+                "receipt_amount": meta.get("total_amount"),
+                "statement_id": txn["_statement_id"],
+                "transaction_index": txn["_txn_index"],
+                "transaction_date": txn.get("date"),
+                "transaction_description": txn.get("description", ""),
+                "transaction_amount": txn.get("amount"),
+                "match_score": round(total, 3),
+                "transaction_data": {
+                    k: v for k, v in txn.items() if k not in ("_statement_id", "_txn_index")
+                },
+            }
+        )
+    # Keep statement order stable for consumers that render the match list.
+    matches.sort(key=lambda m: (m["statement_id"], m["transaction_index"]))
 
     unmatched_receipts = [r for r in receipts if r["id"] not in matched_receipt_ids]
     unmatched_transactions = [
         {
-            "transaction": {k: v for k, v in txn.items() if k != "_statement_id"},
+            "transaction": {
+                k: v for k, v in txn.items() if k not in ("_statement_id", "_txn_index")
+            },
             "statement_id": txn["_statement_id"],
         }
         for idx, txn in enumerate(all_transactions)
@@ -107,7 +125,13 @@ def match_receipts_to_statements(
 
 
 def _score(meta: dict, txn: dict) -> float:
-    """Weighted score: amount 50%, date 30%, vendor 20%.
+    """Weighted total — kept for tests/back-compat; see _score_parts."""
+    amount_s, date_s, vendor_s = _score_parts(meta, txn)
+    return amount_s * 0.50 + date_s * 0.30 + vendor_s * 0.20
+
+
+def _score_parts(meta: dict, txn: dict) -> tuple:
+    """Component scores (amount, date, vendor), weighted 50/30/20 by _score.
 
     Currency-aware amount comparison: an international transaction on the
     statement carries both the BRL bill amount AND the native amount (CAD,
@@ -185,4 +209,4 @@ def _score(meta: dict, txn: dict) -> float:
     else:
         vendor_score = 0.0
 
-    return amount_score * 0.50 + date_score * 0.30 + vendor_score * 0.20
+    return amount_score, date_score, vendor_score

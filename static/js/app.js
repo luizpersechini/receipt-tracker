@@ -1,6 +1,22 @@
 // ─── helpers ─────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
+// Global HTML-escape for anything interpolated into innerHTML. OCR output,
+// upload filenames and email subjects are all attacker-controllable.
+function escHtml(v) {
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+// Escape for a path segment inside a URL attribute (e.g. /receipts/<name>).
+function escUrlSeg(v) {
+  return encodeURIComponent(String(v ?? ""));
+}
+
 const api = async (method, path, body) => {
   const opts = { method };
   if (body instanceof FormData) opts.body = body;
@@ -77,15 +93,20 @@ const fmt = {
         year: "numeric",
       });
     }
-    // Other formats (e.g. dd/mm/yyyy): rewrite to ISO and recurse via Date.
-    const d = new Date(v.replace(/(\d{2})\/(\d{2})\/(\d{4})/, "$3-$2-$1"));
+    // dd/mm/yyyy: build from local components — rewriting to "YYYY-MM-DD"
+    // and parsing the string makes it UTC midnight, which displays as the
+    // PREVIOUS day in negative-offset timezones (BRT/PST).
+    const dm = String(v).match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    const d = dm ? new Date(+dm[3], +dm[2] - 1, +dm[1]) : new Date(v);
     if (!isNaN(d))
       return d.toLocaleDateString("en-GB", {
         day: "2-digit",
         month: "short",
         year: "numeric",
       });
-    return v;
+    // Unparseable date strings come straight from OCR — escape them, every
+    // caller interpolates this into innerHTML.
+    return escHtml(v);
   },
   month: (v) => {
     if (!v || v === "all") return "All time";
@@ -105,7 +126,10 @@ function statusBadge(status) {
     unmatched: ["badge-red", "Unmatched"],
     pending: ["badge-gray", "Pending"],
   };
-  const [cls, label] = map[status] || ["badge-gray", status || "Pending"];
+  const [cls, label] = map[status] || [
+    "badge-gray",
+    escHtml(status) || "Pending",
+  ];
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
@@ -130,8 +154,10 @@ const categoryIcons = {
 
 function catBadge(cat) {
   if (!cat) return "—";
-  const label = cat.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  return `<span class="badge badge-accent">${label}</span>`;
+  const label = String(cat)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return `<span class="badge badge-accent">${escHtml(label)}</span>`;
 }
 
 // ─── Ollama status indicator ──────────────────────────────────────────────────
@@ -139,9 +165,12 @@ async function checkOllama() {
   const dot = $("ollamaIndicator");
   const lbl = $("ollamaLabel");
   try {
-    const data = await api("GET", "/api/stats");
-    dot.style.background = "var(--green)";
-    lbl.textContent = "Ollama · connected";
+    // /api/ocr/config actually probes Ollama — /api/stats only proved the
+    // FastAPI server was up, so the dot stayed green with Ollama down.
+    const data = await api("GET", "/api/ocr/config");
+    const up = !!data.ollama_reachable;
+    dot.style.background = up ? "var(--green)" : "var(--red)";
+    lbl.textContent = up ? "Ollama · connected" : "Ollama · offline";
   } catch {
     dot.style.background = "var(--red)";
     lbl.textContent = "Ollama · offline";
@@ -161,17 +190,25 @@ function populateMonths(receipts) {
   });
   const sel = $("monthSelect");
   const existing = new Set([...sel.options].map((o) => o.value));
-  [...months]
-    .sort()
-    .reverse()
-    .forEach((m) => {
-      if (!existing.has(m)) {
-        const opt = document.createElement("option");
-        opt.value = m;
-        opt.textContent = fmt.month(m);
-        sel.insertBefore(opt, sel.options[1]);
+  // Keep options newest-first under "All time": insert each new month
+  // before the first older one (previously the list came out oldest-first,
+  // and refresh-discovered months piled on top out of order).
+  [...months].sort().forEach((m) => {
+    if (!existing.has(m)) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = fmt.month(m);
+      let anchor = sel.options[1] || null;
+      for (let i = 1; i < sel.options.length; i++) {
+        if (sel.options[i].value < m) {
+          anchor = sel.options[i];
+          break;
+        }
+        anchor = sel.options[i + 1] || null;
       }
-    });
+      sel.insertBefore(opt, anchor);
+    }
+  });
 }
 
 $("monthSelect").addEventListener("change", (e) => {
@@ -450,11 +487,19 @@ async function loadStats() {
 // ─── Bulk-selection state ────────────────────────────────────────────────────
 const selectedIds = new Set();
 
+// The receipts the user can actually SEE: the exact pipeline renderReceipts
+// uses. Select-all and the bulk bar must use this — selecting via the month
+// filter alone used to include rows hidden by the status/filter bar, so
+// "Delete selected" removed receipts the user couldn't see.
+function visibleReceipts() {
+  return applyReceiptFilters(filterByMonth(allReceipts));
+}
+
 function updateBulkBar() {
   const bar = $("bulkBar");
   // Drop selection ids that no longer reference visible rows — protects
   // against stale state across re-renders, tab switches, and deletes.
-  const visibleIds = new Set(filterByMonth(allReceipts).map((r) => r.id));
+  const visibleIds = new Set(visibleReceipts().map((r) => r.id));
   for (const id of [...selectedIds]) {
     if (!visibleIds.has(id)) selectedIds.delete(id);
   }
@@ -555,8 +600,10 @@ function renderReceipts(receipts) {
         "bmp",
       ].includes(ext);
       const isImage = browserViewable || convertible;
-      const previewUrl = `/api/preview/${encodeURIComponent(r.filename)}`;
-      const thumbSrc = browserViewable ? `/receipts/${r.filename}` : previewUrl;
+      const previewUrl = `/api/preview/${escUrlSeg(r.filename)}`;
+      const thumbSrc = browserViewable
+        ? `/receipts/${escUrlSeg(r.filename)}`
+        : previewUrl;
       const docThumb = `<div class="thumb-ph" onclick="openLightbox('${thumbSrc}', ${r.id})">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
     </div>`;
@@ -580,13 +627,14 @@ function renderReceipts(receipts) {
             ? `<img class="receipt-thumb" src="${thumbSrc}" alt="receipt" data-fallback-src="${previewUrl}" data-receipt-id="${r.id}" onclick="openLightbox('${thumbSrc}', ${r.id})" onerror="handleThumbError(this)">`
             : docThumb;
 
-      const loc =
-        [meta.city, meta.state, meta.country].filter(Boolean).join(", ") || "—";
-      const vendor =
-        meta.vendor_name ||
-        (hasErr
+      const loc = escHtml(
+        [meta.city, meta.state, meta.country].filter(Boolean).join(", ") || "—",
+      );
+      const vendor = meta.vendor_name
+        ? escHtml(meta.vendor_name)
+        : hasErr
           ? '<span style="color:var(--text-3);font-style:italic">OCR failed</span>'
-          : "—");
+          : "—";
 
       const isSelected = selectedIds.has(r.id);
       return `<tr class="data-row">
@@ -595,13 +643,13 @@ function renderReceipts(receipts) {
       <td style="font-variant-numeric:tabular-nums;white-space:nowrap">${fmt.date(meta.date)}</td>
       <td style="font-weight:500">${vendor}</td>
       <td style="font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt.currency(meta.total_amount, meta.currency)}</td>
-      <td>${meta.currency ? `<span class="badge badge-gray mono">${meta.currency}</span>` : "—"}</td>
-      <td>${meta.country ? `<span class="badge badge-gray mono">${meta.country}</span>` : '<span style="color:var(--text-3)">—</span>'}</td>
+      <td>${meta.currency ? `<span class="badge badge-gray mono">${escHtml(meta.currency)}</span>` : "—"}</td>
+      <td>${meta.country ? `<span class="badge badge-gray mono">${escHtml(meta.country)}</span>` : '<span style="color:var(--text-3)">—</span>'}</td>
       <td style="color:var(--text-2);white-space:nowrap">${loc}</td>
       <td>${catBadge(meta.category)}</td>
-      <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)">${r.description || '<span style="color:var(--text-3)">—</span>'}</td>
+      <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)">${r.description ? escHtml(r.description) : '<span style="color:var(--text-3)">—</span>'}</td>
       <td>${statusBadge(r.match_status || "pending")}</td>
-      <td><button class="type-toggle ${r.expense_type || "corp_card"}" onclick="toggleExpenseType(${r.id}, '${r.expense_type || "corp_card"}')">${r.expense_type === "reimbursement" ? "Reimburse" : "Corp Card"}</button></td>
+      <td><button class="type-toggle ${escHtml(r.expense_type || "corp_card")}" onclick="toggleExpenseType(${r.id}, '${escHtml(r.expense_type || "corp_card")}')">${r.expense_type === "reimbursement" ? "Reimburse" : "Corp Card"}</button></td>
       <td style="white-space:nowrap">
         <button class="btn btn-outline btn-sm" onclick="openEditModalById(${r.id})">Edit</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteReceipt(${r.id})">Del</button>
@@ -619,7 +667,7 @@ document.addEventListener("change", (e) => {
   if (t && t.classList && t.classList.contains("row-select")) {
     toggleReceiptSelection(parseInt(t.dataset.id, 10), t.checked);
   } else if (t && t.id === "selectAllReceipts") {
-    const visible = filterByMonth(allReceipts);
+    const visible = visibleReceipts();
     if (t.checked) {
       visible.forEach((r) => selectedIds.add(r.id));
     } else {
@@ -781,7 +829,7 @@ async function loadStatements() {
 
       return `<tr class="data-row clickable ${s.archived ? "stmt-archived" : ""}" onclick="openStatementDetail(${s.id})">
     <td style="color:var(--text-3);font-family:'DM Mono',monospace;font-size:12px">#${s.id}</td>
-    <td class="fname" title="${s.filename}" style="font-weight:500">${fmt.file(s.filename)}${completedBadge}</td>
+    <td class="fname" title="${escHtml(s.filename)}" style="font-weight:500">${escHtml(fmt.file(s.filename))}${completedBadge}</td>
     <td><span class="badge badge-gray">${txns.length} txns</span></td>
     <td style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap">${totalLabel}</td>
     <td style="color:var(--text-2);font-size:12px;white-space:nowrap">${period}</td>
@@ -862,7 +910,7 @@ async function openStatementDetail(id) {
     _renderStmtDetail();
   } catch (e) {
     $("stmtDetailSub").innerHTML =
-      `<span class="status-msg err">Failed to load: ${e.message}</span>`;
+      `<span class="status-msg err">Failed to load: ${escHtml(e.message)}</span>`;
   }
 }
 
@@ -1329,12 +1377,17 @@ const Reconcile = (() => {
     reconState.statementId = id;
     try {
       const res = await api("GET", `/api/statements/${id}/transactions`);
+      // Stale-response guard: if the user switched statements while this
+      // request was in flight, the older response must not clobber the newer
+      // statement's transactions (later edits would PUT to wrong indices).
+      if (reconState.statementId !== id) return;
       // Sort ascending by date so receipts and txns line up chronologically
       // (makes drag-drop targeting much easier on long statements).
       reconState.txns = (res.transactions || [])
         .map((t) => ({ ...t }))
         .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     } catch (e) {
+      if (reconState.statementId !== id) return;
       _flash("err", `Failed to load transactions: ${e.message}`);
       reconState.txns = [];
     }
@@ -3081,7 +3134,7 @@ async function loadWatchFolder() {
             const n = e.count && e.count > 1 ? ` · ${e.count}` : "";
             return `<div class="wl-row">
             <div class="wl-dot ${ok ? "ok" : "err"}"></div>
-            <span class="wl-name" title="${e.source || ""}">${e.filename || ""}${n}</span>
+            <span class="wl-name" title="${escHtml(e.source || "")}">${escHtml(e.filename || "")}${n}</span>
             <span class="wl-meta">${ts}</span>
           </div>`;
           })
@@ -3315,7 +3368,9 @@ function _escape(s) {
 }
 
 // ─── Secondary modal: edit receipts inside a scanned file ──────────────────
-function openScanDetail(idx) {
+let _scanDetailRemoved = []; // DB ids of rows the user removed (deleted on Save)
+
+async function openScanDetail(idx) {
   if (!_scanResultsCache) return;
   const fileResult = _scanResultsCache.results[idx];
   if (!fileResult || fileResult.status !== "ok") return;
@@ -3326,25 +3381,43 @@ function openScanDetail(idx) {
   $("scanFootMsg").textContent = "Editing — close when ready.";
 
   _scanDetailFile = fileResult.filename;
+  _scanDetailRemoved = [];
 
-  // Build working copy from existing receipts; synthesise empty rows if the
-  // backend didn't return per-receipt detail.
-  if (Array.isArray(fileResult.receipts) && fileResult.receipts.length) {
-    _scanDetailReceipts = fileResult.receipts.map((r) => ({
-      vendor: r.vendor || (r.metadata && r.metadata.vendor_name) || "",
-      amount: r.amount ?? (r.metadata && r.metadata.total_amount) ?? "",
-      currency:
-        r.currency ||
-        (r.metadata && r.metadata.currency) ||
-        fileResult.currency ||
-        "USD",
-      page: r.page || 1,
-    }));
-  } else {
+  // The scan already saved DB rows — hydrate the editor from them so Save
+  // can persist via PATCH. (The scan summary only carries the FIRST
+  // receipt's vendor/amount; editing rows 2+ from the summary alone would
+  // overwrite real data with blanks.)
+  const ids = Array.isArray(fileResult.receipt_ids)
+    ? fileResult.receipt_ids
+    : [];
+  _scanDetailReceipts = [];
+  if (ids.length) {
+    try {
+      const { receipts } = await api("GET", "/api/receipts");
+      const byId = new Map(receipts.map((r) => [r.id, r]));
+      _scanDetailReceipts = ids
+        .filter((id) => byId.has(id))
+        .map((id) => {
+          let meta = {};
+          try {
+            meta = JSON.parse(byId.get(id).metadata || "{}");
+          } catch {}
+          return {
+            id,
+            vendor: meta.vendor_name || "",
+            amount: meta.total_amount ?? "",
+            currency: meta.currency || fileResult.currency || "USD",
+            page: 1,
+          };
+        });
+    } catch {}
+  }
+  if (!_scanDetailReceipts.length) {
+    // Local-only fallback (no DB rows known for this file).
     const n = Math.max(1, fileResult.count || 1);
-    _scanDetailReceipts = [];
     for (let i = 0; i < n; i++) {
       _scanDetailReceipts.push({
+        id: null,
         vendor: i === 0 ? fileResult.vendor || "" : "",
         amount: i === 0 ? (fileResult.amount ?? "") : "",
         currency: fileResult.currency || "USD",
@@ -3352,6 +3425,13 @@ function openScanDetail(idx) {
       });
     }
   }
+  // Rows can only be created by a scan/upload — hide "add" when the editor
+  // is backed by DB rows it could never create.
+  $("scanDetailAdd").style.display = _scanDetailReceipts.some(
+    (r) => r.id != null,
+  )
+    ? "none"
+    : "";
 
   $("scanDetailFile").textContent = _scanDetailFile;
   $("scanDetailFile").title = _scanDetailFile;
@@ -3405,7 +3485,9 @@ function renderScanDetailList() {
     el.addEventListener("click", (e) => {
       const i = +e.currentTarget.dataset.remove;
       if (_scanDetailReceipts.length > 1) {
-        _scanDetailReceipts.splice(i, 1);
+        const [removed] = _scanDetailReceipts.splice(i, 1);
+        // DB-backed rows are deleted for real when the user hits Save.
+        if (removed && removed.id != null) _scanDetailRemoved.push(removed.id);
         renderScanDetailList();
         _refreshDetailTotal();
       }
@@ -3432,7 +3514,7 @@ function addReceiptRow() {
   renderScanDetailList();
 }
 
-function saveScanDetail() {
+async function saveScanDetail() {
   if (!_scanResultsCache || !_scanDetailFile) {
     closeScanDetail();
     return;
@@ -3446,11 +3528,41 @@ function saveScanDetail() {
   }
 
   const cleaned = _scanDetailReceipts.map((r) => ({
+    id: r.id ?? null,
     vendor: (r.vendor || "").trim() || null,
-    amount: r.amount === "" || r.amount == null ? null : parseFloat(r.amount),
+    // Accept the pt-BR comma decimal ("12,50") the same way the backend does.
+    amount:
+      r.amount === "" || r.amount == null
+        ? null
+        : parseFloat(String(r.amount).replace(",", ".")),
     currency: r.currency || null,
     page: r.page || 1,
   }));
+
+  // Persist to the DB — these receipts were already saved by the scan, so
+  // local-only edits silently evaporated on modal close (the original bug).
+  const toPatch = cleaned.filter((r) => r.id != null);
+  if (toPatch.length || _scanDetailRemoved.length) {
+    try {
+      for (const r of toPatch) {
+        await api("PATCH", `/api/receipts/${r.id}`, {
+          vendor_name: r.vendor,
+          total_amount: r.amount,
+          currency: r.currency,
+        });
+      }
+      for (const id of _scanDetailRemoved) {
+        await api("DELETE", `/api/receipts/${id}`);
+      }
+    } catch (e) {
+      toast("Couldn't save receipt edits: " + e.message);
+      return; // keep the modal open so the edits aren't lost
+    }
+    toast("Receipts updated", "ok");
+    fileResult.receipt_ids = toPatch.map((r) => r.id);
+    loadReceipts();
+    loadStats();
+  }
 
   fileResult.receipts = cleaned;
   fileResult.count = cleaned.length;
@@ -3476,6 +3588,7 @@ function closeScanDetail() {
   $("scanDetailModal").classList.remove("open");
   _scanDetailFile = null;
   _scanDetailReceipts = [];
+  _scanDetailRemoved = [];
 }
 
 $("scanDetailModal").addEventListener("click", (e) => {
@@ -4074,12 +4187,18 @@ function _reviewAdvance() {
 
 $("bboxDiscardBtn").addEventListener("click", async () => {
   if (!_bboxState || _bboxState.reviewItemId == null) return;
+  // Disable during the request — a double-click could land after
+  // _reviewAdvance() swapped in the NEXT queue item and discard that too.
+  const btn = $("bboxDiscardBtn");
+  btn.disabled = true;
   try {
     await api("DELETE", `/api/review-queue/${_bboxState.reviewItemId}`);
   } catch (e) {
     $("bboxStatus").textContent = "Discard failed: " + e.message;
     $("bboxStatus").className = "status-msg err";
     return;
+  } finally {
+    btn.disabled = false;
   }
   _reviewAdvance();
 });
@@ -4813,9 +4932,10 @@ $("gmailSyncBtn").addEventListener("click", async () => {
       // Surface a few examples so the user can spot-check what was skipped.
       const preview = res.unmatched
         .slice(0, 5)
-        .map(
-          (u) =>
+        .map((u) =>
+          escHtml(
             `${u.date || "????"} · ${u.currency || ""}${u.amount ?? "?"} · ${(u.subject || "").slice(0, 50)}`,
+          ),
         )
         .join("<br>");
       const more =
@@ -4855,7 +4975,7 @@ $("gmailSyncBtn").addEventListener("click", async () => {
 
     if (errorKind === "project_deleted" || errorKind === "invalid_client") {
       status.innerHTML =
-        `<div>${errorMsg}</div>` +
+        `<div>${escHtml(errorMsg)}</div>` +
         `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${replaceCredsBtn}</div>`;
       status.className = "status-msg err";
       const f = $("gmailInlineCredsFile");
@@ -4865,13 +4985,13 @@ $("gmailSyncBtn").addEventListener("click", async () => {
           if (file) uploadGmailCredentials(file);
         });
     } else if (errorKind === "token_expired" || errorKind === "token_missing") {
-      status.innerHTML = `<div>${errorMsg}</div>${reconnectBtn}`;
+      status.innerHTML = `<div>${escHtml(errorMsg)}</div>${reconnectBtn}`;
       status.className = "status-msg err";
       const ib = $("gmailInlineReconnect");
       if (ib) ib.addEventListener("click", () => startGmailOAuth(ib));
     } else if (errorKind === "api_disabled") {
       status.innerHTML =
-        `<div>${errorMsg}</div>` +
+        `<div>${escHtml(errorMsg)}</div>` +
         `<div style="font-size:11px;color:var(--text-3);margin-top:4px">` +
         `Open <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener">Google Cloud Console → Gmail API</a> and click Enable.</div>`;
       status.className = "status-msg err";

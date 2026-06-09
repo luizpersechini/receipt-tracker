@@ -391,3 +391,68 @@ def test_scan_queues_every_pdf_page(scan_env, monkeypatch):
     assert review_queue.count() == 2
     sources = sorted(it["source"] for it in review_queue.list_items())
     assert sources == ["receipt.pdf · p1/2 (scan)", "receipt.pdf · p2/2 (scan)"]
+
+
+# ─── Live watcher path (process_new_file) ────────────────────────────────────
+
+
+def test_watcher_ingest_moves_source_so_scan_cannot_reimport(scan_env, monkeypatch):
+    """Regression: process_new_file used to leave the source file in the
+    inbox, so the next manual scan imported the same receipt again."""
+    fw, inbox, db = scan_env["fw"], scan_env["inbox"], scan_env["db"]
+    _stub_segments(monkeypatch, fw, [({"vendor_name": "Cafe", "total_amount": 10.0}, None)])
+    _make_image(inbox / "snap.jpg")
+
+    entry = fw.process_new_file(str(inbox / "snap.jpg"))
+
+    assert entry["status"] == "ok"
+    assert entry["count"] == 1
+    assert not (inbox / "snap.jpg").exists()
+    assert (inbox / "processed" / "snap.jpg").exists()
+    assert len(db.get_all_receipts()) == 1
+
+    summary = fw.scan_folder()
+    assert summary["scanned"] == 0
+    assert summary["imported_receipts"] == 0
+    assert len(db.get_all_receipts()) == 1
+
+
+def test_watcher_routes_pdf_through_review_queue(scan_env, monkeypatch):
+    """Regression: the watcher fed PDFs straight to Pillow (junk 'Unknown'
+    rows). It must rasterise + queue pages exactly like a manual scan."""
+    fw, inbox, receipts = scan_env["fw"], scan_env["inbox"], scan_env["receipts"]
+    from src.services import llm_processor, review_queue
+
+    monkeypatch.setattr(
+        llm_processor,
+        "process_with_segments",
+        lambda *_a, **_k: pytest.fail("PDF page must be queued, not OCR'd"),
+    )
+    _make_pdf(inbox / "doc.pdf", pages=1)
+
+    entry = fw.process_new_file(str(inbox / "doc.pdf"))
+
+    assert entry["status"] == "ok"
+    assert entry["queued"] == 1
+    assert scan_env["db"].get_all_receipts() == []
+    assert review_queue.count() == 1
+    assert (inbox / "processed" / "doc.pdf").exists()
+    assert len(list(receipts.glob("*_p*.png"))) == 1
+
+
+def test_watcher_failure_moves_source_to_failed(scan_env, monkeypatch):
+    fw, inbox = scan_env["fw"], scan_env["inbox"]
+    from src.services import llm_processor
+
+    def boom(*_a, **_k):
+        raise RuntimeError("ocr exploded")
+
+    monkeypatch.setattr(llm_processor, "process_with_segments", boom)
+    _make_image(inbox / "bad.jpg")
+
+    entry = fw.process_new_file(str(inbox / "bad.jpg"))
+
+    assert entry["status"] == "error"
+    assert "ocr exploded" in entry["error"]
+    assert not (inbox / "bad.jpg").exists()
+    assert (inbox / "failed" / "bad.jpg").exists()

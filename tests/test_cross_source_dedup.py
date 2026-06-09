@@ -250,7 +250,7 @@ def test_attach_only_drops_processed_label_from_gmail_query(fresh_db, monkeypatc
         def execute(self): return {"labels": [{"id": "L1", "name": "rt-processed"}]}
         def create(self, **_): return self
     class _Msgs:
-        def list(self, *, userId, q, maxResults):
+        def list(self, *, userId, q, maxResults, pageToken=None):
             captured_queries.append(q)
             self._mode = "list"
             return self
@@ -300,3 +300,35 @@ def test_attach_only_does_not_label_unmatched_messages(fresh_db, monkeypatch):
     res = sync_new_receipts(attach_only=True)
     assert len(res["unmatched"]) == 1
     assert label_calls == []  # unmatched message stayed un-labeled
+
+
+def test_find_uber_receipt_source_filter(fresh_db):
+    """Regression: CSV imports deduped against rows inserted seconds earlier
+    in the SAME import — the second of two same-day same-fare rides vanished.
+    The finder must honour the source filter."""
+    from src.db import database as db
+
+    db.save_receipt(
+        "uber_trip-a.csv",
+        "/x/u.csv",
+        {"date": "2026-05-01", "total_amount": 50.0, "currency": "BRL", "uber_source": "csv"},
+        "",
+    )
+    # A CSV-import dedup pass looks for GMAIL rows only → no hit.
+    assert (
+        db.find_uber_receipt_by_date_amount("2026-05-01", 50.0, "BRL", source="gmail") is None
+    )
+    # A Gmail-sync dedup pass looks for CSV rows → hit.
+    assert (
+        db.find_uber_receipt_by_date_amount("2026-05-01", 50.0, "BRL", source="csv") is not None
+    )
+    # Legacy rows without uber_source count as CSV.
+    db.save_receipt(
+        "uber_trip-b.csv",
+        "/x/u.csv",
+        {"date": "2026-05-02", "total_amount": 60.0, "currency": "BRL"},
+        "",
+    )
+    assert (
+        db.find_uber_receipt_by_date_amount("2026-05-02", 60.0, "BRL", source="csv") is not None
+    )

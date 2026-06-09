@@ -43,7 +43,7 @@ if str(ROOT) not in sys.path:
 # ─── disposable app ──────────────────────────────────────────────────────────
 
 
-def build_client(tmp: Path, ocr_mode: str):
+def build_client(tmp: Path, ocr_mode: str, text_model: str = "llama3.2:3b"):
     """Repoint ALL storage to a throwaway dir, init a fresh DB, return a
     TestClient. Asserts nothing points at the live data/ before continuing."""
     from src.config import ensure_dirs, settings
@@ -60,7 +60,7 @@ def build_client(tmp: Path, ocr_mode: str):
     # Real OCR runs the working on-device path (Apple Vision + small text LLM),
     # NOT the default ollama_vision/glm-ocr one-shot (which loops on the prompt).
     settings.ocr_backend = "apple_vision"
-    settings.ocr_text_model = "llama3.2:3b"
+    settings.ocr_text_model = text_model
 
     # Safety net: refuse to run if any path escaped the temp sandbox.
     for p in (
@@ -610,6 +610,19 @@ def main():
         help="how many random CORD receipts to score each run (0 = off)",
     )
     ap.add_argument("--no-corpus", action="store_true", help="skip the CORD corpus step")
+    ap.add_argument(
+        "--text-model",
+        type=str,
+        default=None,
+        help="structuring model for apple_vision (default: your configured "
+        "effective text model, so the corpus measures what your app runs)",
+    )
+    ap.add_argument(
+        "--corpus-seed",
+        type=int,
+        default=None,
+        help="fix the CORD sample for a reproducible A/B (default: random each run)",
+    )
     args = ap.parse_args()
 
     import logging
@@ -617,17 +630,31 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("src").setLevel(logging.WARNING)
 
+    # Default the structuring model to whatever the app is actually configured
+    # to use (the persisted picker choice), so the corpus measures reality —
+    # not a hardcoded 3b that may be far weaker than what you run.
+    text_model = args.text_model
+    if text_model is None:
+        try:
+            from src.services.ocr_settings import effective_text_model
+
+            text_model = effective_text_model()
+        except Exception:  # noqa: BLE001
+            text_model = "llama3.2:3b"
+
     tmp = Path(tempfile.mkdtemp(prefix="rt_qa_"))
-    print(f"QA harness · ocr={args.ocr} · sandbox={tmp}")
+    print(f"QA harness · ocr={args.ocr} · text_model={text_model} · sandbox={tmp}")
     all_results = []
     fails = warns = []
     try:
-        client = build_client(tmp, args.ocr)
+        client = build_client(tmp, args.ocr, text_model)
         ctx = {
             "tmp": tmp,
             "ocr": args.ocr,
             "corpus_n": 0 if args.no_corpus else args.corpus,
-            "seed": random.randint(0, 1_000_000),  # fresh random CORD sample / run
+            "seed": args.corpus_seed
+            if args.corpus_seed is not None
+            else random.randint(0, 1_000_000),  # fixed → reproducible A/B; else fresh
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         max_runs = 5 if args.until_clean else max(1, args.loops)

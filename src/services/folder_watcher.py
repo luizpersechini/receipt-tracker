@@ -9,6 +9,7 @@ Supported formats: .jpg .jpeg .png .heic .heif .pdf
 import json
 import logging
 import shutil
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,10 @@ PROCESSED_SUBDIR = "processed"
 FAILED_SUBDIR = "failed"
 
 _observer = None
+
+# Serialises ingestion between the watchdog thread and a manual scan so the
+# same inbox file can never be processed twice (or OCR'd concurrently).
+_ingest_mutex = threading.Lock()
 
 
 # ─── Inbox resolution ───────────────────────────────────────────────────────
@@ -51,8 +56,16 @@ def _pending_files(inbox: Path) -> list:
             continue
         if p.suffix.lower() in SUPPORTED_EXTENSIONS:
             out.append(p)
-    out.sort(key=lambda p: p.stat().st_mtime)
+    out.sort(key=_safe_mtime)
     return out
+
+
+def _safe_mtime(p: Path) -> float:
+    # A file can vanish between iterdir() and stat() (watcher moved it).
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def count_pending() -> int:
@@ -88,17 +101,28 @@ def get_watch_log(n: int = 10) -> list:
     return entries
 
 
-def process_new_file(source_path: str) -> dict:
-    """
-    Process a newly detected file:
-      1. Copy to receipts dir with timestamp prefix
-      2. Run OCR via llm_processor
-      3. Save to DB
-      4. Append to watch log
-    """
-    from .llm_processor import process_receipt_image
-    from ..db.database import save_receipt
+def _wait_until_stable(src: Path, timeout: float = 30.0) -> None:
+    """Block until the file size stops changing — sync clients (iCloud,
+    network shares, phone transfers) write in chunks, and OCR on a truncated
+    file produces garbage."""
+    last = -1
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            size = src.stat().st_size
+        except OSError:
+            return
+        if size == last and size > 0:
+            return
+        last = size
+        time.sleep(0.5)
 
+
+def process_new_file(source_path: str) -> dict:
+    """Watchdog path: ingest one newly detected inbox file through the SAME
+    pipeline as a manual scan (`_ingest_file` — PDF rasterising, segmentation
+    and box-review queueing included), then move it to processed/ (failed/ on
+    error) so a later scan can never re-import it."""
     src = Path(source_path)
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -109,68 +133,53 @@ def process_new_file(source_path: str) -> dict:
         "error": None,
     }
 
-    # Allow the file to finish writing before reading
-    time.sleep(1.5)
+    _wait_until_stable(src)
 
-    if not src.exists():
-        entry["error"] = "File disappeared before processing"
-        _append_log(entry)
-        return entry
+    with _ingest_mutex:
+        if not src.exists():
+            # A concurrent scan grabbed it first — already handled, stay quiet.
+            logger.debug("Watch folder: %s already processed elsewhere", src.name)
+            entry["status"] = "skipped"
+            entry["error"] = "already processed by a concurrent scan"
+            return entry
 
-    suffix = src.suffix.lower()
-    if suffix not in SUPPORTED_EXTENSIONS:
-        entry["error"] = f"Unsupported extension: {suffix}"
-        _append_log(entry)
-        return entry
+        suffix = src.suffix.lower()
+        if suffix not in SUPPORTED_EXTENSIONS:
+            entry["error"] = f"Unsupported extension: {suffix}"
+            _append_log(entry)
+            return entry
 
-    try:
-        settings.receipts_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest_filename = f"receipt_{timestamp}_{src.name}"
-        dest_path = settings.receipts_dir / dest_filename
-        shutil.copy2(str(src), str(dest_path))
-
-        # OCR now returns a LIST of receipt metadatas (≥1). Save one DB row
-        # per receipt detected in the image. All rows share the same source
-        # file on disk.
-        metadatas = process_receipt_image(str(dest_path))
-        if not metadatas:
-            metadatas = [{"vendor_name": "Unknown", "category": "other", "error": "no receipt"}]
-
-        receipt_ids = []
-        for meta in metadatas:
-            rid = save_receipt(
-                filename=dest_filename,
-                filepath=str(dest_path),
-                metadata=meta,
-                description="auto-ingested from watch folder",
+        try:
+            res = _ingest_file(src)
+            entry.update(
+                {
+                    "status": res["status"],
+                    "count": res["count"],
+                    "receipt_ids": res["receipt_ids"],
+                    "receipt_id": res["receipt_ids"][0] if res["receipt_ids"] else None,
+                    "vendor": res.get("vendor"),
+                    "amount": res.get("amount"),
+                    "currency": res.get("currency"),
+                    "queued": res.get("queued", 0),
+                }
             )
-            receipt_ids.append(rid)
-
-        first = metadatas[0]
-        entry["status"] = "ok"
-        entry["receipt_id"] = receipt_ids[0]
-        entry["receipt_ids"] = receipt_ids
-        entry["count"] = len(receipt_ids)
-        entry["vendor"] = first.get("vendor_name")
-        entry["amount"] = first.get("total_amount")
-        entry["currency"] = first.get("currency")
-        if first.get("error"):
-            entry["ocr_warning"] = first["error"]
-
-        if len(receipt_ids) == 1:
-            logger.info("Watch folder: processed %s → receipt #%d", src.name, receipt_ids[0])
-        else:
+            if res.get("ocr_warning"):
+                entry["ocr_warning"] = res["ocr_warning"]
+            processed_dir = src.parent / PROCESSED_SUBDIR
+            processed_dir.mkdir(parents=True, exist_ok=True)
+            _move_into(src, processed_dir)
             logger.info(
-                "Watch folder: processed %s → %d receipts (ids %s)",
+                "Watch folder: processed %s → %d receipt(s), %d page(s) queued",
                 src.name,
-                len(receipt_ids),
-                receipt_ids,
+                res["count"],
+                res.get("queued", 0),
             )
-
-    except Exception as e:
-        entry["error"] = str(e)
-        logger.error("Watch folder: failed to process %s: %s", src.name, e)
+        except Exception as e:
+            entry["error"] = str(e)
+            logger.error("Watch folder: failed to process %s: %s", src.name, e)
+            failed_dir = src.parent / FAILED_SUBDIR
+            failed_dir.mkdir(parents=True, exist_ok=True)
+            _move_into(src, failed_dir)
 
     _append_log(entry)
     return entry
@@ -334,32 +343,37 @@ def scan_folder() -> dict:
             "receipt_id": None,
             "error": None,
         }
-        try:
-            res = _ingest_file(src)
-            entry.update(
-                {
-                    "status": res["status"],
-                    "count": res["count"],
-                    "receipt_ids": res["receipt_ids"],
-                    "receipt_id": res["receipt_ids"][0] if res["receipt_ids"] else None,
-                    "vendor": res.get("vendor"),
-                    "amount": res.get("amount"),
-                    "currency": res.get("currency"),
-                    "queued": res.get("queued", 0),
-                }
-            )
-            if res.get("ocr_warning"):
-                entry["ocr_warning"] = res["ocr_warning"]
-            summary["imported_receipts"] += res["count"]
-            summary["queued"] += res.get("queued", 0)
-            summary["files_ok"] += 1
-            _move_into(src, processed_dir)
-        except Exception as e:
-            entry["error"] = str(e)
-            summary["files_failed"] += 1
-            logger.error("Folder scan: failed on %s: %s", src.name, e)
-            failed_dir.mkdir(parents=True, exist_ok=True)
-            _move_into(src, failed_dir)
+        with _ingest_mutex:
+            if not src.exists():
+                # The live watcher ingested it while this scan was running.
+                summary["scanned"] -= 1
+                continue
+            try:
+                res = _ingest_file(src)
+                entry.update(
+                    {
+                        "status": res["status"],
+                        "count": res["count"],
+                        "receipt_ids": res["receipt_ids"],
+                        "receipt_id": res["receipt_ids"][0] if res["receipt_ids"] else None,
+                        "vendor": res.get("vendor"),
+                        "amount": res.get("amount"),
+                        "currency": res.get("currency"),
+                        "queued": res.get("queued", 0),
+                    }
+                )
+                if res.get("ocr_warning"):
+                    entry["ocr_warning"] = res["ocr_warning"]
+                summary["imported_receipts"] += res["count"]
+                summary["queued"] += res.get("queued", 0)
+                summary["files_ok"] += 1
+                _move_into(src, processed_dir)
+            except Exception as e:
+                entry["error"] = str(e)
+                summary["files_failed"] += 1
+                logger.error("Folder scan: failed on %s: %s", src.name, e)
+                failed_dir.mkdir(parents=True, exist_ok=True)
+                _move_into(src, failed_dir)
 
         _append_log(entry)
         summary["results"].append(entry)
@@ -392,16 +406,24 @@ def _make_handler():
         return None
 
     class ReceiptHandler(FileSystemEventHandler):
-        def on_created(self, event):
-            if event.is_directory:
+        def _handle(self, path: Path):
+            if path.parent.name in (PROCESSED_SUBDIR, FAILED_SUBDIR):
                 return
-            path = Path(event.src_path)
             if path.suffix.lower() in SUPPORTED_EXTENSIONS:
                 logger.info("Watch folder: detected new file %s", path.name)
                 try:
                     process_new_file(str(path))
                 except Exception as e:
                     logger.error("Watch folder handler error: %s", e)
+
+        def on_created(self, event):
+            if not event.is_directory:
+                self._handle(Path(event.src_path))
+
+        def on_moved(self, event):
+            # Files dragged/mv'd into the folder emit on_moved, not on_created.
+            if not event.is_directory:
+                self._handle(Path(event.dest_path))
 
     return ReceiptHandler()
 
