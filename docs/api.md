@@ -183,6 +183,15 @@ List of `{id, filename, filepath, transactions, uploaded_at}`. Note:
 
 Removes the statement and any matches pointing to it.
 
+### `POST /api/statements/{id}/archive`
+
+Mark a statement **complete** (`{"archived": true}`, the default) or reopen
+it (`{"archived": false}`). Archived statements are hidden from the active
+list in the UI (Show: Active / Completed / All). Attached receipts are left
+as-is — they're already `matched` and hidden from the active receipts
+board. `GET /api/statements` still returns archived ones (with
+`archived: 1`). 404 if the statement doesn't exist.
+
 ### `POST /api/statements/{id}/reparse`
 
 Re-run the parser over the saved file and replace

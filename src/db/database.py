@@ -88,6 +88,9 @@ def init_db():
         # distinguishes auto-matches (engine output) from user drag-drops.
         ("matches", "match_kind", "TEXT DEFAULT 'auto'"),
         ("matches", "transaction_index", "INTEGER"),
+        # Mark a reconciled statement "complete" → archived=1 hides it from
+        # the active statements list (its receipts stay matched/hidden).
+        ("statements", "archived", "INTEGER DEFAULT 0"),
     ]:
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {definition}")
@@ -352,6 +355,21 @@ def delete_statement(statement_id: int):
     cursor.execute("DELETE FROM statements WHERE id = ?", (statement_id,))
     conn.commit()
     conn.close()
+
+
+def set_statement_archived(statement_id: int, archived: bool) -> bool:
+    """Mark a statement complete (archived=1) or reopen it (0). Returns False
+    if no such statement."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE statements SET archived = ? WHERE id = ?",
+        (1 if archived else 0, statement_id),
+    )
+    changed = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
 
 
 # Matches

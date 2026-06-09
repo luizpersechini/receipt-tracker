@@ -662,7 +662,9 @@ async function loadStatements() {
     statements = sRes.statements || [];
     matches = mRes.matches || [];
   } catch {}
-  $("navStmtCount").textContent = statements.length;
+  // Outstanding (not-yet-completed) statements drive the nav badge.
+  const activeCount = statements.filter((s) => !s.archived).length;
+  $("navStmtCount").textContent = activeCount;
 
   // Count matches per statement_id in one pass.
   const matchedCount = {};
@@ -670,18 +672,33 @@ async function loadStatements() {
     matchedCount[m.statement_id] = (matchedCount[m.statement_id] || 0) + 1;
   });
 
+  const filterMode = $("stmtStatusFilter")?.value || "active";
+  const visible = statements.filter((s) =>
+    filterMode === "all"
+      ? true
+      : filterMode === "archived"
+        ? !!s.archived
+        : !s.archived,
+  );
+
   const tbody = $("statementsTbody");
-  if (!statements.length) {
+  if (!visible.length) {
+    const hasArchived = statements.some((s) => s.archived);
+    const body = !statements.length
+      ? `<h3>No statements yet</h3><p>Upload a corporate card CSV or PDF to begin reconciliation.</p>`
+      : filterMode === "active" && hasArchived
+        ? `<h3>No active statements</h3><p>They're completed. Switch <b>Show</b> to <b>Completed</b> or <b>All</b> to view them.</p>`
+        : `<h3>Nothing to show</h3><p>No statements match this filter.</p>`;
     tbody.innerHTML = `<tr class="empty"><td colspan="8">
       <div class="empty-state">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        <h3>No statements yet</h3><p>Upload a corporate card CSV or PDF to begin reconciliation.</p>
+        ${body}
       </div>
     </td></tr>`;
     return;
   }
 
-  tbody.innerHTML = statements
+  tbody.innerHTML = visible
     .map((s) => {
       // `transactions` arrives as a JSON string on the wire.
       let txns = s.transactions || [];
@@ -717,19 +734,46 @@ async function loadStatements() {
             ? `<span class="badge badge-green">${matched} / ${txns.length}</span>`
             : `<span class="badge badge-amber">${matched} / ${txns.length}</span>`;
 
-      return `<tr class="data-row clickable" onclick="openStatementDetail(${s.id})">
+      const openItems = Math.max(0, txns.length - matched);
+      const completedBadge = s.archived
+        ? ` <span class="badge badge-green">✓ Completed</span>`
+        : "";
+      const completeBtn = s.archived
+        ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); reopenStatement(${s.id})">Reopen</button>`
+        : `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); completeStatement(${s.id}, ${openItems})">Complete</button>`;
+
+      return `<tr class="data-row clickable ${s.archived ? "stmt-archived" : ""}" onclick="openStatementDetail(${s.id})">
     <td style="color:var(--text-3);font-family:'DM Mono',monospace;font-size:12px">#${s.id}</td>
-    <td class="fname" title="${s.filename}" style="font-weight:500">${fmt.file(s.filename)}</td>
+    <td class="fname" title="${s.filename}" style="font-weight:500">${fmt.file(s.filename)}${completedBadge}</td>
     <td><span class="badge badge-gray">${txns.length} txns</span></td>
     <td style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap">${totalLabel}</td>
     <td style="color:var(--text-2);font-size:12px;white-space:nowrap">${period}</td>
     <td>${matchedChip}</td>
     <td style="color:var(--text-2);font-size:12px">${(s.uploaded_at || "").slice(0, 16).replace("T", " ")}</td>
-    <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteStatement(${s.id})">Del</button></td>
+    <td style="white-space:nowrap">${completeBtn}<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteStatement(${s.id})">Del</button></td>
   </tr>`;
     })
     .join("");
 }
+
+async function completeStatement(id, openItems) {
+  const msg =
+    openItems > 0
+      ? `${openItems} transaction${openItems === 1 ? "" : "s"} still unmatched. Mark this statement complete and archive it anyway?`
+      : "Mark this statement complete and archive it?";
+  if (!confirm(msg)) return;
+  await api("POST", `/api/statements/${id}/archive`, { archived: true });
+  loadStatements();
+  loadStats();
+}
+
+async function reopenStatement(id) {
+  await api("POST", `/api/statements/${id}/archive`, { archived: false });
+  loadStatements();
+  loadStats();
+}
+
+$("stmtStatusFilter")?.addEventListener("change", () => loadStatements());
 
 async function deleteStatement(id) {
   if (!confirm("Remove this statement and its match results?")) return;

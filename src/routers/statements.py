@@ -5,7 +5,7 @@ import logging
 import shutil
 from datetime import datetime
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..config import settings
@@ -73,6 +73,19 @@ async def remove_statement(statement_id: int):
     except Exception as e:
         logger.exception("delete statement failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/statements/{statement_id}/archive")
+async def archive_statement(statement_id: int, body: dict = Body(default={})):
+    """Mark a statement complete (archived, hidden from the active list) or
+    reopen it. Body: `{"archived": true|false}` (defaults to true). The
+    attached receipts are left as-is — they're already 'matched' and hidden
+    from the active receipts board."""
+    archived = bool(body.get("archived", True)) if isinstance(body, dict) else True
+    changed = await asyncio.to_thread(db.set_statement_archived, statement_id, archived)
+    if not changed:
+        raise HTTPException(status_code=404, detail="Statement not found")
+    return JSONResponse({"success": True, "archived": archived})
 
 
 @router.post("/statements/{statement_id}/reparse")

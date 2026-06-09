@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=32" />
+    <link rel="stylesheet" href="/static/css/app.css?v=33" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -1023,6 +1023,14 @@
           <!-- ══ Statements ══ -->
           <div id="tab-statements" style="display: none">
             <div class="card">
+              <div class="stmt-toolbar">
+                <label class="stmt-filter-lbl">Show</label>
+                <select id="stmtStatusFilter" class="fbar-select">
+                  <option value="active">Active</option>
+                  <option value="archived">Completed</option>
+                  <option value="all">All</option>
+                </select>
+              </div>
               <div class="table-wrap">
                 <table>
                   <thead>
@@ -1034,7 +1042,7 @@
                       <th>Period</th>
                       <th>Matched</th>
                       <th>Uploaded</th>
-                      <th style="width: 60px"></th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody id="statementsTbody">
@@ -1886,6 +1894,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=55"></script>
+    <script src="/static/js/app.js?v=56"></script>
   </body>
 </html>
