@@ -25,6 +25,8 @@ import argparse
 import csv
 import io
 import json
+import random
+import re
 import shutil
 import sys
 import tempfile
@@ -427,6 +429,125 @@ def _c_report(client, ctx):
     return "expense report ok"
 
 
+# ─── real-world corpus: CORD receipts, scored against ground truth ───────────
+# Every run pulls a fresh RANDOM sample of real receipts from the CORD dataset
+# (naver-clova-ix/cord-v2, HuggingFace, CC BY 4.0 — real photos + ground-truth
+# totals), runs them through the OCR pipeline, scores total-amount accuracy,
+# and appends to qa/corpus_scoreboard.jsonl so you can see whether an algo
+# change moves the number. Needs `datasets` + network; warns (never hard-fails)
+# if either is missing or the sample is just hard.
+
+SCOREBOARD = ROOT / "qa" / "corpus_scoreboard.jsonl"
+
+
+def _cord_gt_total(ground_truth_str):
+    """Ground-truth total from a CORD example → integer minor-unit-free amount
+    (CORD is Indonesian rupiah, whole numbers: "60.000" → 60000)."""
+    try:
+        gt = json.loads(ground_truth_str)
+        tp = ((gt.get("gt_parse") or {}).get("total") or {}).get("total_price")
+        digits = re.sub(r"[^\d]", "", str(tp or ""))
+        return int(digits) if digits else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _norm_amount(v):
+    """Our extracted total → rounded int for comparison with the GT integer."""
+    try:
+        return round(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _append_scoreboard(ctx, scored, correct, acc):
+    from src.services import ocr_settings
+
+    rec = {
+        "ts": ctx["ts"],
+        "backend": ocr_settings.effective_backend(),
+        "text_model": ocr_settings.effective_text_model(),
+        "n": len(scored),
+        "correct": correct,
+        "accuracy": round(acc, 3),
+        "samples": [{"gt": r["gt"], "got": r["got"], "ok": r["ok"]} for r in scored],
+    }
+    SCOREBOARD.parent.mkdir(parents=True, exist_ok=True)
+    with open(SCOREBOARD, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+@check("real corpus: CORD total-amount accuracy (random sample, scored)")
+def _c_corpus(client, ctx):
+    if ctx["ocr"] != "real":
+        raise Warn("corpus scoring needs --ocr real (mock can't read totals)")
+    n = ctx["corpus_n"]
+    if n <= 0:
+        raise Warn("corpus step disabled (--corpus 0)")
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        raise Warn("`uv pip install datasets` to enable the CORD corpus step")
+
+    import itertools
+
+    try:
+        ds = load_dataset("naver-clova-ix/cord-v2", split="test", streaming=True)
+        ds = ds.shuffle(seed=ctx["seed"], buffer_size=64)  # fresh random sample / run
+        samples = list(itertools.islice(ds, n))
+    except Exception as e:  # noqa: BLE001 — network / HF down / rate-limited
+        raise Warn(f"couldn't load CORD (offline / HF down?): {str(e)[:120]}")
+    if not samples:
+        raise Warn("CORD returned no samples")
+
+    from src.services.llm_processor import ocr_crops
+
+    rows = []
+    for s in samples:
+        gt = _cord_gt_total(s["ground_truth"])
+        try:
+            meta = ocr_crops([s["image"].convert("RGB")])[0]["metadata"]
+            got = _norm_amount(meta.get("total_amount"))
+        except Exception:  # noqa: BLE001
+            got = None
+        ok = gt is not None and got is not None and abs(got - gt) <= 1
+        rows.append({"gt": gt, "got": got, "ok": ok})
+
+    scored = [r for r in rows if r["gt"] is not None]
+    if not scored:
+        raise Warn("no ground-truth totals in this sample")
+    correct = sum(r["ok"] for r in scored)
+    acc = correct / len(scored)
+    _append_scoreboard(ctx, scored, correct, acc)
+
+    miss = [f"{r['gt']}→{r['got']}" for r in scored if not r["ok"]][:6]
+    note = f"{correct}/{len(scored)} totals correct ({acc:.0%})"
+    if miss:
+        note += " · gt→got misses: " + ", ".join(miss)
+    if correct == 0:
+        raise Warn(note + " — every total wrong; likely a parse/locale gap")
+    return note
+
+
+def _print_scoreboard_trend():
+    if not SCOREBOARD.exists():
+        return
+    try:
+        lines = SCOREBOARD.read_text(encoding="utf-8").strip().splitlines()[-5:]
+        recs = [json.loads(x) for x in lines]
+    except Exception:  # noqa: BLE001
+        return
+    if not recs:
+        return
+    print("\n  CORD total-accuracy trend (last 5 runs)")
+    print("  " + "─" * 64)
+    for r in recs:
+        print(
+            f"    {r.get('ts', '?'):<20} {r.get('text_model', '?'):<14} "
+            f"{r.get('correct', 0)}/{r.get('n', 0)}  {r.get('accuracy', 0):.0%}"
+        )
+
+
 # ─── runner ──────────────────────────────────────────────────────────────────
 
 
@@ -482,6 +603,13 @@ def main():
     )
     ap.add_argument("--keep", action="store_true", help="keep the temp dir for inspection")
     ap.add_argument("--report", type=str, default="", help="write JSON results to this path")
+    ap.add_argument(
+        "--corpus",
+        type=int,
+        default=3,
+        help="how many random CORD receipts to score each run (0 = off)",
+    )
+    ap.add_argument("--no-corpus", action="store_true", help="skip the CORD corpus step")
     args = ap.parse_args()
 
     import logging
@@ -495,7 +623,13 @@ def main():
     fails = warns = []
     try:
         client = build_client(tmp, args.ocr)
-        ctx = {"tmp": tmp, "ocr": args.ocr}
+        ctx = {
+            "tmp": tmp,
+            "ocr": args.ocr,
+            "corpus_n": 0 if args.no_corpus else args.corpus,
+            "seed": random.randint(0, 1_000_000),  # fresh random CORD sample / run
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
         max_runs = 5 if args.until_clean else max(1, args.loops)
         for i in range(1, max_runs + 1):
             results = run_battery(client, ctx)
@@ -515,6 +649,8 @@ def main():
             json.dumps([r.__dict__ for r in all_results], indent=2), encoding="utf-8"
         )
         print(f"  report → {args.report}")
+
+    _print_scoreboard_trend()
 
     if fails:
         print(f"\n✗ {len(fails)} check(s) FAILED")

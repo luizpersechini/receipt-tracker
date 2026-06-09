@@ -55,3 +55,4 @@ token.json
 # QA harness report dumps (qa/run_qa.py --report)
 qa/*report*.json
 qa/last*.json
+qa/corpus_scoreboard.jsonl

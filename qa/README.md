@@ -33,6 +33,24 @@ fast gate; `--ocr real` additionally exercises the OCR/structuring pipeline.
 | matching                   | `POST /match` runs without error; `/stats` shape                                       |
 | review queue               | PDF preview queues pages → commit drains the item                                      |
 | report                     | expense report generates (warns, not fails, if FX/network is offline)                  |
+| real corpus (CORD)         | random real receipts from the CORD dataset, OCR'd + scored vs ground-truth totals      |
+
+### Real-corpus accuracy step (CORD)
+
+Each run pulls a **fresh random sample** of real receipt photos from the
+[CORD dataset](https://huggingface.co/datasets/naver-clova-ix/cord-v2)
+(HuggingFace, CC BY 4.0 — images + ground-truth totals), OCRs them through the
+real pipeline, and **scores total-amount accuracy** against ground truth.
+Results append to `qa/corpus_scoreboard.jsonl` (gitignored) and the last 5
+runs' accuracy print as a trend, so you can see whether an algo change moves
+the number — the "test and improve" loop.
+
+- Needs `datasets` + network: `uv pip install --python .venv/bin/python datasets`.
+- Real OCR only (mock can't read totals). Controlled by `--corpus N`
+  (default 3, `--no-corpus` to skip). Warns (never hard-fails) if `datasets`
+  is missing, HF is unreachable, or the sample is just hard.
+- CORD is Indonesian (IDR), so it stress-tests locale/number handling beyond
+  the user's BRL/CAD receipts.
 
 Checks raise `Warn` (non-fatal, shown as `!`) for variance-prone outcomes
 (e.g. real OCR recovered no total, segmenter over-merged a 2-receipt image,
