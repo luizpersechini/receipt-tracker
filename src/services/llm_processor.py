@@ -50,6 +50,13 @@ KNOWN_VISION_MODELS = {
     "gemma4",  # explicitly opt-in (still subject to size cap)
 }
 
+# Vision models that only TRANSCRIBE text — they don't follow a JSON
+# instruction. Fed the one-shot extraction prompt they loop on the prompt
+# template until they hit max tokens / the timeout (see the glm-ocr blank-
+# receipt incident). They're fine as the OCR step behind apple_vision-style
+# pipelines, but a poor choice for the ollama_vision one-shot backend.
+OCR_ONLY_MODELS = {"glm-ocr"}
+
 GB = 1024**3
 
 
@@ -61,6 +68,12 @@ def _model_family(model_name: str) -> str:
 def _is_vision_allowlisted(model_name: str) -> bool:
     family = _model_family(model_name)
     return family in KNOWN_VISION_MODELS
+
+
+def _is_ocr_only(model_name: str) -> bool:
+    """True for transcription-only vision models unsuited to one-shot JSON
+    extraction (the ollama_vision backend)."""
+    return _model_family(model_name) in OCR_ONLY_MODELS
 
 
 def _list_available_models() -> dict:

@@ -7,18 +7,11 @@ those are the units under test.
 
 import json
 
-import pytest
-
-from src.config import settings
 from src.services import text_to_receipt as t2r
 
-
-@pytest.fixture(autouse=True)
-def _pin_text_model(monkeypatch):
-    """structure_text_as_receipt defaults the model via effective_text_model(),
-    which reads the persisted override file (data/ocr_config.json). Pin it to
-    the settings default so a saved picker choice can't shadow these tests."""
-    monkeypatch.setattr(t2r.ocr_settings, "effective_text_model", lambda: settings.ocr_text_model)
+# effective_text_model() is pinned to the settings default globally by the
+# conftest `_isolate_ocr_config` fixture, so a saved picker choice in
+# data/ocr_config.json can't shadow the model these tests assert on.
 
 
 def _fake_response(content: str):

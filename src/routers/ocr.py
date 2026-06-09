@@ -12,7 +12,12 @@ from fastapi.responses import JSONResponse
 
 from ..config import settings
 from ..services import ocr_settings
-from ..services.llm_processor import GB, _is_vision_allowlisted, _list_available_models
+from ..services.llm_processor import (
+    GB,
+    _is_ocr_only,
+    _is_vision_allowlisted,
+    _list_available_models,
+)
 
 router = APIRouter(prefix="/api", tags=["ocr"])
 logger = logging.getLogger(__name__)
@@ -41,6 +46,7 @@ async def get_ocr_config():
             "name": name,
             "size_gb": round(size / GB, 1),
             "vision": _is_vision_allowlisted(name),
+            "ocr_only": _is_ocr_only(name),
             "over_cap": size > cap * GB,
         }
         for name, size in sorted(available.items())

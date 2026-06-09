@@ -43,20 +43,17 @@ and asserts every storage path resolves under the tempfile before running.
 
 ## Observations & proposed improvements
 
-Surfaced while building/running this harness (not yet implemented):
+Surfaced while building/running this harness:
 
-1. **Test isolation gap (recurring).** `test_llm_processor` and
-   `test_text_to_receipt` read the persisted `data/ocr_config.json` override
-   via `ocr_settings.effective_*()` and broke when it drifted to `llama3.1:8b`.
-   Both are patched, but the pattern can bite any test. Fix once in
-   `tests/conftest.py`: an autouse fixture pinning all `effective_*` getters to
-   `settings` defaults (or pointing `data_dir` at a tmp path) for the whole suite.
+1. ~~**Test isolation gap (recurring).**~~ **DONE.** `tests/conftest.py` now has
+   an autouse `_isolate_ocr_config` fixture pinning all `effective_*` getters
+   to `settings`, so the persisted `data/ocr_config.json` can't shadow tests.
+   The per-file patches were removed.
 
-2. **OCR default backend is a footgun.** `ocr_backend` defaults to
-   `ollama_vision` with `ollama_model=glm-ocr:latest`, but glm-ocr loops on the
-   extraction prompt and times out (the blank-receipt regression). Default to
-   `apple_vision` on macOS, and/or mark glm-ocr in the picker as "OCR-only, not
-   for one-shot extraction".
+2. ~~**OCR default backend is a footgun.**~~ **DONE.** Default `ocr_backend` is
+   now `apple_vision` (config.py + .env.example). glm-ocr is flagged
+   `ocr_only` in `/api/ocr/config` and the picker labels it "⚠ OCR-only" +
+   warns when it's the active one-shot model.
 
 3. **No automated gate.** Nothing enforces green before push. Wire
    `python qa/run_qa.py --ocr mock` + `pytest -q` into a pre-push hook or CI.

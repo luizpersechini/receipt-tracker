@@ -40,12 +40,15 @@ class Settings(BaseSettings):
     ocr_warmup: bool = True  # preload the vision model at server start
     ocr_preprocess: bool = True  # auto-rotate + CLAHE + unsharp before OCR
 
-    # OCR backend selector. "ollama_vision" runs the prior glm-ocr/llava
-    # path. "apple_vision" runs Apple's on-device Vision framework + a
-    # small text LLM (settings.ocr_text_model) to structure the result —
-    # much faster on Apple Silicon, and no large vision encoder resident
-    # in RAM.
-    ocr_backend: str = "ollama_vision"
+    # OCR backend selector. "apple_vision" (default) runs Apple's on-device
+    # Vision framework for text + a small text LLM (settings.ocr_text_model)
+    # to structure it — fast on Apple Silicon, low RAM, and reliable. This is
+    # the default because the "ollama_vision" one-shot path depends on the
+    # vision model following a JSON-extraction prompt; the shipped
+    # ollama_model (glm-ocr) is a pure OCR/transcription model that loops on
+    # that prompt and times out. Only switch to "ollama_vision" with a vision
+    # model that does instruction-following extraction (llava, minicpm-v).
+    ocr_backend: str = "apple_vision"
     ocr_text_model: str = "llama3.2:3b"  # used when ocr_backend=apple_vision
 
     # Gmail ingestion (Phase B of the Uber integration)

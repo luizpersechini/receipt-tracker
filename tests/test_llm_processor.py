@@ -19,15 +19,12 @@ GB = 1024**3
 
 
 @pytest.fixture(autouse=True)
-def _isolate_ocr_override(monkeypatch):
-    """The OCR code reads the runtime backend/models via `ocr_settings`. Pin
-    all three effective getters to the `settings` defaults so the persisted
-    override file (data/ocr_config.json, set by the sidebar picker) can't
-    shadow what these tests assume — e.g. a saved `apple_vision` backend
-    would otherwise route ollama-stubbing tests into Apple Vision."""
-    monkeypatch.setattr(llm.ocr_settings, "effective_vision_model", lambda: settings.ollama_model)
-    monkeypatch.setattr(llm.ocr_settings, "effective_backend", lambda: settings.ocr_backend)
-    monkeypatch.setattr(llm.ocr_settings, "effective_text_model", lambda: settings.ocr_text_model)
+def _force_ollama_backend(monkeypatch):
+    """This file exercises the Ollama vision path (stubbed `_ollama_chat` /
+    `_pick_model`). The default backend is now `apple_vision`, so pin it to
+    `ollama_vision` here. (The override-file isolation is handled globally by
+    the conftest `_isolate_ocr_config` fixture.)"""
+    monkeypatch.setattr(settings, "ocr_backend", "ollama_vision")
 
 
 # ─── _pick_model safety rails ────────────────────────────────────────────────
@@ -854,3 +851,12 @@ def test_ollama_chat_payload_caps_output_tokens(monkeypatch):
     opts = captured["payload"]["options"]
     assert opts["num_predict"] == settings.ocr_num_predict
     assert opts["num_ctx"] == settings.ocr_num_ctx
+
+
+def test_glm_ocr_flagged_ocr_only():
+    """glm-ocr transcribes but won't follow the JSON-extraction prompt — it
+    must be flagged so the picker can warn against using it one-shot."""
+    assert llm._is_ocr_only("glm-ocr:latest") is True
+    assert llm._is_ocr_only("glm-ocr") is True
+    assert llm._is_ocr_only("llava:7b") is False
+    assert llm._is_ocr_only("minicpm-v:latest") is False

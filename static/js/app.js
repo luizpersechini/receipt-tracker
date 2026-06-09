@@ -5004,8 +5004,9 @@ function _renderOcrPicker(cfg) {
         cfg.backend === "ollama_vision" && cfg.vision_model === m.name
           ? " selected"
           : "";
+      const tag = m.ocr_only ? " · ⚠ OCR-only" : "";
       opts.push(
-        `<option value="ollama:${_esc(m.name)}"${seld}>${_esc(m.name)} · ${m.size_gb} GB</option>`,
+        `<option value="ollama:${_esc(m.name)}"${seld}>${_esc(m.name)} · ${m.size_gb} GB${tag}</option>`,
       );
     });
     opts.push("</optgroup>");
@@ -5042,9 +5043,14 @@ function _renderOcrStatus(cfg) {
     return;
   }
   const hasVision = (cfg.models || []).some((m) => m.vision && !m.over_cap);
+  const activeOcrOnly =
+    cfg.backend === "ollama_vision" &&
+    (cfg.models || []).some((m) => m.name === cfg.vision_model && m.ocr_only);
   if (cfg.backend === "ollama_vision" && !hasVision) {
     el.innerHTML =
       '<span class="ocr-warn">No vision model installed — run <code>ollama pull glm-ocr</code></span>';
+  } else if (activeOcrOnly) {
+    el.innerHTML = `<span class="ocr-warn">⚠ <code>${_esc(cfg.vision_model)}</code> is OCR-only — it loops on one-shot extraction and times out. Prefer <b>Apple Vision</b>, or a JSON-capable vision model (llava, minicpm-v).</span>`;
   } else if (
     cfg.backend === "apple_vision" &&
     !(cfg.models || []).some((m) => m.name === cfg.text_model)
