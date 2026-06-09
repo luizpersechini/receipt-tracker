@@ -14,11 +14,15 @@ page-by-page and **every page is queued for box review** (no OCR yet) —
 the frontend opens the review flow so the user confirms/adjusts the
 receipt boxes per page before OCR. See the box-review queue below.
 
-**Body:** multipart `file`, plus optional form field `single` (bool). When
-`single=true` (the "Single receipt — don't split" toggle), segmentation is
-skipped for an image and the response is one full-image box
+**Body:** multipart `file`, plus optional form fields `single` and `queue`
+(bool). When `single=true` (the "Single receipt — don't split" toggle),
+segmentation is skipped for an image and the response is one full-image box
 (`forced_single: true`, `auto_segmented: false`) — so a single receipt on a
-large background isn't fragmented into many boxes. Ignored for PDFs.
+large background isn't fragmented into many boxes. When `queue=true`
+(multi-file uploads), the image is added to the box-review queue instead of
+returning boxes for the inline editor, and the response is
+`{review_queued: 1, pages: 1}` — each file is reviewed before OCR. `single`
+and `queue` compose. Both are ignored for PDFs (already queued page-by-page).
 
 **Response (image):**
 

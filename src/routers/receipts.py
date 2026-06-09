@@ -30,7 +30,11 @@ _ocr_semaphore = asyncio.Semaphore(max(1, settings.ocr_concurrency))
 
 
 @router.post("/upload/receipt/preview")
-async def upload_receipt_preview(file: UploadFile = File(...), single: bool = Form(False)):
+async def upload_receipt_preview(
+    file: UploadFile = File(...),
+    single: bool = Form(False),
+    queue: bool = Form(False),
+):
     """
     First step of the two-phase upload flow: save the file to disk and run
     the segmenter to suggest receipt bounding boxes. Does NOT run OCR.
@@ -43,6 +47,10 @@ async def upload_receipt_preview(file: UploadFile = File(...), single: bool = Fo
     segmentation for an image and returns one full-image box, so a single
     receipt on a large background isn't fragmented into many boxes. Ignored
     for PDFs (those already go page-by-page through the review queue).
+
+    `queue=True` (multi-file uploads) adds the image to the box-review queue
+    instead of returning boxes for the inline editor, so each file is
+    reviewed before OCR. Returns `review_queued`. Composes with `single`.
 
     Special case: PDF uploads are rasterised page-by-page; each page is
     segmented and queued for box review (no OCR yet). The response carries
@@ -96,26 +104,34 @@ async def upload_receipt_preview(file: UploadFile = File(...), single: bool = Fo
         from urllib.parse import quote
 
         if single:
-            # User asked to treat the whole image as ONE receipt — skip the
-            # segmenter and return a single full-image box. _open_as_rgb is the
-            # same loader the segmenter uses, so HEIC/odd modes still open.
+            # Treat the whole image as ONE receipt — skip the segmenter and use
+            # a single full-image box. _open_as_rgb is the same loader the
+            # segmenter uses, so HEIC/odd modes still open.
             from ..services.receipt_segmenter import _open_as_rgb
 
             pil = await asyncio.to_thread(_open_as_rgb, str(filepath))
             w, h = pil.size
+            boxes = [{"x": 0, "y": 0, "w": w, "h": h}]
+        else:
+            boxes, (w, h) = await asyncio.to_thread(segment_with_boxes, str(filepath))
+
+        if queue:
+            # Multi-file upload: defer to the box-review queue instead of opening
+            # the editor inline (the editor is modal — it can't review N files at
+            # once). The user drains the queue from the "Pages to review" card.
+            await asyncio.to_thread(
+                review_queue.add,
+                filename=filename,
+                image_w=w,
+                image_h=h,
+                bboxes=boxes,
+                source=file.filename,
+                description=None,
+            )
             return JSONResponse(
-                {
-                    "success": True,
-                    "filename": filename,
-                    "image_url": f"/api/preview/{quote(filename)}",
-                    "image_size": {"w": w, "h": h},
-                    "bboxes": [{"x": 0, "y": 0, "w": w, "h": h}],
-                    "auto_segmented": False,
-                    "forced_single": True,
-                }
+                {"success": True, "filename": filename, "review_queued": 1, "pages": 1}
             )
 
-        boxes, (w, h) = await asyncio.to_thread(segment_with_boxes, str(filepath))
         # Route through /api/preview/ instead of the raw static mount so
         # HEIC/HEIF uploads are transparently converted to JPEG on the fly —
         # browsers can't render HEIC natively, and without this the bbox
@@ -127,7 +143,8 @@ async def upload_receipt_preview(file: UploadFile = File(...), single: bool = Fo
                 "image_url": f"/api/preview/{quote(filename)}",
                 "image_size": {"w": w, "h": h},
                 "bboxes": boxes,
-                "auto_segmented": len(boxes) > 1,
+                "auto_segmented": (len(boxes) > 1) and not single,
+                "forced_single": single,
             }
         )
     except Exception as e:

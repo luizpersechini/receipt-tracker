@@ -392,3 +392,45 @@ def test_commit_endpoint_rejects_path_traversal(tmp_path: Path, monkeypatch):
     # Either 404 (file doesn't exist) or 400 (path-traversal guard) is fine —
     # both responses prove we don't read outside receipts_dir.
     assert resp.status_code in (400, 404)
+
+
+def test_preview_queue_flag_routes_to_review_queue(tmp_path: Path, monkeypatch):
+    """Multi-file uploads pass queue=true: the image is added to the box-review
+    queue (no inline editor) so the user marks boxes before OCR."""
+    client = _app_client(tmp_path, monkeypatch)
+    img = _blank_table(1200, 1600)
+    _paint_receipt(img, 120, 120, 800, 1300)
+    src = tmp_path / "q.png"
+    img.save(src, format="PNG")
+
+    with open(src, "rb") as f:
+        resp = client.post(
+            "/api/upload/receipt/preview",
+            files={"file": ("q.png", f, "image/png")},
+            data={"queue": "true"},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["review_queued"] == 1
+    assert "image_url" not in data  # deferred to the queue, not the inline editor
+
+    q = client.get("/api/review-queue").json()
+    assert q["count"] == 1
+    assert q["items"][0]["source"] == "q.png"
+
+
+def test_preview_queue_with_single_queues_one_full_box(tmp_path: Path, monkeypatch):
+    """queue + single compose: a single full-image box is queued."""
+    client = _app_client(tmp_path, monkeypatch)
+    img = _blank_table(1000, 1400)
+    _paint_receipt(img, 100, 100, 700, 1200)
+    src = tmp_path / "qs.png"
+    img.save(src, format="PNG")
+    with open(src, "rb") as f:
+        client.post(
+            "/api/upload/receipt/preview",
+            files={"file": ("qs.png", f, "image/png")},
+            data={"queue": "true", "single": "true"},
+        )
+    item = client.get("/api/review-queue").json()["items"][0]
+    assert item["bboxes"] == [{"x": 0, "y": 0, "w": 1000, "h": 1400}]

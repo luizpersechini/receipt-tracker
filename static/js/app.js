@@ -522,9 +522,20 @@ function renderReceipts(receipts) {
       // of a document placeholder, and skip the lightbox click.
       const isUberRow = (r.filename || "").startsWith("uber_");
       const isPdf = (r.filename || "").toLowerCase().endsWith(".pdf");
-      const thumbSrc = browserViewable
-        ? `/receipts/${r.filename}`
-        : `/api/preview/${r.filename}`;
+      // HEIC/HEIF/TIFF/BMP aren't browser-native, but /api/preview/ converts
+      // them to JPEG on the fly — so they still get a real <img> thumbnail
+      // (iPhone photos are HEIC), not a document placeholder.
+      const convertible = [
+        "heic",
+        "heif",
+        "heics",
+        "tif",
+        "tiff",
+        "bmp",
+      ].includes(ext);
+      const isImage = browserViewable || convertible;
+      const previewUrl = `/api/preview/${encodeURIComponent(r.filename)}`;
+      const thumbSrc = browserViewable ? `/receipts/${r.filename}` : previewUrl;
       const docThumb = `<div class="thumb-ph" onclick="openLightbox('${thumbSrc}', ${r.id})">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
     </div>`;
@@ -544,8 +555,8 @@ function renderReceipts(receipts) {
         ? pdfThumb
         : isUberRow
           ? uberThumb
-          : browserViewable
-            ? `<img class="receipt-thumb" src="/receipts/${r.filename}" alt="receipt" data-fallback-src="${thumbSrc}" data-receipt-id="${r.id}" onclick="openLightbox('${thumbSrc}', ${r.id})" onerror="handleThumbError(this)">`
+          : isImage
+            ? `<img class="receipt-thumb" src="${thumbSrc}" alt="receipt" data-fallback-src="${previewUrl}" data-receipt-id="${r.id}" onclick="openLightbox('${thumbSrc}', ${r.id})" onerror="handleThumbError(this)">`
             : docThumb;
 
       const loc =
@@ -4281,13 +4292,20 @@ async function commitReceiptOCR({
 // When `bulk` is true we never open the bbox editor — we auto-commit on
 // whatever the segmenter returned, because holding the queue for per-file
 // confirmation would defeat the point of bulk.
-async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
+async function _processSingleReceiptFile(
+  file,
+  desc,
+  { bulk = false, queue = false } = {},
+) {
   const fd = new FormData();
   fd.append("file", file);
   // "Single receipt — don't split" toggle: ask the server to skip the
   // segmenter and return one full-image box (no over-splitting).
   const single = !!$("receiptSingle")?.checked;
   fd.append("single", single ? "true" : "false");
+  // queue=true (multi-file uploads) defers each image to the box-review queue
+  // instead of auto-committing, so the user marks boxes before OCR.
+  fd.append("queue", queue ? "true" : "false");
   const fname = file.name;
 
   if (!bulk) openAiModal(fname);
@@ -4297,20 +4315,21 @@ async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
   try {
     const preview = await api("POST", "/api/upload/receipt/preview", fd);
 
-    // ── PDF path ─────────────────────────────────────────────────────
-    // The /preview endpoint rasterised every page and queued each one for
-    // box review (no OCR yet). An image preview always carries `image_url`;
-    // its absence means this was a PDF (or any rasterise-to-queue) response,
-    // so we must NOT fall through to the image auto-commit below (which would
+    // ── Queue path (PDF pages, or multi-file image upload) ─────────────
+    // The /preview endpoint queued the page(s)/image for box review (no OCR
+    // yet). An image preview destined for the inline editor always carries
+    // `image_url`; its absence means a rasterise/defer-to-queue response, so
+    // we must NOT fall through to the image auto-commit below (which would
     // POST /commit with no bboxes → 422). Single upload → jump into the
     // review flow; bulk → refresh the queue card and move on.
     if (!preview.image_url) {
       const queued = preview.review_queued || 0;
       const pages = preview.pages || queued;
+      const noun = fname.toLowerCase().endsWith(".pdf") ? "page" : "image";
       if (!queued) {
-        // PDF produced no reviewable pages (empty/corrupt). Surface it
+        // Produced nothing reviewable (empty/corrupt file). Surface it
         // instead of silently auto-committing an undefined bbox set.
-        const msg = "No receipts found in this PDF.";
+        const msg = "No reviewable content found in this file.";
         setAiStep(1, "error", msg);
         if (!bulk) {
           $("receiptStatus").textContent = msg;
@@ -4321,15 +4340,15 @@ async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
       setAiStep(
         0,
         "done",
-        `PDF received · ${pages} page${pages === 1 ? "" : "s"}`,
+        `Received · ${pages} ${noun}${pages === 1 ? "" : "s"}`,
       );
       setAiStep(
         1,
         "done",
-        `Queued ${queued} page${queued === 1 ? "" : "s"} for review`,
+        `Queued ${queued} ${noun}${queued === 1 ? "" : "s"} for review`,
       );
       setAiStep(2, "active", "Confirm receipt boxes before OCR…");
-      const summary = `${queued} page${queued === 1 ? "" : "s"} queued for box review`;
+      const summary = `${queued} ${noun}${queued === 1 ? "" : "s"} queued for box review`;
       if (!bulk) {
         $("receiptStatus").textContent = summary;
         $("receiptStatus").className = "status-msg ok";
@@ -4426,7 +4445,10 @@ $("uploadReceiptBtn").addEventListener("click", async () => {
   openAiModal(`Uploading ${files.length} files`);
   $("aiModalSub").textContent = `0 / ${files.length} processed`;
 
-  let savedReceipts = 0; // total receipt rows created across all files
+  // Multiple files defer to the box-review queue — each is segmented and
+  // queued so the user marks boxes before OCR (the modal editor can't review
+  // N files inline). They drain the queue afterwards.
+  let queuedCount = 0;
   let succeededFiles = 0; // files that returned without error
   let failedFiles = 0;
   const errors = [];
@@ -4436,41 +4458,41 @@ $("uploadReceiptBtn").addEventListener("click", async () => {
     $("uploadReceiptBtn").innerHTML =
       `<span class="spin"></span> ${i + 1}/${files.length}…`;
     $("aiModalTitle").textContent =
-      `Uploading ${i + 1}/${files.length}: ${f.name}`;
+      `Queuing ${i + 1}/${files.length}: ${f.name}`;
 
-    const result = await _processSingleReceiptFile(f, desc, { bulk: true });
+    const result = await _processSingleReceiptFile(f, desc, {
+      bulk: true,
+      queue: true,
+    });
     if (!result.ok) {
       failedFiles++;
       errors.push(`${f.name}: ${result.error}`);
     } else {
       succeededFiles++;
-      savedReceipts += result.count || 0;
+      queuedCount += result.queued || 0;
     }
     $("aiModalSub").textContent =
-      `${i + 1} / ${files.length} processed · ${savedReceipts} receipts saved` +
+      `${i + 1} / ${files.length} processed · ${queuedCount} queued` +
       (failedFiles ? ` · ${failedFiles} failed` : "");
   }
 
   // Final summary
   const summary =
     failedFiles === 0
-      ? `Saved ${savedReceipts} receipts from ${succeededFiles} files`
-      : `${succeededFiles}/${files.length} files OK, ${failedFiles} failed — ${savedReceipts} receipts saved`;
+      ? `Queued ${queuedCount} item${queuedCount === 1 ? "" : "s"} for box review`
+      : `${succeededFiles}/${files.length} files OK, ${failedFiles} failed — ${queuedCount} queued`;
 
-  $("aiModalTitle").textContent =
-    failedFiles === 0
-      ? "Bulk upload complete"
-      : "Bulk upload finished with errors";
-  $("aiModalSub").textContent =
-    summary + (errors.length ? `\n${errors.slice(0, 3).join(" · ")}` : "");
   $("receiptStatus").textContent = summary;
   $("receiptStatus").className =
     "status-msg " + (failedFiles === 0 ? "ok" : "err");
 
   loadReceipts();
   loadStats();
+  loadReviewQueue();
   resetUploaderUI();
-  setTimeout(closeAiModal, failedFiles === 0 ? 4000 : 0);
+  closeAiModal();
+  // Jump straight into reviewing the freshly-queued pages.
+  if (queuedCount > 0) await openReviewQueue();
 });
 
 // Click outside modal to close
