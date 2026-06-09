@@ -9,15 +9,31 @@ import json
 
 import pytest
 
+from src.config import settings
 from src.services import text_to_receipt as t2r
+
+
+@pytest.fixture(autouse=True)
+def _pin_text_model(monkeypatch):
+    """structure_text_as_receipt defaults the model via effective_text_model(),
+    which reads the persisted override file (data/ocr_config.json). Pin it to
+    the settings default so a saved picker choice can't shadow these tests."""
+    monkeypatch.setattr(t2r.ocr_settings, "effective_text_model", lambda: settings.ocr_text_model)
 
 
 def _fake_response(content: str):
     """Minimal Ollama /api/chat response shape."""
+
     class _R:
-        def __init__(self, c): self._c = c
-        def raise_for_status(self): pass
-        def json(self): return {"message": {"content": self._c}}
+        def __init__(self, c):
+            self._c = c
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": self._c}}
+
     return _R(content)
 
 
@@ -34,17 +50,20 @@ def test_parses_clean_json_response(monkeypatch):
         captured["prompt"] = prompt
         return {
             "message": {
-                "content": json.dumps({
-                    "vendor_name": "Trees Coffee",
-                    "total_amount": "13.97",
-                    "currency": "CAD",
-                    "date": "2026-03-10",
-                    "city": "Vancouver",
-                    "country": "CA",
-                    "category": "meals",
-                })
+                "content": json.dumps(
+                    {
+                        "vendor_name": "Trees Coffee",
+                        "total_amount": "13.97",
+                        "currency": "CAD",
+                        "date": "2026-03-10",
+                        "city": "Vancouver",
+                        "country": "CA",
+                        "category": "meals",
+                    }
+                )
             }
         }
+
     monkeypatch.setattr(t2r, "_ollama_chat", _fake_chat)
 
     out = t2r.structure_text_as_receipt("TREES COFFEE GASTOWN\nTotal $13.97\nVancouver")
@@ -57,10 +76,14 @@ def test_parses_clean_json_response(monkeypatch):
 def test_recovers_when_model_wraps_json_in_text(monkeypatch):
     """Some models return 'Here is the JSON: {...} hope that helps' even
     when format=json is requested. Make sure we still extract the object."""
+
     def _fake_chat(*_a, **_k):
-        return {"message": {"content":
-            'Sure! Here is the structured data: {"vendor_name":"X","total_amount":"5"} -- done.'
-        }}
+        return {
+            "message": {
+                "content": 'Sure! Here is the structured data: {"vendor_name":"X","total_amount":"5"} -- done.'
+            }
+        }
+
     monkeypatch.setattr(t2r, "_ollama_chat", _fake_chat)
 
     out = t2r.structure_text_as_receipt("X 5")
@@ -70,6 +93,7 @@ def test_recovers_when_model_wraps_json_in_text(monkeypatch):
 def test_returns_error_on_unparseable_response(monkeypatch):
     def _fake_chat(*_a, **_k):
         return {"message": {"content": "no JSON here, sorry"}}
+
     monkeypatch.setattr(t2r, "_ollama_chat", _fake_chat)
 
     out = t2r.structure_text_as_receipt("foo")
@@ -78,8 +102,10 @@ def test_returns_error_on_unparseable_response(monkeypatch):
 
 def test_handles_request_timeout(monkeypatch):
     import requests
+
     def _fake_chat(*_a, **_k):
         raise requests.Timeout("simulated")
+
     monkeypatch.setattr(t2r, "_ollama_chat", _fake_chat)
 
     out = t2r.structure_text_as_receipt("foo")
@@ -88,9 +114,11 @@ def test_handles_request_timeout(monkeypatch):
 
 def test_uses_custom_model_when_passed(monkeypatch):
     captured = {}
+
     def _fake_chat(model, _prompt):
         captured["model"] = model
         return {"message": {"content": '{"vendor_name":"X","total_amount":"1"}'}}
+
     monkeypatch.setattr(t2r, "_ollama_chat", _fake_chat)
 
     t2r.structure_text_as_receipt("foo", model="qwen2.5:3b")

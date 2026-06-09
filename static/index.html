@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=31" />
+    <link rel="stylesheet" href="/static/css/app.css?v=32" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -281,6 +281,10 @@
               id="receiptDesc"
               placeholder="e.g. team lunch, client dinner"
             ></textarea>
+            <label class="single-receipt-toggle">
+              <input type="checkbox" id="receiptSingle" />
+              <span>Single receipt — don't split into boxes</span>
+            </label>
             <button class="btn btn-primary" id="uploadReceiptBtn" disabled>
               <svg
                 width="13"
@@ -1662,6 +1666,30 @@
 
         <div class="bbox-actions">
           <span class="bbox-count" id="bboxCount">0 boxes</span>
+          <div class="bbox-zoom" role="group" aria-label="Zoom">
+            <button
+              class="btn btn-outline btn-sm"
+              id="bboxZoomOut"
+              title="Zoom out (Ctrl/⌘ -)"
+            >
+              −
+            </button>
+            <button
+              class="btn btn-outline btn-sm"
+              id="bboxZoomFit"
+              title="Fit to width"
+            >
+              Fit
+            </button>
+            <span class="bbox-zoom-level" id="bboxZoomLevel">100%</span>
+            <button
+              class="btn btn-outline btn-sm"
+              id="bboxZoomIn"
+              title="Zoom in (Ctrl/⌘ +)"
+            >
+              +
+            </button>
+          </div>
           <button class="btn btn-outline btn-sm" id="bboxAddBtn">
             + Add box
           </button>
@@ -1858,6 +1886,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=54"></script>
+    <script src="/static/js/app.js?v=55"></script>
   </body>
 </html>

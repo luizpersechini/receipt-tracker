@@ -38,22 +38,24 @@ logger = logging.getLogger(__name__)
 # These are intentionally conservative. Receipts much smaller than 3% of the
 # image area get merged or dropped; that's fine because the OCR would fail
 # on them anyway.
-MIN_AREA_FRACTION = 0.03   # ignore blobs smaller than 3% of image area
-MAX_AREA_FRACTION = 0.85   # ignore blobs bigger than 85% (likely the page)
-MIN_FILL_FRACTION = 0.25   # contour-area / bbox-area; rejects sparse blobs
-PADDING_PX = 24             # bbox padding so we don't clip receipt edges
-MORPH_KERNEL_PX = 21        # kernel for the close op (fill gaps within receipts)
+MIN_AREA_FRACTION = 0.03  # ignore blobs smaller than 3% of image area
+MAX_AREA_FRACTION = 0.85  # ignore blobs bigger than 85% (likely the page)
+MIN_FILL_FRACTION = 0.25  # contour-area / bbox-area; rejects sparse blobs
+PADDING_PX = 24  # bbox padding so we don't clip receipt edges
+MORPH_KERNEL_PX = 21  # kernel for the close op (fill gaps within receipts)
 
 # ─── Projection-based grid detection (primary method) ──────────────────────
 # A "foreground row" is any row whose density of foreground pixels exceeds
 # PROJ_DENSITY_FRAC of the row width. Same idea per column.
-PROJ_DENSITY_FRAC = 0.05    # >5% of row pixels white = receipt present here
+PROJ_DENSITY_FRAC = 0.05  # >5% of row pixels white = receipt present here
 # A run of foreground rows/cols counts as a receipt span only if it occupies
 # at least PROJ_MIN_SPAN_FRAC of the image dim. Drops thin noise lines.
 PROJ_MIN_SPAN_FRAC = 0.05
 # Gaps between receipts must be at least PROJ_MIN_GAP_FRAC of the dim, or
-# we merge adjacent runs (handles dotted edges, small light bleed).
-PROJ_MIN_GAP_FRAC = 0.015
+# we merge adjacent runs (handles dotted edges, small light bleed). Tuned up
+# from 0.015 so a single receipt's internal whitespace (header→items→total)
+# on a high-res scan doesn't read as a between-receipt gap and over-split.
+PROJ_MIN_GAP_FRAC = 0.025
 
 
 def segment_receipts(image_path: str) -> List[Image.Image]:
@@ -142,7 +144,8 @@ def _compute_boxes(image_path: str, pil: Image.Image) -> list:
             boxes.sort(key=lambda b: (b["y"] // max(50, h // 20), b["x"]))
             logger.info(
                 "segmenter (boxes): projection strategy=%s found %d region(s)",
-                label, len(boxes),
+                label,
+                len(boxes),
             )
             return boxes
 
@@ -168,7 +171,9 @@ def _compute_boxes(image_path: str, pil: Image.Image) -> list:
             candidates.append(_pad_box((x, y, bw, bh), w, h))
 
         if len(candidates) >= 2:
-            logger.info("segmenter (boxes): contour strategy=%s found %d region(s)", label, len(candidates))
+            logger.info(
+                "segmenter (boxes): contour strategy=%s found %d region(s)", label, len(candidates)
+            )
             row_h = max(50, h // 20)
             candidates.sort(key=lambda b: (b["y"] // row_h, b["x"]))
             return candidates
@@ -180,8 +185,9 @@ def _foreground_mask(thresh, min_dim: int):
     """Apply a moderate morphological close so a single receipt's interior
     forms one connected component, without bridging to neighbours."""
     import cv2
+
     # Smaller kernel than the contour pass so adjacent receipts stay split
-    k = max(3, min_dim // 200) | 1   # keep odd
+    k = max(3, min_dim // 200) | 1  # keep odd
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
     return cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
@@ -288,9 +294,11 @@ def _pad_box(box, img_w: int, img_h: int) -> dict:
 
 
 # Text-cluster method tunables — only used when Apple Vision is available.
-CLUSTER_EPS_FRAC = 0.025      # gap < 2.5% of max(W,H) → same receipt
-CLUSTER_MIN_BOXES = 3         # drop singletons / noise
-CLUSTER_MERGE_GAP_FRAC = 0.03 # post-pass: merge cluster bboxes whose gap < this
+CLUSTER_EPS_FRAC = 0.04  # gap < 4% of max(W,H) → same receipt (was 0.025;
+# raised so one receipt's blocks don't fragment)
+CLUSTER_MIN_BOXES = 3  # drop singletons / noise
+CLUSTER_MERGE_GAP_FRAC = 0.05  # post-pass: merge cluster bboxes whose gap < this
+# (was 0.03; raised to coalesce a single receipt's logo/header/body/total)
 
 
 def _bbox_gap(a: tuple, b: tuple) -> float:
@@ -376,6 +384,7 @@ def _text_cluster_boxes(image_path: str, image_size: tuple) -> list:
     or any error occurs (caller falls back to image-only methods).
     """
     from . import apple_vision_ocr
+
     if not apple_vision_ocr.is_available():
         return []
 
@@ -422,10 +431,11 @@ def _threshold_strategies(blurred):
         def fn():
             _, m = cv2.threshold(blurred, value, 255, cv2.THRESH_BINARY)
             return m
+
         return fn
 
     return [
-        ("otsu",     _otsu),
+        ("otsu", _otsu),
         ("fixed210", _fixed(210)),
         ("fixed200", _fixed(200)),
         ("fixed190", _fixed(190)),
@@ -442,7 +452,7 @@ def _segment_impl(image_path: str) -> List[Image.Image]:
         return [pil]
     crops: List[Image.Image] = []
     for b in boxes:
-        crop_arr = arr[b["y"]: b["y"] + b["h"], b["x"]: b["x"] + b["w"]]
+        crop_arr = arr[b["y"] : b["y"] + b["h"], b["x"] : b["x"] + b["w"]]
         crops.append(Image.fromarray(crop_arr))
     logger.info("segment_receipts: %d region(s) in %s", len(crops), Path(image_path).name)
     return crops

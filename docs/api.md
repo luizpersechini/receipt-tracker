@@ -14,7 +14,11 @@ page-by-page and **every page is queued for box review** (no OCR yet) —
 the frontend opens the review flow so the user confirms/adjusts the
 receipt boxes per page before OCR. See the box-review queue below.
 
-**Body:** multipart `file`.
+**Body:** multipart `file`, plus optional form field `single` (bool). When
+`single=true` (the "Single receipt — don't split" toggle), segmentation is
+skipped for an image and the response is one full-image box
+(`forced_single: true`, `auto_segmented: false`) — so a single receipt on a
+large background isn't fragmented into many boxes. Ignored for PDFs.
 
 **Response (image):**
 

@@ -3508,13 +3508,31 @@ class BBoxEditor {
     this.selected = -1;
     this.drag = null; // current drag state
     this.drawing = false; // adding a new box?
+    this.inner = img.parentElement; // .bbox-canvas-inner — scaled for zoom
+    this._zoom = 1; // 1 = fit-to-width; up to 6× with scroll
     this._bind();
+  }
+
+  _applyZoom() {
+    if (this.inner) this.inner.style.width = this._zoom * 100 + "%";
+    const lbl = document.getElementById("bboxZoomLevel");
+    if (lbl) lbl.textContent = Math.round(this._zoom * 100) + "%";
+  }
+
+  setZoom(z) {
+    this._zoom = Math.max(1, Math.min(6, z));
+    this._applyZoom();
+  }
+
+  zoomBy(factor) {
+    this.setZoom(this._zoom * factor);
   }
 
   load(imageUrl, imageSize, boxes) {
     this.imageSize = imageSize;
     this.boxes = boxes.map((b) => ({ ...b }));
     this.selected = this.boxes.length ? 0 : -1;
+    this.setZoom(1); // every new image starts fit-to-width
 
     const finish = () => {
       this.svg.setAttribute("viewBox", `0 0 ${imageSize.w} ${imageSize.h}`);
@@ -3844,6 +3862,19 @@ $("bboxResetBtn").addEventListener("click", () => {
 $("bboxAddBtn").addEventListener("click", () => {
   if (_bboxEditor) _bboxEditor.enableDrawing(true);
 });
+$("bboxZoomIn").addEventListener("click", () => _bboxEditor?.zoomBy(1.25));
+$("bboxZoomOut").addEventListener("click", () => _bboxEditor?.zoomBy(1 / 1.25));
+$("bboxZoomFit").addEventListener("click", () => _bboxEditor?.setZoom(1));
+// Ctrl/⌘ + wheel zooms the canvas (like image editors); plain wheel scrolls.
+$("bboxCanvasWrap").addEventListener(
+  "wheel",
+  (e) => {
+    if (!_bboxEditor || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    _bboxEditor.zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1);
+  },
+  { passive: false },
+);
 
 $("bboxCommitBtn").addEventListener("click", async () => {
   if (!_bboxEditor || !_bboxState) return;
@@ -4209,6 +4240,10 @@ async function commitReceiptOCR({
 async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
   const fd = new FormData();
   fd.append("file", file);
+  // "Single receipt — don't split" toggle: ask the server to skip the
+  // segmenter and return one full-image box (no over-splitting).
+  const single = !!$("receiptSingle")?.checked;
+  fd.append("single", single ? "true" : "false");
   const fname = file.name;
 
   if (!bulk) openAiModal(fname);
@@ -4270,8 +4305,10 @@ async function _processSingleReceiptFile(file, desc, { bulk = false } = {}) {
         : "File received",
     );
 
-    if (preview.auto_segmented && !bulk) {
+    if ((preview.auto_segmented || preview.forced_single) && !bulk) {
       // Single-file path: open the bbox editor for the user to confirm.
+      // forced_single → one full-image box (the "don't split" toggle); the
+      // user can tighten the crop around the receipt or just Run OCR.
       // The editor owns the rest of this file's flow.
       closeAiModal();
       openBBoxEditor({

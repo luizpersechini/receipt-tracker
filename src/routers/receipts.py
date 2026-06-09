@@ -30,7 +30,7 @@ _ocr_semaphore = asyncio.Semaphore(max(1, settings.ocr_concurrency))
 
 
 @router.post("/upload/receipt/preview")
-async def upload_receipt_preview(file: UploadFile = File(...)):
+async def upload_receipt_preview(file: UploadFile = File(...), single: bool = Form(False)):
     """
     First step of the two-phase upload flow: save the file to disk and run
     the segmenter to suggest receipt bounding boxes. Does NOT run OCR.
@@ -38,6 +38,11 @@ async def upload_receipt_preview(file: UploadFile = File(...)):
     The frontend uses the returned bboxes as the starting point for a manual
     bbox editor. The user can adjust / add / delete boxes before calling
     /commit, which performs the actual OCR.
+
+    `single=True` (the "single receipt — don't split" toggle) skips
+    segmentation for an image and returns one full-image box, so a single
+    receipt on a large background isn't fragmented into many boxes. Ignored
+    for PDFs (those already go page-by-page through the review queue).
 
     Special case: PDF uploads are rasterised page-by-page; each page is
     segmented and queued for box review (no OCR yet). The response carries
@@ -88,13 +93,33 @@ async def upload_receipt_preview(file: UploadFile = File(...)):
                 }
             )
 
+        from urllib.parse import quote
+
+        if single:
+            # User asked to treat the whole image as ONE receipt — skip the
+            # segmenter and return a single full-image box. _open_as_rgb is the
+            # same loader the segmenter uses, so HEIC/odd modes still open.
+            from ..services.receipt_segmenter import _open_as_rgb
+
+            pil = await asyncio.to_thread(_open_as_rgb, str(filepath))
+            w, h = pil.size
+            return JSONResponse(
+                {
+                    "success": True,
+                    "filename": filename,
+                    "image_url": f"/api/preview/{quote(filename)}",
+                    "image_size": {"w": w, "h": h},
+                    "bboxes": [{"x": 0, "y": 0, "w": w, "h": h}],
+                    "auto_segmented": False,
+                    "forced_single": True,
+                }
+            )
+
         boxes, (w, h) = await asyncio.to_thread(segment_with_boxes, str(filepath))
         # Route through /api/preview/ instead of the raw static mount so
         # HEIC/HEIF uploads are transparently converted to JPEG on the fly —
         # browsers can't render HEIC natively, and without this the bbox
         # editor shows a broken-image icon.
-        from urllib.parse import quote
-
         return JSONResponse(
             {
                 "success": True,

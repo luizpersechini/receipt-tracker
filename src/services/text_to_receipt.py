@@ -104,6 +104,27 @@ Rules:
 - The OCR text may have noise (extra characters, broken lines); recover
   the real values where possible, but if you can't, prefer null.
 
+Worked example — note how total_amount is the card charge (Total + Tip),
+items exclude subtotal/tax/total/tip, and currency/country come from the city:
+INPUT:
+  TREES COFFEE
+  Gastown, Vancouver BC
+  Latte           4.50
+  Muffin          3.25
+  Subtotal        7.75
+  GST             0.39
+  Total           8.14
+  Tip             1.50
+  VISA ****2928   9.64
+  2026-03-09
+OUTPUT:
+  {"language":"en","date":"2026-03-09","total_amount":"9.64","currency":"CAD",
+   "vendor_name":"Trees Coffee","vendor_address":"Gastown, Vancouver BC",
+   "city":"Vancouver","state":"BC","country":"CA",
+   "items":[{"description":"Latte","amount":"4.50"},{"description":"Muffin","amount":"3.25"}],
+   "tax_amount":"0.39","tip_amount":"1.50","service_charge":null,
+   "payment_method":"VISA ****2928","category":"meals"}
+
 Here is the receipt text:
 ---
 {text}
