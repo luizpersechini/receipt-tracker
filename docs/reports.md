@@ -54,6 +54,14 @@ A single self-contained PDF mirroring the Atlantic Nickel
   If the user typed a **justification** on the Reconcile board (see
   [Justifying open items](#justifying-open-items)), that text prints in
   place of the blank line.
+- **Estornos / credits** (negative statement rows) print with their
+  negative amount and an `(estorno / crédito)` marker instead of the
+  justification blank — a refund nets its category column and the
+  TOTAL, and never expects a receipt.
+- **Totals are per currency** when the rows span more than one (an
+  unfiltered reimbursement report can mix BRL and CAD): one
+  `TOTAL (BRL)` / `TOTAL (CAD)` row each, and the footer's "Valor
+  total" lists them side by side — never summed into one number.
 - **IOF row**: Brazilian tax on international transactions, pulled live
   from the saved statement PDF (the parser drops it from the txn list,
   but the form shows it as a line in Outros).
@@ -69,6 +77,7 @@ A single self-contained PDF mirroring the Atlantic Nickel
   bordered block per card charge with no receipt: date · description ·
   category column · BRL amount, with **Justificativa:** below — the
   typed note (italic), or a blank underline if none was entered.
+- Credit/estorno rows are excluded — a refund isn't a missing receipt.
 - `_open_items_html()`; renders nothing when every charge is matched.
 
 **Receipt pages**
@@ -304,11 +313,13 @@ button builds the same form from those receipts directly:
   bank-details block (Favorecido / Banco / …) so the payee can be paid.
 - Receipt grid is the same — each reimbursement receipt's image.
 
-**Single currency per report.** The form has one Total / Moeda column,
-so the modal scopes to one currency (the dropdown defaults to the most
-common currency among your reimbursement receipts, listed with counts
-like `BRL (10)`). This keeps the total correct when you have
-mixed-currency reimbursements — generate one report per currency.
+**Currency scoping.** The modal scopes to one currency (the dropdown
+defaults to the most common currency among your reimbursement receipts,
+listed with counts like `BRL (10)`) — one report per currency keeps the
+classic single-Total form. When the filter is omitted and receipts span
+several currencies, the report stays honest anyway: one `TOTAL (BRL)` /
+`TOTAL (CAD)` row per currency and a multi-part "Valor total" in the
+footer, never a single summed number.
 
 The modal also takes an optional **date range** and a **cardholder**
 (for the name + bank footer). A live "N in scope" count shows how many
@@ -328,10 +339,13 @@ listed on the **Reports tab**. Each row shows a kind badge, a title
 
 Persistence is `report_history.py`: the PDF bytes are written to
 `data/reports/report_{id}.pdf` and indexed in
-`data/reports/history.json` (newest first, monotonic ids, gitignored —
-the files embed receipt images + PII). Both report endpoints call
-`report_history.record(...)` after building, labelling the entry with
-the resolved cardholder name (`expense_report_pdf.cardholder_name`).
+`data/reports/history.json` (newest first, monotonic never-reused ids,
+gitignored — the files embed receipt images + PII). Both report
+endpoints call `report_history.record(...)` after building, labelling
+the entry with the resolved cardholder name
+(`expense_report_pdf.cardholder_name`). History is **capped at 100**
+records — the oldest entry and its PDF are pruned when a new one lands,
+so `data/reports/` can't grow forever.
 
 ## Endpoints
 

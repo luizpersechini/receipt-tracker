@@ -33,6 +33,7 @@ about origin:
     "original_amount": 21.88, # native amount (int'l only)
     "fx_to_brl": 5.62,        # BRL per USD (int'l only)
     "city": "TORONTO" | None,
+    "credit": True,           # only on estorno/refund rows (amount < 0)
   }
 }
 ```
@@ -41,6 +42,12 @@ about origin:
 For international rows, the parser preserves the native currency
 amount in `raw_data` so receipts (which arrive in native currency)
 can be matched cleanly.
+
+**Credits / estornos** are rows with a negative `amount` and
+`raw_data.credit = true`. They net the report's category column and
+TOTAL, print as `(estorno / crédito)` instead of a justification blank,
+and are excluded from auto-matching and from the board's open-item
+counts — a refund never expects a receipt.
 
 ## The Itaú PDF parser
 
@@ -128,9 +135,12 @@ Otherwise, at every position, try:
    `_guess_category(merchant)` instead, which keeps the buckets
    aligned with the receipt-side category inference.
 
-Negative amounts (`- 6.789,36`, used for credits and the previous
-bill's payment) are rejected by the regex itself, so they never
-become transactions.
+Negative amounts inside the purchases sections (`- 123,45`) are
+**captured as credit rows** — estornos/refunds net the report and are
+flagged `raw_data.credit`. The previous bill's payment is also negative
+but lives in the "Pagamentos efetuados" section, which the walker skips
+wholesale — every occurrence of it, since multi-cardholder statements
+repeat the block.
 
 ### Year inference
 
@@ -138,6 +148,11 @@ Receipts don't always print the year. The parser scans page 1 for
 the `Postagem: DD/MM/YYYY` header and uses that as the year for all
 parsed dates. Falls back to the current year (with a logger warning)
 if the header is missing.
+
+**Year boundary:** a January statement (Postagem 05/01/2026) lists
+December purchases as `15/12` — anything dated after the posting date
+rolls back one year (`2025-12-15`), so cross-year transactions match
+and bucket correctly.
 
 ### Smoke-test data point
 
@@ -155,15 +170,18 @@ Against a real 4-page Itaú statement totalling R$ 22,700.57:
 
 `POST /api/statements/{id}/reparse` re-runs the parser over the saved
 file (we keep PDFs in `data/statements/`) and replaces the stored
-`transactions` JSON. Manual matches survive because they reference
-`transaction_index` which stays stable when the same parser version
-produces the same row order.
+`transactions` JSON. Matches and per-line overrides (notes / labels /
+categories / cost centers) are keyed by `transaction_index`, so when the
+new parse changes row order or count they are **remapped by content**
+(date + amount + description). Rows that no longer exist drop their
+matches/overrides — better gone than silently attached to a different
+charge — and the affected receipts go back to `pending`.
 
 Useful after:
 
-- a parser fix (column-aware extraction landed mid-session — every
-  pre-fix statement needed a reparse to pick up correct native
-  currency amounts)
+- a parser fix (column-aware extraction, credit capture, and the
+  year-boundary fix each landed mid-life — pre-fix statements need a
+  reparse to pick them up)
 - regenerating after editing the upload PDF on disk (rare, but
   legitimate)
 
@@ -172,7 +190,8 @@ endpoint directly:
 
 ```bash
 curl -X POST http://localhost:8000/api/statements/1/reparse
-# → {"success": true, "transaction_count": 98}
+# → {"success": true, "transaction_count": 98, "reindexed": false,
+#    "matches_kept": 0, "matches_dropped": 0, "receipts_released": 0}
 ```
 
 ## Adding a new statement format

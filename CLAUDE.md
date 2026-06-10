@@ -18,8 +18,11 @@ uvicorn src.main:app --reload
 
 - `src/main.py` — FastAPI app entry point (lifespan + router registration only)
 - `src/config.py` — pydantic-settings config loaded from `.env`
-- `src/db/` — SQLite database access
-- `src/services/` — OCR, FX, matching, CSV parsing, Excel reports, watch folder
+- `src/db/` — SQLite database access (WAL, busy_timeout, FK pragmas)
+- `src/services/` — OCR, FX, matching, CSV/PDF parsing, Excel/PDF reports,
+  watch folder; shared helpers: `money.py` (locale-tolerant amount parser),
+  `json_store.py` (atomic+locked JSON stores), `uploads.py` (size-capped
+  uploads)
 - `src/routers/` — FastAPI routers split by domain
 - `src/schemas/` — Pydantic request/response models
 - `static/` — frontend (`index.html`, `css/app.css`, `js/app.js`)
@@ -44,5 +47,12 @@ ollama pull llama3   # or whichever model is configured
 ## Notes
 
 - Ollama must be running locally before starting the app
-- Image uploads are processed via Pillow then passed to Ollama vision model
-- No external API calls — fully local/offline
+- Default OCR backend is `apple_vision` (on-device text extraction + an
+  Ollama text model for structuring); `ollama_vision` is the one-shot
+  vision-model alternative. Ollama calls run at temperature 0.
+- Statement estornos/refunds are captured as negative `credit` rows; the
+  PDF parser is Itaú-targeted (column-aware, year-boundary rollback)
+- No external API calls — fully local/offline (FX rates + Gmail optional)
+- QA: `qa/run_qa.py --ocr mock` is the fast gate; `--corpus N
+--corpus-seed S` scores OCR total accuracy against real receipts
+  (scoreboard in `qa/corpus_scoreboard.jsonl`)

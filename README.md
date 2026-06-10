@@ -12,8 +12,11 @@ optional add-ons.
   models (configurable backend). Multi-receipt scans on a single image
   get auto-segmented and split into one row per receipt.
 - **Monthly statement parsing** — CSV (any layout pandas can read) or
-  Itaú-style PT-BR PDF. The PDF parser handles two-column layouts and
-  preserves native-currency amounts on international transactions.
+  Itaú-style PT-BR PDF. The PDF parser handles two-column layouts,
+  preserves native-currency amounts on international transactions,
+  rolls December purchases on a January statement back to the right
+  year, and captures **estornos/refunds as negative credit rows** (they
+  net the report and are excluded from matching / open-item counts).
 - **Drag-and-drop reconciliation** — Reconcile tab shows transactions
   (left) and unmatched corp-card receipts (right). Drag a receipt
   onto its transaction to pair them; smart-match ribbon hints at good
@@ -92,28 +95,44 @@ src/
     gmail.py / uber.py     optional ingestion sources
     reports.py / fx.py     exports + currency rates
   services/
-    llm_processor.py       OCR orchestration, prompt, normalisation
+    llm_processor.py       OCR orchestration, prompt, normalisation,
+                           evidence-anchored total repair
+    text_to_receipt.py     text-model structuring (apple_vision backend)
     apple_vision_ocr.py    macOS Vision framework backend
-    receipt_segmenter.py   multi-receipt detection on a page
-    statement_pdf_parser.py  Itaú PT-BR PDF parser (column-aware)
-    statement_parser.py    CSV ⇄ PDF dispatcher
-    matching_engine.py     currency-aware fuzzy match scorer
-    folder_watcher.py      inbox scan + PDF rasterisation
+    receipt_segmenter.py   multi-receipt detection on a page (EXIF-aware)
+    ocr_settings.py        runtime OCR backend/model picker (JSON)
+    statement_pdf_parser.py  Itaú PT-BR PDF parser (column-aware, credits)
+    statement_parser.py    CSV ⇄ PDF dispatcher + reparse index remap
+    matching_engine.py     currency-aware fuzzy match scorer (global
+                           best-first assignment)
+    money.py               shared locale-tolerant money parser
+    folder_watcher.py      inbox scan/watchdog + PDF rasterisation
     pdf_render.py          PyMuPDF wrapper for PDF → PIL image
     gmail_ingest.py        Gmail API client + Uber receipt parser
-    excel_reports.py       openpyxl expense-report generator
+    uber_csv.py            Uber trip-history CSV importer
+    fx_fetcher.py          AwesomeAPI FX rates with daily cache
+    report_generator.py    openpyxl expense-report generator
     expense_report_pdf.py  statement + reimbursement Prestação de Contas PDFs
+    expense_report_xlsx.py editable front-page table as .xlsx
+    receipt_pdf.py         single-receipt PDF rendering
     report_profile.py      global report front-page fields (JSON)
     report_users.py        cardholder roster + name auto-detect
-    report_history.py      saved-report index (data/reports/history.json)
+    report_history.py      saved-report index (capped at 100, pruned)
+    review_queue.py        pages awaiting box review before OCR
     statement_notes.py     per-transaction open-item justifications
     statement_categories.py  per-transaction report-category overrides
+    statement_labels.py    per-transaction Detalhamento overrides
+    statement_costcenters.py per-transaction Centro de Custo overrides
+    json_store.py          atomic + locked JSON persistence shared by
+                           every sidecar store above
+    uploads.py             streaming upload helper (size cap, safe names)
 static/                    SPA frontend (vanilla JS, no build step)
   index.html               single-page UI (Receipts/Reconcile/Statements/Users/Reports)
   css/app.css              design tokens + components
   js/app.js                all client logic
   report_assets/logo.png   company logo for the report front page
-tests/                     pytest unit tests (226 passing)
+tests/                     pytest unit tests (373 passing)
+qa/                        end-to-end QA harness + scored OCR corpora
 scripts/                   one-shot utilities (mac app build, migrations)
 data/                      SQLite + uploads + reports + report_*.json (gitignored)
 docs/                      this folder
@@ -145,13 +164,24 @@ full annotated list. The defaults assume:
 
 ```bash
 .venv/bin/python -m pytest
-# 226 passing in ~5s
+# 373 passing in ~8s
 ```
 
-The PDF statement parser, OCR normalisation helpers, folder scan,
-matching engine, expense-report builder, and cardholder roster all have
-unit coverage. UI changes are smoke-tested manually via the preview MCP
-— see commit messages for what was verified.
+The PDF statement parser, OCR normalisation helpers, money parsing,
+folder scan, matching engine, expense-report builder, and cardholder
+roster all have unit coverage. UI changes are smoke-tested manually via
+the preview MCP — see commit messages for what was verified.
+
+End-to-end QA lives in [`qa/`](qa/README.md): `run_qa.py` boots the app
+against a throwaway sandbox and drives the real flows, plus two **scored
+OCR corpora** (your own BRL receipts + the public SROIE English set)
+that track total-extraction accuracy per run in
+`qa/corpus_scoreboard.jsonl`:
+
+```bash
+.venv/bin/python qa/run_qa.py --ocr mock          # fast gate (seconds)
+.venv/bin/python qa/run_qa.py --corpus 8 --corpus-seed 7   # scored OCR run
+```
 
 ## Security & dependencies
 

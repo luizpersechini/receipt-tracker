@@ -4,6 +4,11 @@ All endpoints are JSON in / JSON out. Root prefix is `/api`. The
 SPA in `static/` is the only intended client but the API is plain
 HTTP so curl works.
 
+**Uploads** (receipt / statement / Uber CSV): multipart filenames are
+reduced to their basename, and `MAX_UPLOAD_MB` (default 25) is enforced
+— an oversized file gets `413` and nothing is written. Files rejected
+mid-flow (bad CSV, parse failure) are cleaned up rather than orphaned.
+
 ## Receipts
 
 ### `POST /api/upload/receipt/preview`
@@ -98,9 +103,10 @@ Pages awaiting review, each with its page image + suggested boxes.
 ### `POST /api/review-queue/{id}/commit`
 
 OCR the user-confirmed boxes for one queued page (one receipt per box),
-then drop the page from the queue. Body: `{ "bboxes": [{x,y,w,h}, ...] }`.
-Returns `{ success, count, receipts: [...] }`. 404 if the id is gone, 400
-if no boxes are supplied.
+then drop the page from the queue. Body: `{ "bboxes": [{x,y,w,h}, ...] }`
+— validated (1–20 boxes, non-negative ints). Returns
+`{ success, count, receipts: [...] }`. 404 if the id is gone, 422 if the
+box list is empty or malformed.
 
 ### `DELETE /api/review-queue/{id}`
 
@@ -113,7 +119,9 @@ List all receipts. Returns `{receipts: [...]}` with full metadata.
 
 ### `DELETE /api/receipts/{id}`
 
-Remove a receipt and any matches that reference it.
+Remove a receipt and any matches that reference it. The underlying file
+is deleted too once no other row references it (multi-receipt pages and
+Uber CSV imports share one file across rows).
 
 ### `PATCH /api/receipts/{id}`
 
@@ -126,6 +134,7 @@ bill), etc.
 ### `PATCH /api/receipts/{id}/expense-type`
 
 Toggle between `corp_card` and `reimbursement`. Body: `{expense_type}`.
+404 if the receipt doesn't exist.
 
 ### `POST /api/receipts/{id}/rotate`
 
@@ -185,7 +194,10 @@ List of `{id, filename, filepath, transactions, uploaded_at}`. Note:
 
 ### `DELETE /api/statements/{id}`
 
-Removes the statement and any matches pointing to it.
+Removes the statement, any matches pointing to it, its per-line
+overrides (notes / categories / labels / cost centers), and its file on
+disk. Receipts that were matched only on this statement flip back to
+`pending` so they reappear on the board.
 
 ### `POST /api/statements/{id}/archive`
 
@@ -199,15 +211,26 @@ board. `GET /api/statements` still returns archived ones (with
 ### `POST /api/statements/{id}/reparse`
 
 Re-run the parser over the saved file and replace
-`statements.transactions`. Manual matches survive (they're keyed on
-`transaction_index` which stays stable).
+`statements.transactions`. Matches and per-line overrides are keyed by
+`transaction_index`, so when the reparse changes row order/count they
+are **remapped by content** (date + amount + description). Rows that no
+longer exist drop their matches/overrides instead of silently
+re-anchoring to a different charge; affected receipts go back to
+`pending`.
+
+Response: `{success, transaction_count, reindexed, matches_kept,
+matches_dropped, receipts_released}` — `reindexed: false` means the
+parse came back in the same order and nothing was touched.
 
 ### `GET /api/statements/{id}/transactions`
 
 Reconcile-board-ready view: each transaction annotated with its current
 matches. A transaction can hold **multiple** matches (cumulative
 pairing), so read `matches` (array). `match` is the first entry,
-retained for older callers. `category` is the **effective** category
+retained for older callers. `credit` is true for estorno/refund rows
+(negative `amount` — no receipt expected; the board badges them and
+keeps them out of the open-item counts). `category` is the
+**effective** category
 (matched → receipt's; else override; else parser) and `category_locked`
 is true when a receipt is driving it; `note` is the open-item
 justification. `detalhe` is the report "Detalhamento da despesa" label
@@ -311,7 +334,10 @@ Run the auto-matcher. **Preserves manual matches** — it deletes only
 auto-kind rows, excludes manually-paired receipts/transaction slots from
 the pool, scores the rest, and persists new matches with
 `match_kind="auto"` and a `transaction_index`. Reimbursement receipts
-are excluded.
+and credit/estorno transactions are excluded. Assignment is global
+best-score-first (a weak early match can't steal a transaction from a
+better one), and amount-only coincidences are gated out — a pair needs
+date support or a genuinely similar vendor.
 
 Response: `{success, matches, unmatched_receipts,
 unmatched_transactions, total_matched, ...}`.
@@ -331,8 +357,8 @@ Create a manual match (drag-drop on the reconcile board).
 
 Returns `{id, kind: "manual", score: null}`. **N:1 allowed** — a
 transaction can take multiple receipts (cumulative pairing). A single
-receipt is still 1:1: pairing it twice returns 409 (would double-count
-on the report).
+receipt is still 1:1: pairing it twice — on this or any other
+statement — returns 409 (would double-count on the report).
 
 ### `DELETE /api/matches/{id}`
 
@@ -434,8 +460,11 @@ category). 404 if the statement is gone.
 Build + stream the **reimbursement** PDF — the same form built from
 `reimbursement`-type receipts (no statement, no matching). Query params,
 all optional: `user_id` (cardholder profile), `date_from`, `date_to`
-(YYYY-MM-DD), `currency` (one report per currency — the form has a
-single Total). 404 when no receipts match. `application/pdf` attachment.
+(YYYY-MM-DD), `currency` (scope to one currency). When `currency` is
+omitted and the receipts span several, the form prints **one TOTAL row
+per currency** (`TOTAL (BRL)`, `TOTAL (CAD)`, …) instead of summing
+them into a meaningless single number. 404 when no receipts match.
+`application/pdf` attachment.
 
 ### `GET` / `PUT` `/api/report-profile`
 
@@ -475,7 +504,8 @@ List saved reports, newest first:
 `{reports: [{id, created_at, kind, title, cardholder, currency, period,
 size, file, download_name}]}`. `kind` is `statement` or
 `reimbursement`. Every statement / reimbursement PDF the app builds is
-recorded here automatically.
+recorded here automatically. History is capped at **100 records** —
+the oldest entry (and its PDF) is pruned when a new one lands.
 
 ### `GET /api/report-history/{id}/download`
 
@@ -545,4 +575,9 @@ formats. Returns PDFs with `Content-Type: application/pdf`.
 Topbar stats. Returns `{total_receipts, matched_receipts,
 unmatched_receipts, pending_receipts, corp_card_receipts,
 reimbursement_receipts, total_statements, total_matches,
-total_receipt_amount}`.
+total_receipt_amount, amounts_by_currency}`.
+
+`amounts_by_currency` is `{BRL: 29933.26, CAD: 3024.07, ...}` — one sum
+per currency (adding USD to BRL numerically meant nothing).
+`total_receipt_amount` is kept for back-compat and is the **BRL-only**
+sum.

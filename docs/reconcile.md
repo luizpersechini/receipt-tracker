@@ -83,10 +83,17 @@ receipt and scores it against every unmatched transaction using:
 score = amount_score × 0.50  +  date_score × 0.30  +  vendor_score × 0.20
 ```
 
-Best score above 0.5 wins. Matches are persisted with
-`match_kind = "auto"`, the raw score in `match_score`, and a
-**`transaction_index`** that pins the match to a specific row in the
-statement — without it the reconcile board can't display the match.
+A pair is eligible above 0.5 **and** only with date support or a
+genuinely similar vendor — an exact round amount alone can't clear the
+gate (R$ 50.00 receipts used to pair with unrelated R$ 50.00 charges
+months apart). Assignment is **global best-score-first** across all
+eligible pairs, so a weak early receipt can't steal a transaction from
+a later receipt that matches it far better. Credit/estorno rows
+(negative amounts) are excluded — refunds never get receipts. Matches
+are persisted with `match_kind = "auto"`, the raw score in
+`match_score`, and a **`transaction_index`** that pins the match to a
+specific row in the statement — without it the reconcile board can't
+display the match.
 
 **Amount scoring is currency-aware.** For an Itaú statement
 transaction with `raw_data.original_currency = "CAD"` and
@@ -132,7 +139,8 @@ receipts. You can drop **multiple** receipts onto the same transaction:
   the charge.
 
 A receipt is still **1:1** — you can't pair the same receipt onto two
-transactions (it would double-count on the report). Trying returns 409.
+transactions, on this or any other statement (it would double-count on
+the report). Trying returns 409.
 
 ### 3. Pre-existing
 
@@ -235,11 +243,15 @@ manually. Real matches are usually 0.8+.
 
 ## Edge cases worth knowing
 
-- **PDF statement re-parses preserve manual matches.** The reparse
-  endpoint replaces `statements.transactions` but leaves the matches
-  table alone. Since `transaction_index` is stable across re-parses
-  (provided the parser produces rows in the same order), manual
-  matches survive.
+- **Estornos/refunds show as credit rows.** Negative statement amounts
+  get a green "Estorno" badge, are hidden from the "still needs
+  pairing" view, and don't count toward paired/open — a statement
+  containing refunds can read complete without them.
+- **PDF statement re-parses preserve matches by content.** The reparse
+  endpoint replaces `statements.transactions` and remaps matches +
+  per-line overrides through a (date + amount + description) mapping
+  when the row order/count changes. Rows that vanish drop their
+  matches; the affected receipts return to `pending`.
 - **Reimbursement receipts skip auto-match AND don't show on the
   board.** Only receipts with `expense_type = "corp_card"` are
   considered. Flip a row's expense type on the Receipts tab if you

@@ -26,12 +26,14 @@ laptop — no external API calls except optional Gmail.
                                │  pure Python calls
 ┌──────────────────────────────▼────────────────────────────────┐
 │  Services (src/services/)                                     │
-│  • llm_processor   OCR pipeline orchestration                 │
+│  • llm_processor   OCR pipeline orchestration + total repair  │
 │  • receipt_segmenter / pdf_render / apple_vision_ocr          │
 │  • statement_parser (CSV) + statement_pdf_parser (PDF)        │
 │  • matching_engine fuzzy scoring with currency awareness      │
-│  • folder_watcher, gmail_ingest, excel_reports, fx_rates      │
+│  • money (shared parser) · uploads (size cap, safe names)     │
+│  • folder_watcher, gmail_ingest, report_generator, fx_fetcher │
 │  • expense_report_pdf (WeasyPrint) + report_profile/_users    │
+│  • json_store — atomic + locked JSON for every sidecar store  │
 └─────────────┬────────────────────────────────────┬────────────┘
               │                                    │
    ┌──────────▼─────────┐              ┌──────────▼──────────┐
@@ -61,12 +63,22 @@ makes a match invisible there even though the receipt shows `matched`.
 **Not in SQLite** (JSON files under `data/`, gitignored — they hold
 PII): `report_profile.json` (the global report front-page defaults),
 `report_users.json` (the cardholder roster), `report_history.json`
-(saved-report index), `statement_notes.json` (open-item
-justifications), `statement_categories.json` (per-transaction
-report-category overrides), and `review_queue.json` (pages awaiting box
-review before OCR — see the OCR pipeline below). `statement_notes` /
-`statement_categories` are keyed by `(statement_id, transaction_index)`
-so they survive a re-parse. See [reports.md](reports.md).
+(saved-report index, capped at 100), `statement_notes.json` (open-item
+justifications), `statement_categories.json` / `statement_labels.json` /
+`statement_costcenters.json` (per-transaction report overrides),
+`ocr_config.json` (runtime backend/model picker), and
+`review_queue.json` (pages awaiting box review before OCR — see the OCR
+pipeline below). All of these persist through `services/json_store.py`
+— per-file locks spanning each read-modify-write plus atomic
+temp-file-then-replace writes, so concurrent writers (request threadpool,
+folder watcher, Gmail sync) can't lose updates and a crash can't truncate
+a store. The per-transaction stores are keyed by
+`(statement_id, transaction_index)` and are **remapped by content** on a
+re-parse. See [reports.md](reports.md).
+
+SQLite itself opens with `journal_mode=WAL`, `busy_timeout=10s` and
+`foreign_keys=ON` — readers proceed during writes and bursts queue
+instead of raising "database is locked".
 
 ## OCR pipeline
 
@@ -109,13 +121,29 @@ several correctly-cropped rows instead of one garbled extraction.
   Ollama model (`OCR_TEXT_MODEL`, default `llama3.2:3b`) structures
   the OCR text into the receipt schema.
 
-Both feed into `_normalize_one_receipt()` which:
+Ollama calls run at **temperature 0** — extraction must be
+deterministic (the 0.8 default made identical receipts parse
+differently run to run).
+
+On the apple_vision path the raw OCR text also drives a set of
+**evidence-anchored total repairs** (`_post_process_with_ocr_text`):
+a scanned TOTAL/VENTA line overrides an undersized model pick; a total
+that appears **nowhere** in the text (phone-number/barcode digits) is
+replaced by the scan, by a printed `subtotal + tax = total` token
+triple, or by a printed tax rate (`@ 6%`); and on column-split receipts
+the model's tax-exclusive pick or cash-tendered pick is repaired via
+`model + tax` / `cash − change` identities printed in the text. Every
+repair requires the corrected value to be literally printed on the
+receipt, so clean receipts are untouched (the PT corpus stays 100%).
+
+Both backends feed into `_normalize_one_receipt()` which:
 
 - coerces currency to ISO 4217
 - maps country names to ISO 3166-1 alpha-2
 - normalises dates to `YYYY-MM-DD` (locale-aware day-first vs
   month-first, PT/ES month abbreviations)
-- parses amounts with locale-aware decimal handling
+- parses amounts via the shared `money.py` parser (locale-tolerant
+  separator handling, tri-state decimal hint)
 - runs category inference + vendor cleanup + payment-method scrub
 
 ## Statement parsing
@@ -129,11 +157,15 @@ Dispatched by file extension in `statement_parser.parse_statement()`.
     bucket at 58% of page width, then walked top-to-bottom per
     column — necessary because Itaú's two-column layout interleaves
     line groups in default reading order)
-  - state machine over flattened lines: payments-section skip,
-    international 8-line pattern (date / merchant / BRL / city /
-    native amount / ccy / USD / "Dólar de Conversão R$ X,XX"),
-    domestic 3-line fallback (date / merchant / BRL)
-  - year inference from the `Postagem: DD/MM/YYYY` header on page 1
+  - state machine over flattened lines: payments-section skip (every
+    block — multi-cardholder statements repeat it), international
+    8-line pattern (date / merchant / BRL / city / native amount /
+    ccy / USD / "Dólar de Conversão R$ X,XX"), domestic 3-line
+    fallback (date / merchant / BRL)
+  - estornos/refunds captured as negative `credit` rows (they net the
+    report and skip matching) — the bill payment itself stays excluded
+  - year inference from the `Postagem: DD/MM/YYYY` header on page 1,
+    with cross-year rollback (December rows on a January statement)
 
 Both parsers emit the same dict shape so downstream code (matching,
 reconciliation, reports) doesn't care which source was used.
@@ -143,7 +175,11 @@ reconciliation, reports) doesn't care which source was used.
 Two paths land in the `matches` table:
 
 1. **Auto-match** — `POST /api/match` runs `matching_engine.match_receipts_to_statements`,
-   a weighted fuzzy score over `amount × 0.5 + date × 0.3 + vendor × 0.2`.
+   a weighted fuzzy score over `amount × 0.5 + date × 0.3 + vendor × 0.2`,
+   assigned **globally best-score-first** (a weak early match can't steal
+   a transaction from a better one). Eligibility needs the 0.5 threshold
+   plus date support or a genuinely similar vendor — an exact round
+   amount alone can't pair. Credit/estorno rows are excluded.
    Currency-aware: when receipt currency matches `raw_data.original_currency`
    on the transaction, native amounts are compared (CAD ↔ CAD) instead
    of the BRL bill total. Currency mismatch drops the score by 70%.

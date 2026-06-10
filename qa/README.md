@@ -55,8 +55,17 @@ runs per corpus print as a trend — the "test and improve" loop.
 
 - **EN — SROIE** ([mp-02/sroie](https://huggingface.co/datasets/mp-02/sroie)):
   a fresh random sample of real English receipts; ground-truth total comes
-  from the `S-TOTAL` NER tag. SROIE images are small (512px tall), so they're
-  upscaled before OCR — expect noisier scores than PT.
+  from the `S-TOTAL` NER tag (abs() — some tags carry a stray sign). SROIE
+  images are small (512px tall), so they're upscaled before OCR. Apple
+  Vision often splits the label column from the value column on these,
+  which the evidence-anchored total repairs in `llm_processor` largely
+  recover (50% → 88% on a pinned seed); the residue is OCR digit noise.
+- **`diag_sroie.py`** — the companion diagnostic: same pipeline over a
+  seed-pinned sample, but dumps gt / got / vendor / full OCR text per
+  receipt to a JSON you can actually analyse. Use it before touching the
+  parser:
+  `.venv/bin/python qa/diag_sroie.py --n 12 --seed 7 --out qa/diag.json`
+  (outputs are gitignored).
 - **PT — your own receipts:** a random sample of your real **BRL image**
   receipts (Uber rides and non-image files excluded), read-only from the live
   DB, re-OCR'd and scored against the **stored** total. For receipts you've
@@ -96,8 +105,9 @@ Surfaced while building/running this harness:
    so reports fail offline — at odds with the app's "fully local/offline" goal.
    Cache rates or allow a manual-rate fallback.
 
-5. **Upload size is unenforced.** `max_upload_mb` is advisory; a huge PDF can
-   wedge OCR. Enforce a limit at the upload endpoints.
+5. ~~**Upload size is unenforced.**~~ **DONE.** `services/uploads.py` streams
+   every upload with the `max_upload_mb` cap (413 beyond it) and sanitises
+   filenames to basenames.
 
 6. **Inconsistent response shapes.** Statement upload returns one of
    `success` / `statement_id` / `transaction_count` depending on path; the QA
