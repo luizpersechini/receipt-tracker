@@ -574,12 +574,87 @@ function clearSelection() {
 }
 
 // ─── Receipts ─────────────────────────────────────────────────────────────────
+// ─── New-row flagging ────────────────────────────────────────────────────
+// Surfaces rows added by a sync/import. `receiptsSeenAt` (localStorage) holds
+// the created_at high-water mark the user last acknowledged; anything newer is
+// flagged. created_at is SQLite "YYYY-MM-DD HH:MM:SS" (UTC) — lexically
+// sortable, so plain string compares are timezone-safe and we never compare
+// against the browser clock.
+let _newOnly = false; // transient "show only new" view toggle
+function _receiptsSeenAt() {
+  try {
+    return localStorage.getItem("receiptsSeenAt") || "";
+  } catch {
+    return "";
+  }
+}
+function _setReceiptsSeenAt(v) {
+  try {
+    localStorage.setItem("receiptsSeenAt", v || "");
+  } catch {
+    /* private mode / storage disabled — flagging just no-ops */
+  }
+}
+function _maxCreatedAt(list) {
+  let m = "";
+  for (const r of list || [])
+    if (r && r.created_at && r.created_at > m) m = r.created_at;
+  return m;
+}
+function _renderNewBanner(n) {
+  const b = $("newReceiptsBanner");
+  if (!b) return;
+  if (n > 0) {
+    $("newReceiptsText").textContent =
+      `${n} new receipt${n === 1 ? "" : "s"} since you last looked` +
+      (_newOnly ? " · showing only new" : "");
+    b.style.display = "";
+  } else {
+    b.style.display = "none";
+    _newOnly = false;
+  }
+}
+function showNewReceipts() {
+  // Reveal matched/archived rows too — synced rows often land as `matched`
+  // and would otherwise stay hidden behind the Active filter.
+  _newOnly = true;
+  if (typeof receiptFilters === "object" && receiptFilters)
+    receiptFilters.status = "all";
+  const sf = $("rfStatus");
+  if (sf) sf.value = "all";
+  renderReceipts(allReceipts);
+  $("newReceiptsBanner")?.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+}
+function markReceiptsSeen() {
+  _setReceiptsSeenAt(_maxCreatedAt(allReceipts));
+  _newOnly = false;
+  renderReceipts(allReceipts);
+}
+
 function renderReceipts(receipts) {
+  // New-row flagging — a row is "new" if created since the board was last
+  // marked seen (localStorage). Baseline on first load so nothing flags
+  // initially; later syncs/imports then stand out. The banner counts new
+  // rows across ALL receipts, so freshly-synced rows that are `matched`
+  // (hidden by the Active filter) are still surfaced.
+  let _seen = _receiptsSeenAt();
+  const _maxC = _maxCreatedAt(receipts);
+  if (!_seen && _maxC) {
+    _seen = _maxC;
+    _setReceiptsSeenAt(_maxC);
+  }
+  const _isNew = (r) => !!(r.created_at && r.created_at > _seen);
+  _renderNewBanner(receipts.filter(_isNew).length);
+
   // Pipeline: month filter → filter-bar filters → sort. All three are
   // pure client-side over `allReceipts` so the response shape from the API
   // hasn't changed and the existing edit / delete / bulk paths still work.
   let filtered = filterByMonth(receipts);
   filtered = applyReceiptFilters(filtered);
+  if (_newOnly) filtered = filtered.filter(_isNew);
   filtered = sortReceiptList(filtered, receiptSort);
   const tbody = $("receiptsTbody");
   $("navReceiptCount").textContent = filtered.length;
@@ -674,7 +749,7 @@ function renderReceipts(receipts) {
       return `<tr class="data-row">
       <td style="text-align:center"><input type="checkbox" class="row-select" data-id="${r.id}" ${isSelected ? "checked" : ""}></td>
       <td style="padding:6px 10px">${thumbEl}</td>
-      <td style="font-variant-numeric:tabular-nums;white-space:nowrap">${fmt.date(meta.date)}</td>
+      <td style="font-variant-numeric:tabular-nums;white-space:nowrap">${fmt.date(meta.date)}${_isNew(r) ? ' <span class="badge badge-new" title="Added since you last marked the board seen">NEW</span>' : ""}</td>
       <td style="font-weight:500">${vendor}</td>
       <td style="font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt.currency(meta.total_amount, meta.currency)}</td>
       <td>${meta.currency ? `<span class="badge badge-gray mono">${escHtml(meta.currency)}</span>` : "—"}</td>
@@ -4949,8 +5024,18 @@ $("gmailSyncBtn").addEventListener("click", async () => {
   // Inverted from prior "attach-only" checkbox: ticked = also create new
   // rows for unmatched emails. Default unticked = attach-only.
   const attachOnly = !$("gmailAddNewRows").checked;
-  const after = $("gmailAfter").value || "";
+  let after = $("gmailAfter").value || "";
   const before = $("gmailBefore").value || "";
+
+  // Flood guard: "Add new rows" with no From date once pulled the entire
+  // mailbox and created dozens of stale rows. When creating rows and no
+  // From is set, clamp to the last 90 days and tell the user how to widen.
+  let guardNote = "";
+  if (!attachOnly && !after) {
+    const d = new Date(Date.now() - 90 * 864e5);
+    after = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    guardNote = `No “From” date set — limited to since ${after} so a sync can’t import years of history. Set a From date to widen.`;
+  }
 
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span> Syncing…';
@@ -4968,6 +5053,9 @@ $("gmailSyncBtn").addEventListener("click", async () => {
     renderLastSync(res);
     status.textContent = "";
     status.className = "status-msg";
+    if (guardNote) {
+      status.innerHTML = `<div style="font-size:11px;color:var(--amber);line-height:1.5;margin-bottom:6px">${escHtml(guardNote)}</div>`;
+    }
     if (res.unmatched && res.unmatched.length) {
       // Surface a few examples so the user can spot-check what was skipped.
       const preview = res.unmatched
@@ -4982,7 +5070,7 @@ $("gmailSyncBtn").addEventListener("click", async () => {
         res.unmatched.length > 5
           ? `<br>… and ${res.unmatched.length - 5} more`
           : "";
-      status.innerHTML = `<div style="font-size:11px;color:var(--text-3);line-height:1.5">${preview}${more}</div>`;
+      status.innerHTML += `<div style="font-size:11px;color:var(--text-3);line-height:1.5">${preview}${more}</div>`;
     }
     loadReceipts();
     loadStats();
@@ -5329,6 +5417,14 @@ loadReviewQueue().catch(() => {});
     });
   }
   _updateFilterBadge();
+
+  // New-row banner actions.
+  document
+    .getElementById("newReceiptsShowBtn")
+    ?.addEventListener("click", showNewReceipts);
+  document
+    .getElementById("newReceiptsSeenBtn")
+    ?.addEventListener("click", markReceiptsSeen);
 
   // Sortable column headers — click a <th data-sort="col">.
   // Same handler shape works for any sortable table; receipts is the only

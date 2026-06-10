@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=35" />
+    <link rel="stylesheet" href="/static/css/app.css?v=36" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -709,6 +709,21 @@
                   Clear
                 </button>
               </div>
+            </div>
+            <div
+              id="newReceiptsBanner"
+              class="new-banner"
+              style="display: none"
+            >
+              <span class="new-banner-dot"></span>
+              <span id="newReceiptsText"></span>
+              <span style="flex: 1"></span>
+              <button class="btn btn-primary btn-sm" id="newReceiptsShowBtn">
+                Show new
+              </button>
+              <button class="btn btn-ghost btn-sm" id="newReceiptsSeenBtn">
+                Mark all seen
+              </button>
             </div>
             <div class="card">
               <div class="table-wrap">
@@ -1892,6 +1907,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=62"></script>
+    <script src="/static/js/app.js?v=64"></script>
   </body>
 </html>
