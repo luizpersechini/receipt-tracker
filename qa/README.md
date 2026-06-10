@@ -7,15 +7,19 @@ timing, so you can catch regressions before they reach live data.
 
 ## Run
 
+Use the **project venv interpreter** (Python 3.13) — the app needs 3.10+, and
+your system `python`/`python3` may be older (a 3.9 fails with a `dict | None`
+TypeError):
+
 ```bash
-python qa/run_qa.py                # real OCR (Apple Vision + your configured text model) — needs Ollama
-python qa/run_qa.py --ocr mock     # stub OCR — fast, deterministic (seconds)
-python qa/run_qa.py --loops 3      # run the battery 3×
-python qa/run_qa.py --until-clean  # loop until a fully green run (cap 5)
-python qa/run_qa.py --keep         # keep the temp sandbox for inspection
-python qa/run_qa.py --report qa/last.json   # also dump JSON results
-python qa/run_qa.py --corpus 8 --corpus-seed 7   # 8 receipts/corpus, FIXED sample (reproducible A/B)
-python qa/run_qa.py --text-model llama3.1:8b     # force a specific structuring model
+.venv/bin/python qa/run_qa.py                # real OCR (Apple Vision + your configured text model) — needs Ollama
+.venv/bin/python qa/run_qa.py --ocr mock     # stub OCR — fast, deterministic (seconds)
+.venv/bin/python qa/run_qa.py --loops 3      # run the battery 3×
+.venv/bin/python qa/run_qa.py --until-clean  # loop until a fully green run (cap 5)
+.venv/bin/python qa/run_qa.py --keep         # keep the temp sandbox for inspection
+.venv/bin/python qa/run_qa.py --report qa/last.json   # also dump JSON results
+.venv/bin/python qa/run_qa.py --corpus 8 --corpus-seed 7   # 8 receipts/corpus, FIXED sample (reproducible A/B)
+.venv/bin/python qa/run_qa.py --text-model llama3.1:8b     # force a specific structuring model
 ```
 
 The structuring model defaults to your **configured effective model** (the

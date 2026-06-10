@@ -34,6 +34,16 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# The app uses 3.10+ syntax (e.g. `dict | None`). Running this with an older
+# system python3 (e.g. 3.9) fails with a cryptic TypeError deep in an import,
+# so fail fast with the fix instead.
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        f"This project needs Python 3.10+ (you're on {sys.version.split()[0]}).\n"
+        "Run the QA harness with the project venv interpreter:\n"
+        "  .venv/bin/python qa/run_qa.py --corpus 8"
+    )
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
