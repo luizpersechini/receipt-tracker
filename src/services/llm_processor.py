@@ -1072,6 +1072,9 @@ def _ollama_chat(model: str, prompt: str, image_bytes: bytes) -> dict:
         "options": {
             "num_ctx": settings.ocr_num_ctx,
             "num_predict": settings.ocr_num_predict,
+            # Deterministic extraction — the 0.8 default made identical
+            # receipts parse differently run to run.
+            "temperature": 0,
         },
     }
     resp = requests.post(
@@ -1624,16 +1627,30 @@ _TOTAL_FINAL_KEYWORDS = (
     "venta",
     "amount due",
     "amount charged",
+    "amount payable",
     "grand total",
+    "net total",
     "total charged",
+    "total due",
+    "total payable",
     "balance due",
     "total cad",
     "total usd",
     "total brl",
     "total eur",
+    # Malaysian/Singaporean receipts label the final total with the
+    # GST-inclusive phrasing — these must win over the "gst" negative.
+    "total incl",
+    "total inc.",
+    "inclusive of gst",
+    "incl. of gst",
+    "total sales",
+    "total rm",
     "valor a pagar",
+    "total a pagar",
     "valor total",
     "valor pago",
+    "valor cobrado",
     "valor a receber",
     "card total",
     "credito",
@@ -1711,7 +1728,13 @@ def _scan_total_in_text(text: str) -> Optional[float]:
     headline_amounts: list[float] = []
     for line in text.splitlines():
         low = line.lower()
-        if any(neg in low for neg in _TOTAL_NEGATIVE_KEYWORDS):
+        has_final = any(k in low for k in _TOTAL_FINAL_KEYWORDS)
+        # A FINAL keyword outranks the negative list — "Total Incl of GST"
+        # is the charged total even though "gst" appears on the line. The
+        # one exception: explicit tax-EXCLUSIVE phrasing.
+        if "exclu" in low or "excl." in low:
+            continue
+        if not has_final and any(neg in low for neg in _TOTAL_NEGATIVE_KEYWORDS):
             continue
         money = _MONEY_RE.findall(line)
         if not money:
@@ -1721,7 +1744,7 @@ def _scan_total_in_text(text: str) -> Optional[float]:
         amt = _parse_money_token(money[-1])
         if amt is None or amt <= 0:
             continue
-        if any(k in low for k in _TOTAL_FINAL_KEYWORDS):
+        if has_final:
             final_amounts.append(amt)
         elif any(k in low for k in _TOTAL_HEADLINE_KEYWORDS):
             headline_amounts.append(amt)
@@ -1730,6 +1753,71 @@ def _scan_total_in_text(text: str) -> Optional[float]:
     if headline_amounts:
         return max(headline_amounts)
     return None
+
+
+def _money_tokens(text: str) -> list:
+    """Every positive money-shaped value in the OCR text, 2dp-rounded."""
+    out = []
+    for tok in _MONEY_RE.findall(text or ""):
+        v = _parse_money_token(tok)
+        if v is not None and v > 0:
+            out.append(round(v, 2))
+    return out
+
+
+def _supported(value, tokens: list) -> bool:
+    """True when `value` literally appears among the OCR text's money tokens.
+    On the apple_vision path the model only ever SAW that text, so a total
+    with no token support is transformed/hallucinated digits."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    return any(abs(v - t) <= 0.011 for t in tokens)
+
+
+def _arithmetic_total(tokens: list, text: str = "") -> Optional[float]:
+    """Recover an `excl + tax = incl` total from the text's money tokens —
+    column-split receipts print subtotal, GST and the inclusive total as bare
+    numbers far from their labels.
+
+    Two forms of evidence, strongest first:
+      1. token + token = token with a tax-like ratio (3–25%);
+      2. a printed tax RATE ("@ 6%"): token × (1+rate) lands on another
+         token (covers a tax value OCR'd beyond money shape, e.g. "048").
+    Returns the largest supported candidate, or None."""
+    uniq = sorted(set(tokens))
+    for c in reversed(uniq):
+        for a in uniq:
+            if a >= c:
+                break
+            b = round(c - a, 2)
+            if b <= 0:
+                continue
+            if 0.03 <= b / a <= 0.25 and any(abs(b - t) <= 0.011 for t in uniq):
+                return c
+
+    rate_candidates: list = []
+    for m in re.finditer(r"(\d{1,2}(?:[.,]\d{1,2})?)\s*%", text or ""):
+        try:
+            rate = float(m.group(1).replace(",", ".")) / 100
+        except ValueError:
+            continue
+        if not (0.02 <= rate <= 0.30):
+            continue
+        for a in uniq:
+            c = round(a * (1 + rate), 2)
+            if c > a and any(abs(c - t) <= 0.011 for t in uniq):
+                rate_candidates.append(c)
+    return max(rate_candidates) if rate_candidates else None
+
+
+# Receipts that advertise a tax-INCLUSIVE total (or a Grand/Net Total) — the
+# signature for "the model probably grabbed the tax-exclusive subtotal".
+_INCLUSIVE_TOTAL_RE = re.compile(
+    r"incl|inc\.\s*gst|grand\s+total|net\s+total|total\s+sales", re.IGNORECASE
+)
+_CASH_WORDS_RE = re.compile(r"\b(cash|change|troco|dinheiro)\b", re.IGNORECASE)
 
 
 def _post_process_with_ocr_text(data: dict, text: str) -> None:
@@ -1759,18 +1847,59 @@ def _post_process_with_ocr_text(data: dict, text: str) -> None:
         # construction here.
         data["currency"] = explicit
 
-    # Total-amount override — pick the largest TOTAL/VENTA-tagged amount.
-    # Only override if it's meaningfully larger than what the LLM picked
-    # (>= 1% bigger, to avoid flipping on OCR-noise round-off).
+    # Total-amount repair — three layers, all anchored to the OCR text:
+    #  1) upward override: a TOTAL/VENTA-tagged line ≥1% above the model's
+    #     pick wins (pre-tip totals and item prices sneak in otherwise);
+    #  2) unsupported-total correction: a total that appears NOWHERE in the
+    #     text is transformed/hallucinated digits (phone numbers, barcodes)
+    #     — replace with the scan result or an excl+tax=incl triple;
+    #  3) subtotal/cash repair (column-split receipts, scan blind): the
+    #     model grabbed the tax-exclusive subtotal (model+tax is printed)
+    #     or the cash tendered (cash − change = total is printed).
     scanned = _scan_total_in_text(text)
-    if scanned is not None:
-        existing = data.get("total_amount")
-        try:
-            existing_f = float(existing) if existing not in (None, "") else None
-        except (TypeError, ValueError):
-            existing_f = None
-        if existing_f is None or scanned > existing_f * 1.01:
+    existing = data.get("total_amount")
+    try:
+        existing_f = float(existing) if existing not in (None, "") else None
+    except (TypeError, ValueError):
+        existing_f = None
+    tokens = _money_tokens(text)
+    tax = parse_money(data.get("tax_amount"))
+
+    if scanned is not None and (existing_f is None or scanned > existing_f * 1.01):
+        data["total_amount"] = scanned
+    elif existing_f is not None and not _supported(existing_f, tokens):
+        if scanned is not None:
             data["total_amount"] = scanned
+        else:
+            fixed = _arithmetic_total(tokens, text)
+            if fixed is not None:
+                data["total_amount"] = fixed
+    elif existing_f is not None and scanned is None:
+        incl_total = round(existing_f + tax, 2) if tax and tax > 0 else None
+        if incl_total and _supported(incl_total, tokens) and _INCLUSIVE_TOTAL_RE.search(text):
+            # Model returned the tax-EXCLUSIVE amount; the inclusive total
+            # (its own value + its own tax) is printed in the text.
+            data["total_amount"] = incl_total
+        elif (
+            tokens
+            and abs(existing_f - max(tokens)) <= 0.011
+            and abs(existing_f / 5 - round(existing_f / 5)) < 1e-9
+            and _CASH_WORDS_RE.search(text)
+        ):
+            # Model grabbed the cash tendered (largest, round-number token on
+            # a receipt that mentions cash/change). If the text contains a T
+            # with cash − T = change (both printed), T is the real total.
+            for t_cand in sorted(set(tokens), reverse=True):
+                if t_cand >= existing_f:
+                    continue
+                d = round(existing_f - t_cand, 2)
+                if d < max(0.05, t_cand * 0.10):
+                    continue  # change that small looks like a tax split
+                if tax is not None and abs(d - tax) <= 0.02:
+                    continue  # subtotal+tax split, not cash−change
+                if t_cand > d and _supported(d, tokens):
+                    data["total_amount"] = t_cand
+                    break
 
     # Category rescue: only when LLM defaulted to "other"
     if (data.get("category") or "").lower() == "other":

@@ -56,3 +56,4 @@ token.json
 qa/*report*.json
 qa/last*.json
 qa/corpus_scoreboard.jsonl
+qa/diag_*.json

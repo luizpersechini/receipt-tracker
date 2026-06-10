@@ -328,12 +328,72 @@ def test_post_process_overrides_undersized_total_with_scanned_final():
 
 
 def test_post_process_keeps_total_when_scanned_is_smaller():
-    """If the LLM total is larger or equal to what we can find in OCR,
-    leave it alone — don't downgrade a correct value."""
+    """A SUPPORTED model total larger than the scan stays — don't downgrade
+    a value the text corroborates (e.g. the card-charged line)."""
     data = {"vendor_name": "X", "total_amount": 50.00, "currency": "USD"}
-    text = "Subtotal $30.00\nTotal $35.00\n"
+    text = "Subtotal $30.00\nTotal $35.00\nVISA charged $50.00\n"
     llm._post_process_with_ocr_text(data, text)
     assert data["total_amount"] == 50.00
+
+
+def test_post_process_downgrades_unsupported_total_to_scan():
+    """A model total that appears NOWHERE in the OCR text is hallucinated
+    digits (phone number / barcode) — the scanned total wins regardless of
+    direction. Real case: 8.20 receipt extracted as 71033010.4."""
+    data = {"vendor_name": "X", "total_amount": 71033010.4, "currency": "MYR"}
+    text = "Tel 03-7103 3010\nSubtotal 7.74\nTotal 8.20\n"
+    llm._post_process_with_ocr_text(data, text)
+    assert data["total_amount"] == 8.20
+
+
+def test_post_process_arithmetic_triple_rescues_unsupported_total():
+    """No scannable total line (label/value column split) and the model
+    total is unsupported — the printed excl+tax=incl triple recovers it."""
+    data = {"vendor_name": "X", "total_amount": 40.0, "currency": "MYR"}
+    text = "Totai Incl of GST\nRM\n8.40\n7.92\n0.48\n"
+    llm._post_process_with_ocr_text(data, text)
+    assert data["total_amount"] == 8.40
+
+
+def test_post_process_tax_completion_for_exclusive_subtotal():
+    """Column-split receipt advertising an inclusive total: the model
+    returned the tax-exclusive amount; its own value + its own tax is
+    printed → bump. Real case: Petron 4.62+0.28 → 4.90."""
+    data = {
+        "vendor_name": "Petron",
+        "total_amount": 4.62,
+        "tax_amount": 0.28,
+        "currency": "MYR",
+    }
+    text = "GST RM:\nTotal RM inc. GST:\nCash\nChange\n4.62\n0.28\n4.90\n5.00\n0.10\n"
+    llm._post_process_with_ocr_text(data, text)
+    assert data["total_amount"] == 4.90
+
+
+def test_post_process_cash_change_identity_recovers_total():
+    """Model grabbed the cash tendered (largest round token, receipt
+    mentions cash/change). cash − total = change, all printed → repair.
+    Real case: pharmacy 50.00 cash, 31.90 total, 18.10 change."""
+    data = {"vendor_name": "F&P", "total_amount": 50.00, "currency": "MYR"}
+    text = "Total Sales (inclusive of GST) :\nCASH :\nChange :\n31.90\n50.00\n18.10\n"
+    llm._post_process_with_ocr_text(data, text)
+    assert data["total_amount"] == 31.90
+
+
+def test_post_process_supported_round_total_not_flipped_without_cash_words():
+    """A legit 50.00 total with coincidental sum-pairs in the text must NOT
+    be 'repaired' when the receipt never mentions cash/change."""
+    data = {"vendor_name": "X", "total_amount": 50.00, "currency": "USD"}
+    text = "Item A 30.00\nItem B 20.00\nAmount 50.00\n"
+    llm._post_process_with_ocr_text(data, text)
+    assert data["total_amount"] == 50.00
+
+
+def test_scan_total_accepts_gst_inclusive_total_lines():
+    """'Total Incl of GST 8.40' is the charged total — the 'gst' negative
+    keyword must not kill it. Excluding-GST lines still lose."""
+    text = "Total Sales (Excluding GST) 30.68\nTotal Sales (Inclusive of GST) 31.90\n"
+    assert llm._scan_total_in_text(text) == 31.90
 
 
 def test_post_process_fills_missing_total_from_scan():
@@ -872,3 +932,13 @@ def test_glm_ocr_flagged_ocr_only():
     assert llm._is_ocr_only("glm-ocr") is True
     assert llm._is_ocr_only("llava:7b") is False
     assert llm._is_ocr_only("minicpm-v:latest") is False
+
+
+def test_post_process_tax_rate_rescues_unsupported_total():
+    """The GST value OCR'd beyond money shape ("048") breaks the exact
+    triple, but the printed '@ 6%' rate ties 7.92 → 8.40 (both tokens).
+    Real case: hardware-store receipt extracted as 40.0."""
+    data = {"vendor_name": "X", "total_amount": 40.0, "currency": "MYR"}
+    text = "Total Incl of GST\n@ 6%\n0.70\n8.40\n3.40\n0.00\n7.92\n048 /\n"
+    llm._post_process_with_ocr_text(data, text)
+    assert data["total_amount"] == 8.40

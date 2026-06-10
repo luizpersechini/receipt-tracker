@@ -555,7 +555,8 @@ def _c_sroie(client, ctx):
     pairs = []
     for s in samples:
         toks = [w for w, t in zip(s["words"], s["ner_tags"]) if t == tot_tag]
-        cands = [c for c in (parse_money(w) for w in toks) if c]
+        # abs(): SROIE prints some totals with a stray sign ('-140.65') — totals are positive
+        cands = [abs(c) for c in (parse_money(w) for w in toks) if c]
         gt = max(cands) if cands else None  # grand total = largest tagged amount
         pairs.append((_upscale(s["image"]), gt))  # tiny images → upscale for OCR
     return _score_pairs(ctx, "sroie-en", pairs)

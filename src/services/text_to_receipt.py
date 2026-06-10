@@ -149,7 +149,9 @@ def _ollama_chat(model: str, prompt: str) -> dict:
         "format": "json",
         # Cap context so Ollama doesn't allocate the model's full default
         # window (128K → 20GB+ KV cache). See settings.ocr_num_ctx.
-        "options": {"num_ctx": settings.ocr_num_ctx},
+        # temperature 0: extraction must be deterministic — Ollama's 0.8
+        # default made the same receipt parse differently run to run.
+        "options": {"num_ctx": settings.ocr_num_ctx, "temperature": 0},
     }
     resp = requests.post(
         f"{host}/api/chat",
