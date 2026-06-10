@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=34" />
+    <link rel="stylesheet" href="/static/css/app.css?v=35" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -220,15 +220,13 @@
             </button>
           </div>
 
-          <!-- OCR / Vision model picker -->
+          <!-- OCR model picker (Apple Vision on-device + structuring LLM) -->
           <div class="card" id="ocrModelCard">
-            <div class="card-head">Vision / OCR model</div>
-            <select id="ocrModelSelect" class="fbar-select ocr-select"></select>
-            <div
-              id="ocrTextModelRow"
-              class="ocr-textmodel"
-              style="display: none"
-            >
+            <div class="card-head">OCR model</div>
+            <div class="ocr-fixed-backend">
+              Apple Vision <span>· on-device</span>
+            </div>
+            <div id="ocrTextModelRow" class="ocr-textmodel">
               <label>Structuring model</label>
               <select
                 id="ocrTextModelSelect"
@@ -1894,6 +1892,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=61"></script>
+    <script src="/static/js/app.js?v=62"></script>
   </body>
 </html>

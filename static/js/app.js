@@ -5215,32 +5215,13 @@ async function loadOcrConfig() {
 }
 
 function _renderOcrPicker(cfg) {
-  const sel = $("ocrModelSelect");
-  if (!sel) return;
-  const models = cfg.models || [];
-  const vision = models.filter((m) => m.vision && !m.over_cap);
-  const opts = [
-    `<option value="apple"${cfg.backend === "apple_vision" ? " selected" : ""}>Apple Vision (on-device)</option>`,
-  ];
-  if (vision.length) {
-    opts.push('<optgroup label="Ollama vision (one-shot)">');
-    vision.forEach((m) => {
-      const seld =
-        cfg.backend === "ollama_vision" && cfg.vision_model === m.name
-          ? " selected"
-          : "";
-      const tag = m.ocr_only ? " · ⚠ OCR-only" : "";
-      opts.push(
-        `<option value="ollama:${_esc(m.name)}"${seld}>${_esc(m.name)} · ${m.size_gb} GB${tag}</option>`,
-      );
-    });
-    opts.push("</optgroup>");
-  }
-  sel.innerHTML = opts.join("");
-
-  // Structuring-model dropdown (only relevant for Apple Vision). Prefer
-  // non-vision (text) models, else show all installed.
+  // Apple Vision is the only backend (the Ollama one-shot vision models —
+  // glm-ocr et al. — scored 0% and were removed). The only choice is the
+  // text model that structures Apple Vision's OCR output. Prefer non-vision
+  // (text) models, else show all installed.
   const tsel = $("ocrTextModelSelect");
+  if (!tsel) return;
+  const models = cfg.models || [];
   const textModels = models.filter((m) => !m.vision);
   const list = textModels.length ? textModels : models;
   tsel.innerHTML = list
@@ -5255,51 +5236,29 @@ function _renderOcrPicker(cfg) {
       `<option value="${_esc(cfg.text_model)}" selected>${_esc(cfg.text_model)} (not installed)</option>`,
     );
   }
-  $("ocrTextModelRow").style.display = sel.value === "apple" ? "" : "none";
   _renderOcrStatus(cfg);
 }
 
 function _renderOcrStatus(cfg) {
   const el = $("ocrModelStatus");
   if (!el) return;
+  // Apple Vision does the OCR on-device; the text (structuring) model runs
+  // in Ollama, so Ollama still needs to be up.
   if (!cfg.ollama_reachable) {
     el.innerHTML =
-      '<span class="ocr-warn">Ollama not reachable — start it on :11434</span>';
-    return;
-  }
-  const hasVision = (cfg.models || []).some((m) => m.vision && !m.over_cap);
-  const activeOcrOnly =
-    cfg.backend === "ollama_vision" &&
-    (cfg.models || []).some((m) => m.name === cfg.vision_model && m.ocr_only);
-  if (cfg.backend === "ollama_vision" && !hasVision) {
-    el.innerHTML =
-      '<span class="ocr-warn">No vision model installed — run <code>ollama pull glm-ocr</code></span>';
-  } else if (activeOcrOnly) {
-    el.innerHTML = `<span class="ocr-warn">⚠ <code>${_esc(cfg.vision_model)}</code> is OCR-only — it loops on one-shot extraction and times out. Prefer <b>Apple Vision</b>, or a JSON-capable vision model (llava, minicpm-v).</span>`;
-  } else if (
-    cfg.backend === "apple_vision" &&
-    !(cfg.models || []).some((m) => m.name === cfg.text_model)
-  ) {
-    el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed</span>`;
+      '<span class="ocr-warn">Ollama not reachable — start it on :11434 (the structuring model runs there)</span>';
+  } else if (!(cfg.models || []).some((m) => m.name === cfg.text_model)) {
+    el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed — <code>ollama pull ${_esc(cfg.text_model)}</code></span>`;
   } else {
-    el.innerHTML = '<span class="ocr-ok">Applies on next OCR.</span>';
+    el.innerHTML = `<span class="ocr-ok">Apple Vision → <code>${_esc(cfg.text_model)}</code>. Applies on next OCR.</span>`;
   }
 }
 
 async function _saveOcrConfig() {
-  const sel = $("ocrModelSelect");
-  let patch;
-  if (sel.value === "apple") {
-    patch = {
-      backend: "apple_vision",
-      text_model: $("ocrTextModelSelect").value,
-    };
-  } else {
-    patch = {
-      backend: "ollama_vision",
-      vision_model: sel.value.replace(/^ollama:/, ""),
-    };
-  }
+  const patch = {
+    backend: "apple_vision",
+    text_model: $("ocrTextModelSelect").value,
+  };
   try {
     _ocrCfg = await api("PUT", "/api/ocr/config", patch);
     // Re-fetch the model list so status reflects reality.
@@ -5311,12 +5270,6 @@ async function _saveOcrConfig() {
 }
 
 (function _wireOcrPicker() {
-  const sel = $("ocrModelSelect");
-  if (sel)
-    sel.addEventListener("change", () => {
-      $("ocrTextModelRow").style.display = sel.value === "apple" ? "" : "none";
-      _saveOcrConfig();
-    });
   const tsel = $("ocrTextModelSelect");
   if (tsel) tsel.addEventListener("change", _saveOcrConfig);
 })();

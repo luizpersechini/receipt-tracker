@@ -3515,10 +3515,23 @@ tr.stmt-archived:hover {
   width: 100%;
 }
 
-/* OCR / Vision model picker (sidebar card) */
+/* OCR model picker (sidebar card) — Apple Vision + structuring LLM */
 #ocrModelCard .ocr-select {
   width: 100%;
   margin-top: 2px;
+}
+.ocr-fixed-backend {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 7px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ocr-fixed-backend span {
+  font-weight: 400;
+  color: var(--text-3);
 }
 .ocr-textmodel {
   margin-top: 8px;
