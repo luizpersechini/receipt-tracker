@@ -111,15 +111,22 @@ splits into >1 receipt. The user confirms/adjusts the auto-detected
 receipt boxes before OCR runs, so a page with several receipts becomes
 several correctly-cropped rows instead of one garbled extraction.
 
-`llm_processor` dispatches to one of two backends configured by
-`OCR_BACKEND`:
+`llm_processor` dispatches on `OCR_BACKEND` (both the segment path and
+the bbox/review-queue `ocr_crops` path honour it):
 
-- **`ollama_vision`** — single call per segment to the Ollama vision
-  model. JSON-mode prompt; we ask for a strict schema.
-- **`apple_vision`** — Apple's on-device Vision framework extracts
-  text first (fast, accurate on printed text); a smaller text-only
-  Ollama model (`OCR_TEXT_MODEL`, default `llama3.2:3b`) structures
+- **`apple_vision`** (default, the only one in the UI) — Apple's on-device
+  Vision framework extracts text first (fast, accurate on printed text); a
+  text-only Ollama model (`OCR_TEXT_MODEL`, e.g. `llama3.1:8b`) structures
   the OCR text into the receipt schema.
+- **`ollama_vision`** — single call per segment to an Ollama vision model
+  (glm-ocr/llava). Removed from the sidebar picker: a per-config, per-field
+  bake-off (`qa/bakeoff.py`) had glm-ocr at **0% on every field** (it loops
+  on the JSON-extraction prompt and times out) and 4× slower than apple. Kept
+  reachable via `.env` only. Don't pair it with the shipped `OLLAMA_MODEL`
+  (glm-ocr) — that's an OCR-only transcription model, not an extractor.
+
+Model choice matters: total-amount accuracy is strongly model-bound
+(`llama3.1:8b` ≫ `llama3.2:3b` on hard receipts).
 
 Ollama calls run at **temperature 0** — extraction must be
 deterministic (the 0.8 default made identical receipts parse

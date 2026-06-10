@@ -5,6 +5,19 @@
 `data/`. It then drives the real flows end to end and reports every error with
 timing, so you can catch regressions before they reach live data.
 
+`bakeoff.py` is a sibling tool: a head-to-head **OCR config comparison** —
+runs a fixed sample of your own receipts through multiple configs (apple_vision
+
+- different text models, vs glm-ocr) and prints a **per-field** scorecard
+  (total / currency / date / vendor / category) + a verdict. Read-only on
+  `data/`. Used to retire glm-ocr (0% every field) and confirm apple_vision +
+  `llama3.1:8b` as the default. Re-run when models change:
+
+```bash
+.venv/bin/python qa/bakeoff.py --n 8           # 8 receipts, all fields
+.venv/bin/python qa/bakeoff.py --apple-models llama3.2:3b,llama3.1:8b --glm glm-ocr:latest
+```
+
 ## Run
 
 Use the **project venv interpreter** (Python 3.13) — the app needs 3.10+, and

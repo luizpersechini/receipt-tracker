@@ -46,13 +46,19 @@ ollama pull llama3   # or whichever model is configured
 
 ## Notes
 
-- Ollama must be running locally before starting the app
-- Default OCR backend is `apple_vision` (on-device text extraction + an
-  Ollama text model for structuring); `ollama_vision` is the one-shot
-  vision-model alternative. Ollama calls run at temperature 0.
+- Ollama must be running locally before starting the app (the structuring
+  text model runs there, even on the apple_vision backend)
+- OCR backend is `apple_vision` (Apple on-device OCR + an Ollama text model,
+  e.g. `llama3.1:8b`, that structures the text into JSON). This is the only
+  backend offered in the UI — the `ollama_vision` one-shot vision path
+  (glm-ocr/llava) scored 0% in the bake-off and was removed from the picker
+  (still reachable via `OCR_BACKEND` in `.env` if you must). The structuring
+  model is picked in the sidebar "OCR model" card; pick it well — accuracy is
+  strongly model-bound (8b ≫ 3b on totals). Ollama calls run at temperature 0.
 - Statement estornos/refunds are captured as negative `credit` rows; the
   PDF parser is Itaú-targeted (column-aware, year-boundary rollback)
 - No external API calls — fully local/offline (FX rates + Gmail optional)
-- QA: `qa/run_qa.py --ocr mock` is the fast gate; `--corpus N
---corpus-seed S` scores OCR total accuracy against real receipts
-  (scoreboard in `qa/corpus_scoreboard.jsonl`)
+- QA: `qa/run_qa.py --ocr mock` is the fast gate; `--corpus N --corpus-seed S`
+  scores total accuracy on Portuguese (your own receipts) + English (SROIE)
+  corpora; `qa/bakeoff.py` compares OCR configs per-field (total/currency/
+  date/vendor/category). Always run with `.venv/bin/python` (needs 3.10+).
