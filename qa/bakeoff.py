@@ -22,8 +22,10 @@ Read-only on your data/ — it OCRs images, never writes to the DB.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import random
+import re
 import sqlite3
 import sys
 import time
@@ -74,7 +76,7 @@ def sample_brl_receipts(n: int, seed: int):
         p = Path(fp)
         if p.name.lower().startswith("uber_") or p.suffix.lower() not in IMG_EXT or not p.exists():
             continue
-        pool.append((fp, float(total)))
+        pool.append((fp, m))  # full stored metadata = ground truth for all fields
     if not pool:
         raise SystemExit("No BRL image receipts with a total found in your data/.")
     return random.Random(seed).sample(pool, min(n, len(pool)))
@@ -91,8 +93,8 @@ def set_config(backend: str, vision_model: str | None, text_model: str | None):
         ocr_settings.effective_text_model = lambda: text_model
 
 
-def extract_total(image_path: str):
-    """OCR one receipt with the current config → (total_float_or_None, seconds)."""
+def extract_meta(image_path: str):
+    """OCR one receipt with the current config → (metadata_dict, seconds)."""
     from PIL import Image
 
     from src.services.llm_processor import ocr_crops
@@ -100,16 +102,46 @@ def extract_total(image_path: str):
     t0 = time.time()
     try:
         img = Image.open(image_path).convert("RGB")
-        meta = ocr_crops([img])[0]["metadata"]
-        v = meta.get("total_amount")
-        got = float(v) if v not in (None, "") else None
+        meta = ocr_crops([img])[0]["metadata"] or {}
     except Exception:  # noqa: BLE001
-        got = None
-    return got, time.time() - t0
+        meta = {}
+    return meta, time.time() - t0
 
 
-def ok(got, gt) -> bool:
-    return got is not None and abs(got - gt) <= max(0.01, abs(gt) * 0.005)
+# Fields to score and how. Vendor is fuzzy; the rest are exact-after-normalise.
+FIELDS = ["total_amount", "currency", "date", "vendor_name", "category"]
+
+
+def _norm_vendor(s):
+    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+def field_match(field, got, gt):
+    """True/False if scorable, None when there's no ground truth to score."""
+    if gt in (None, "", "Unknown") or (field == "total_amount" and not gt):
+        return None
+    if got in (None, ""):
+        return False
+    if field == "total_amount":
+        try:
+            g = float(got)
+        except (TypeError, ValueError):
+            return False
+        return abs(g - float(gt)) <= max(0.01, abs(float(gt)) * 0.005)
+    if field == "currency":
+        return str(got).upper().strip() == str(gt).upper().strip()
+    if field == "date":
+        return str(got).strip()[:10] == str(gt).strip()[:10]  # ISO date part
+    if field == "category":
+        return str(got).lower().strip() == str(gt).lower().strip()
+    if field == "vendor_name":
+        a, b = _norm_vendor(got), _norm_vendor(gt)
+        if not a or not b:
+            return False
+        if a in b or b in a:
+            return True
+        return difflib.SequenceMatcher(None, a, b).ratio() >= 0.82
+    return None
 
 
 def main():
@@ -131,69 +163,66 @@ def main():
     if args.glm:
         configs.append((f"glm:{args.glm.split(':')[0]}", "ollama_vision", args.glm, None))
 
-    print(f"OCR bake-off · {len(sample)} BRL receipts · seed {args.seed}\n")
+    labels = [c[0] for c in configs]
+    print(f"OCR bake-off · {len(sample)} BRL receipts · seed {args.seed}")
+    print("  fields: " + ", ".join(FIELDS) + "\n")
 
-    # results[label] = list of (got, sec, ok) aligned to sample order
-    results: dict = {c[0]: [] for c in configs}
+    # raw[label] = list of (metadata, sec) aligned to sample order
+    raw: dict = {lb: [] for lb in labels}
     for label, backend, vmodel, tmodel in configs:
         set_config(backend, vmodel, tmodel)
-        for fp, gt in sample:
-            got, sec = extract_total(fp)
-            results[label].append((got, sec, ok(got, gt)))
+        for fp, gt_meta in sample:
+            meta, sec = extract_meta(fp)
+            raw[label].append((meta, sec))
 
-    # ── table ──
-    labels = [c[0] for c in configs]
-    name_w = max(18, *(len(Path(fp).stem[-26:]) for fp, _ in sample))
-    header = f"  {'receipt':<{name_w}}  {'truth':>9}  " + "  ".join(f"{lb:>14}" for lb in labels)
-    print(header)
-    print("  " + "─" * (len(header) - 2))
-    for i, (fp, gt) in enumerate(sample):
-        cells = []
-        for lb in labels:
-            got, sec, good = results[lb][i]
-            mark = "✓" if good else "✗"
-            cells.append(f"{(_fmt(got) + ' ' + mark):>14}")
-        print(f"  {Path(fp).stem[-26:]:<{name_w}}  {_fmt(gt):>9}  " + "  ".join(cells))
-
-    # ── summary ──
-    print("  " + "─" * (len(header) - 2))
-    summ = {}
+    # score[label][field] = (correct, scored); times[label] = avg sec
+    score: dict = {lb: {f: [0, 0] for f in FIELDS} for lb in labels}
+    times: dict = {}
     for lb in labels:
-        rs = results[lb]
-        correct = sum(1 for *_, g in rs if g)
-        avg = sum(s for _, s, _ in rs) / len(rs)
-        summ[lb] = (correct, len(rs), avg)
-    acc_row = (
+        times[lb] = sum(s for _, s in raw[lb]) / len(raw[lb])
+        for i, (fp, gt_meta) in enumerate(sample):
+            meta, _ = raw[lb][i]
+            for f in FIELDS:
+                res = field_match(f, meta.get(f), gt_meta.get(f))
+                if res is None:
+                    continue
+                score[lb][f][1] += 1
+                score[lb][f][0] += 1 if res else 0
+
+    # ── per-field table (rows = fields, cols = configs) ──
+    fw = max(len(f) for f in FIELDS)
+    col = max(14, *(len(lb) for lb in labels))
+    print("  " + f"{'field':<{fw}}  " + "  ".join(f"{lb:>{col}}" for lb in labels))
+    print("  " + "─" * (fw + 2 + (col + 2) * len(labels)))
+
+    def _cell(c, n):
+        return f"{(str(c) + '/' + str(n) + ' ' + (f'{c / n:.0%}' if n else '—')):>{col}}"
+
+    for f in FIELDS:
+        print("  " + f"{f:<{fw}}  " + "  ".join(_cell(*score[lb][f]) for lb in labels))
+
+    # overall (all fields pooled) + time
+    print("  " + "─" * (fw + 2 + (col + 2) * len(labels)))
+    overall = {
+        lb: (sum(score[lb][f][0] for f in FIELDS), sum(score[lb][f][1] for f in FIELDS))
+        for lb in labels
+    }
+    print("  " + f"{'OVERALL':<{fw}}  " + "  ".join(_cell(*overall[lb]) for lb in labels))
+    print(
         "  "
-        + f"{'accuracy':<{name_w}}  {'':>9}  "
-        + "  ".join(
-            f"{(str(c) + '/' + str(n) + ' ' + f'{c / n:.0%}'):>14}"
-            for (c, n, _) in (summ[lb] for lb in labels)
-        )
+        + f"{'avg time/rcpt':<{fw}}  "
+        + "  ".join(f"{f'{times[lb]:.1f}s':>{col}}" for lb in labels)
     )
-    time_row = (
-        "  "
-        + f"{'avg time/receipt':<{name_w}}  {'':>9}  "
-        + "  ".join(f"{f'{a:.1f}s':>14}" for (_, _, a) in (summ[lb] for lb in labels))
-    )
-    print(acc_row)
-    print(time_row)
 
     # ── verdict ──
-    best = max(labels, key=lambda lb: (summ[lb][0] / summ[lb][1], -summ[lb][2]))
-    c, n, a = summ[best]
-    print(f"\n  ▶ winner: {best} — {c}/{n} ({c / n:.0%}), {a:.1f}s/receipt")
+    best = max(labels, key=lambda lb: (overall[lb][0] / max(1, overall[lb][1]), -times[lb]))
+    c, n = overall[best]
+    print(
+        f"\n  ▶ winner: {best} — {c}/{n} fields ({c / max(1, n):.0%}), {times[best]:.1f}s/receipt"
+    )
     print("    (ground truth = stored totals; ones you've corrected are human-verified,")
     print("     the rest reflect what the app produced — a slight edge to the current pipeline.)")
     return 0
-
-
-def _fmt(v):
-    if v is None:
-        return "—"
-    if isinstance(v, float):
-        return f"{v:.2f}".rstrip("0").rstrip(".")
-    return str(v)
 
 
 if __name__ == "__main__":
