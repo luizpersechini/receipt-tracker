@@ -5017,6 +5017,17 @@ function restoreLastSync() {
   } catch {}
 }
 
+// Pre-fill the Gmail "From" date with 90 days ago so the default sync window
+// is visible and editable up front; To is left empty (= up to now) so it never
+// goes stale. The at-sync clamp below still guards if From is cleared.
+(() => {
+  const el = $("gmailAfter");
+  if (el && !el.value) {
+    const d = new Date(Date.now() - 90 * 864e5);
+    el.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+})();
+
 $("gmailSyncBtn").addEventListener("click", async () => {
   const btn = $("gmailSyncBtn");
   const status = $("gmailStatus");
