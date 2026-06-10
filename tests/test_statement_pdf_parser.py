@@ -47,7 +47,7 @@ def _write_pdf(path: Path, lines: list[str]) -> None:
     [
         ("24,20", 24.20),
         ("4.662,00", 4662.00),
-        ("- 6.789,36", 6789.36),  # _parse_brl strips sign; caller filters
+        ("- 6.789,36", -6789.36),  # sign preserved — credits/estornos are rows now
         ("5,62", 5.62),
         ("", None),
         ("not a number", None),
@@ -125,8 +125,8 @@ def test_skips_payments_section_entirely(tmp_path):
     assert len(txns) == 1
     assert txns[0]["description"] == "UBER* TRIP"
     assert txns[0]["amount"] == 17.81
-    # No 6789 phantom
-    assert all(t["amount"] != 6789.36 for t in txns)
+    # No 6789 phantom — positive OR negative (the payment is not an estorno)
+    assert all(abs(t["amount"]) != 6789.36 for t in txns)
 
 
 # ─── International ─────────────────────────────────────────────────────────
@@ -262,3 +262,70 @@ def test_iso_date_rolls_back_year_across_statement_boundary():
     assert _iso_date(jan, 2026, (1, 5)) == "2026-01-03"
     # No Postagem found → behave as before (no rollback guess).
     assert _iso_date(dec, 2026, None) == "2026-12-15"
+
+
+# ─── Credits / estornos ─────────────────────────────────────────────────────
+
+
+def test_captures_estorno_as_negative_credit_row(tmp_path):
+    """A negative amount inside the purchases section is a refund — it must
+    come through as a negative-amount row flagged credit, not be dropped."""
+    pdf = tmp_path / "estorno.pdf"
+    _write_pdf(
+        pdf,
+        [
+            "Postagem: 05/04/2026",
+            "Lançamentos: compras e saques",
+            "22/03",
+            "UBER* TRIP",
+            "17,81",
+            "VEÍCULOS .WWW.UBER.COM.",
+            "25/03",
+            "ESTORNO LOJA EXEMPLO",
+            "- 123,45",
+            "ALIMENTAÇÃO .SAO PAULO",
+        ],
+    )
+    txns = parse_statement_pdf(str(pdf))
+    assert len(txns) == 2
+    credit = next(t for t in txns if t["amount"] < 0)
+    assert credit["amount"] == -123.45
+    assert credit["description"] == "ESTORNO LOJA EXEMPLO"
+    assert credit["raw_data"].get("credit") is True
+    # The normal purchase is untouched
+    purchase = next(t for t in txns if t["amount"] > 0)
+    assert "credit" not in purchase["raw_data"]
+
+
+def test_second_payments_block_is_also_skipped(tmp_path):
+    """Multi-cardholder statements repeat 'Pagamentos efetuados'. Every block
+    must be skipped — now that negatives parse, an unskipped second block
+    would emit the bill payment as a phantom credit row."""
+    pdf = tmp_path / "two_payments.pdf"
+    _write_pdf(
+        pdf,
+        [
+            "Postagem: 05/04/2026",
+            "Pagamentos efetuados",
+            "19/03",
+            "PAGAMENTO EFETUADO 9487",
+            "- 6.789,36",
+            "Lançamentos: compras e saques",
+            "22/03",
+            "UBER* TRIP",
+            "17,81",
+            "VEÍCULOS .WWW.UBER.COM.",
+            "Pagamentos efetuados",
+            "20/03",
+            "PAGAMENTO EFETUADO 1111",
+            "- 1.000,00",
+            "Lançamentos: compras e saques",
+            "23/03",
+            "PADARIA SOL",
+            "30,00",
+            "ALIMENTAÇÃO .RIO",
+        ],
+    )
+    txns = parse_statement_pdf(str(pdf))
+    amounts = sorted(t["amount"] for t in txns)
+    assert amounts == [17.81, 30.00]

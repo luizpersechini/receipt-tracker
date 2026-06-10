@@ -687,3 +687,62 @@ def test_front_page_has_form_structure(report_env):
         assert "Motivo do Gasto" not in front
     finally:
         doc.close()
+
+
+# ─── Credits / estornos on the statement report ─────────────────────────────
+
+
+def test_credit_row_renders_as_estorno_without_justification(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-04-05",
+            "description": "LOJA EXEMPLO",
+            "amount": 100.0,
+            "category": "meals",
+            "raw_data": {"section": "domestic"},
+        },
+        {
+            "date": "2026-04-08",
+            "description": "ESTORNO LOJA EXEMPLO",
+            "amount": -40.0,
+            "category": "meals",
+            "raw_data": {"section": "domestic", "credit": True},
+        },
+    ]
+    sid = db.save_statement("statement_credit.csv", "statement_credit.csv", txns)
+
+    data = erp._assemble(sid)
+    credit_rows = [r for r in data["rows"] if r.get("credit")]
+    assert len(credit_rows) == 1
+    assert credit_rows[0]["amount"] == -40.0
+
+    front = erp._front_page_html(data, {"expense_kind": "cartao"})
+    # The credit line is labelled as an estorno, with NO justification blank.
+    assert "estorno / crédito" in front
+    # Exactly one open item (the purchase) carries the sem-comprovante nag.
+    assert front.count("sem comprovante") == 1
+    # Column total nets the refund: 100 - 40 = 60.
+    assert "60,00" in front
+
+    # The open-items page lists only the purchase, never the credit.
+    open_html = erp._open_items_html(data)
+    assert "LOJA EXEMPLO" in open_html
+    assert "ESTORNO" not in open_html
+
+
+def test_report_rows_view_carries_credit_flag(report_env):
+    db = report_env
+    txns = [
+        {
+            "date": "2026-04-08",
+            "description": "ESTORNO X",
+            "amount": -10.0,
+            "category": "meals",
+            "raw_data": {"section": "domestic", "credit": True},
+        },
+    ]
+    sid = db.save_statement("s.csv", "s.csv", txns)
+    view = erp.report_rows_view(sid, None, None)
+    assert view["rows"][0]["credit"] is True
+    assert view["rows"][0]["amount"] == -10.0

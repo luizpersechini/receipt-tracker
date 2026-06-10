@@ -850,15 +850,20 @@ async function loadStatements() {
               dates.reduce((a, b) => (a > b ? a : b)),
             )}`;
       const totalLabel = txns.length ? fmt.currency(total, "BRL") : "—";
+      // Credits/estornos don't expect a receipt — exclude them from the
+      // matched/open arithmetic (the bill total above still nets them).
+      const isCredit = (t) =>
+        parseFloat(t.amount) < 0 || !!(t.raw_data && t.raw_data.credit);
+      const expectable = txns.filter((t) => !isCredit(t)).length;
       const matched = matchedCount[s.id] || 0;
       const matchedChip =
         matched === 0
-          ? `<span class="badge badge-gray">0 / ${txns.length}</span>`
-          : matched >= txns.length
-            ? `<span class="badge badge-green">${matched} / ${txns.length}</span>`
-            : `<span class="badge badge-amber">${matched} / ${txns.length}</span>`;
+          ? `<span class="badge badge-gray">0 / ${expectable}</span>`
+          : matched >= expectable
+            ? `<span class="badge badge-green">${matched} / ${expectable}</span>`
+            : `<span class="badge badge-amber">${matched} / ${expectable}</span>`;
 
-      const openItems = Math.max(0, txns.length - matched);
+      const openItems = Math.max(0, expectable - matched);
       const completedBadge = s.archived
         ? ` <span class="badge badge-green">✓ Completed</span>`
         : "";
@@ -1425,8 +1430,11 @@ const Reconcile = (() => {
   }
 
   function _renderHeaderCounts() {
-    const total = reconState.txns.length;
-    const matched = reconState.txns.filter((t) => _txnMatches(t).length).length;
+    // Credits/estornos never get receipts — keep them out of the
+    // paired/open arithmetic so a statement with refunds can read complete.
+    const countable = reconState.txns.filter((t) => !t.credit);
+    const total = countable.length;
+    const matched = countable.filter((t) => _txnMatches(t).length).length;
     $("reconPairedNum").textContent = matched;
     $("reconPairedTotal").textContent = total;
     $("reconPairedLeft").textContent = Math.max(0, total - matched);
@@ -1481,7 +1489,11 @@ const Reconcile = (() => {
     // search / date / amount filters.
     const filtered = reconState.txns
       .filter((t) =>
-        reconState.showMatchedTxns ? true : _txnMatches(t).length === 0,
+        // Credits behave like matched rows for the focus toggle — they
+        // don't need pairing, so hide them from the "still open" view.
+        reconState.showMatchedTxns
+          ? true
+          : _txnMatches(t).length === 0 && !t.credit,
       )
       .filter((t) => _matchesTxnFilter(t, reconState.txnFilter));
     if (!reconState.txns.length) {
@@ -1499,7 +1511,7 @@ const Reconcile = (() => {
     if (
       !filtered.length &&
       !reconState.showMatchedTxns &&
-      reconState.txns.every((t) => _txnMatches(t).length > 0)
+      reconState.txns.every((t) => t.credit || _txnMatches(t).length > 0)
     ) {
       host.innerHTML = `
         <div class="recon-empty-small recon-all-matched">
@@ -1572,6 +1584,7 @@ const Reconcile = (() => {
           ${_renderCategoryControl(t, isMatched)}
           ${t.city ? `<span class="recon-city">${_esc(t.city)}</span>` : ""}
           ${isIntl ? `<span class="badge badge-accent recon-cur">${_esc(t.original_currency)}</span>` : ""}
+          ${t.credit ? `<span class="badge badge-green" title="Crédito/estorno — não precisa de comprovante">Estorno</span>` : ""}
           ${progressHtml}
         </div>
         ${_renderFormFields(t)}

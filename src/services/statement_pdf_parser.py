@@ -59,14 +59,15 @@ _HEADER_INTERNATIONAL = "Lançamentos internacionais"
 # DD/MM on its own line — transaction date marker.
 _DATE_RE = re.compile(r"^(\d{2})/(\d{2})$")
 
-# BRL amount: comma decimal, optional thousands dots ("4.662,00").
-# We intentionally do NOT allow a leading "-" — credits / payments show
-# up as "- 6.789,36" and we want those skipped wholesale.
-_BRL_AMOUNT_RE = re.compile(r"^\d{1,3}(?:\.\d{3})*,\d{2}$")
+# BRL amount: comma decimal, optional thousands dots ("4.662,00"), optional
+# leading "-" ("- 123,45") — estornos/refunds print as negatives inside the
+# purchases sections and are captured as credit rows. The previous-bill
+# payment is ALSO negative, but lives in the "Pagamentos efetuados" section
+# which the walker skips wholesale.
+_BRL_AMOUNT_RE = re.compile(r"^-?\s?\d{1,3}(?:\.\d{3})*,\d{2}$")
 
-# Native-currency amount on its own line ("21,88"). Same shape as BRL but
-# in the int'l section we don't allow the negative sign.
-_NATIVE_AMOUNT_RE = re.compile(r"^\d{1,3}(?:\.\d{3})*,\d{2}$")
+# Native-currency amount on its own line ("21,88" / "- 21,88").
+_NATIVE_AMOUNT_RE = re.compile(r"^-?\s?\d{1,3}(?:\.\d{3})*,\d{2}$")
 
 # ISO 4217 codes that show up in this statement series.
 _CCY_RE = re.compile(r"^(USD|CAD|EUR|GBP|JPY|AUD|CHF|MXN|ARS|ARP|CLP)$")
@@ -187,16 +188,16 @@ def parse_statement_pdf(filepath: str) -> list[dict]:
 def _walk_lines(lines: list[str], year: int, post_md: Optional[tuple] = None) -> list[dict]:
     """Walk the line list, emitting one dict per detected transaction."""
     txns: list[dict] = []
-    in_payments_section = False
     i = 0
     n = len(lines)
     while i < n:
         line = lines[i].strip()
 
-        # The payments section lists the previous-bill payment (a credit,
-        # not a purchase). Skip it wholesale.
-        if _HEADER_PAYMENTS in line and not in_payments_section:
-            in_payments_section = True
+        # The payments section lists the previous-bill payment (money in,
+        # not a purchase OR a refund). Skip EVERY such block — multi-
+        # cardholder statements repeat it, and now that negative amounts
+        # parse as credit rows an unskipped block would emit phantom rows.
+        if _HEADER_PAYMENTS in line:
             i += 1
             while i < n and not (_HEADER_DOMESTIC in lines[i] or _HEADER_INTERNATIONAL in lines[i]):
                 i += 1
@@ -231,22 +232,23 @@ def _try_domestic(lines: list[str], i: int, year: int, post_md: Optional[tuple] 
     if not _BRL_AMOUNT_RE.match(amt_line):
         return None, 0
     amount = _parse_brl(amt_line)
-    if amount is None or amount <= 0:
-        # Skip negative entries (credits / refunds in this position) — they
-        # only appear in the payments section which we already filter above.
+    if amount is None or amount == 0:
         return None, 0
     merchant = lines[i + 1].strip()
     if not merchant:
         return None, 0
+    raw_data: dict = {"section": "domestic", "original_currency": "BRL"}
+    if amount < 0:
+        # Estorno/refund — keep it (it nets against the purchase on the
+        # report) and flag it so consumers don't treat it as an expense
+        # waiting for a receipt.
+        raw_data["credit"] = True
     return {
         "date": _iso_date(date_m, year, post_md),
         "description": merchant,
         "amount": amount,
         "category": _guess_category(merchant),
-        "raw_data": {
-            "section": "domestic",
-            "original_currency": "BRL",
-        },
+        "raw_data": raw_data,
     }, 3
 
 
@@ -277,24 +279,27 @@ def _try_international(lines: list[str], i: int, year: int, post_md: Optional[tu
     if not merchant:
         return None, 0
     brl_amount = _parse_brl(brl_line)
-    if brl_amount is None or brl_amount <= 0:
+    if brl_amount is None or brl_amount == 0:
         return None, 0
     native_amount = _parse_brl(native_m.group(0))
     fx_rate = _parse_brl(fx_m.group(1))
     city = lines[i + 3].strip()
 
+    raw_data: dict = {
+        "section": "international",
+        "original_currency": ccy_m.group(1),
+        "original_amount": native_amount,
+        "fx_to_brl": fx_rate,
+        "city": city,
+    }
+    if brl_amount < 0:
+        raw_data["credit"] = True
     return {
         "date": _iso_date(date_m, year, post_md),
         "description": merchant,
         "amount": brl_amount,
         "category": _guess_category(merchant),
-        "raw_data": {
-            "section": "international",
-            "original_currency": ccy_m.group(1),
-            "original_amount": native_amount,
-            "fx_to_brl": fx_rate,
-            "city": city,
-        },
+        "raw_data": raw_data,
     }, 8
 
 
@@ -302,18 +307,20 @@ def _try_international(lines: list[str], i: int, year: int, post_md: Optional[tu
 
 
 def _parse_brl(s: str) -> Optional[float]:
-    """Parse '4.662,00' / '21,88' / '5,62' to float. Returns None on junk."""
+    """Parse '4.662,00' / '21,88' / '- 123,45' to float, sign preserved.
+    Returns None on junk."""
     s = (s or "").strip().replace(" ", "")
     if not s:
         return None
-    # Strip trailing/leading sign cleanly; we already filter negatives above.
+    negative = s.startswith("-")
     s = s.lstrip("-")
     # Remove thousands separators, swap decimal comma to dot.
     s = s.replace(".", "").replace(",", ".")
     try:
-        return float(s)
+        v = float(s)
     except ValueError:
         return None
+    return -v if negative else v
 
 
 def _iso_date(date_m: re.Match, year: int, post_md: Optional[tuple] = None) -> str:

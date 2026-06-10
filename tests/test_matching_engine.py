@@ -112,3 +112,17 @@ def test_unmatched_transactions_hide_internal_keys():
     txn = result["unmatched_transactions"][0]["transaction"]
     assert "_statement_id" not in txn
     assert "_txn_index" not in txn
+
+
+def test_credit_transactions_never_auto_match():
+    """An estorno (negative amount) with the SAME date+vendor as a receipt
+    reaches the 0.5 gate on date+vendor alone — it must be excluded from the
+    candidate pool entirely (refunds don't get receipts)."""
+    receipts = [_receipt(1, date="2026-04-30", vendor="Starbucks", amount=12.50)]
+    statements = [_statement(10, [
+        {"date": "2026-04-30", "description": "STARBUCKS #123", "amount": -12.50,
+         "raw_data": {"credit": True}},
+    ])]
+    result = match_receipts_to_statements(receipts, statements)
+    assert result["matches"] == []
+    assert len(result["unmatched_receipts"]) == 1

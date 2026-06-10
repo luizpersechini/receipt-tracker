@@ -151,6 +151,13 @@ def _receipt_metadata(rcpt_metadata_json: str) -> dict:
         return {}
 
 
+def _is_negative(amount) -> bool:
+    try:
+        return float(amount or 0) < 0
+    except (TypeError, ValueError):
+        return False
+
+
 @router.get("/statements/{statement_id}/transactions")
 async def get_statement_transactions(statement_id: int):
     """Return one statement's parsed transactions, each annotated with its
@@ -226,6 +233,9 @@ async def get_statement_transactions(statement_id: int):
             "date": t.get("date"),
             "description": t.get("description"),
             "amount": t.get("amount"),
+            # Estorno/refund rows: negative amount, no receipt expected. The
+            # board styles them and leaves them out of the open-item counts.
+            "credit": bool(raw.get("credit")) or _is_negative(t.get("amount")),
             "currency": "BRL",
             "category": category,
             "category_locked": category_locked,

@@ -35,6 +35,16 @@ def match_receipts_to_statements(
         for txn_index, txn in enumerate(statement.get("transactions", [])):
             if txn_index in locked:
                 continue  # already paired manually — don't offer it
+            try:
+                if float(txn.get("amount") or 0) < 0:
+                    # Credit/estorno — money coming back, no receipt expected.
+                    # Receipts are positive, so the amount can never support a
+                    # match, but exact date + identical vendor alone reaches
+                    # the 0.5 gate and would pair the refund with the original
+                    # purchase's receipt.
+                    continue
+            except (TypeError, ValueError):
+                pass
             all_transactions.append(
                 {
                     **txn,

@@ -349,9 +349,11 @@ def _assemble(statement_id: int) -> dict[str, Any]:
             category = cat_overrides.get(i) or t.get("category")
         col = _bucket(category, label)
 
+        is_credit = amount < 0 or bool((t.get("raw_data") or {}).get("credit"))
         row = {
             "index": i,  # transaction_index — used by the editable-table modal
             "receipt_ids": [m.get("receipt_id") for m in ms],
+            "credit": is_credit,
             "date": _fmt_date_br(t.get("date")),
             "conta": "",  # filled from profile below
             # Detalhamento: per-line override → meaningful matched-receipt
@@ -459,7 +461,11 @@ def _front_page_html(data: dict, profile: dict) -> str:
     body_rows = []
     for r in rows:
         detalhe = escape(r["detalhe"])
-        if not r["matched"]:
+        if r.get("credit"):
+            # Refund — money back. No receipt is expected, so no
+            # justification blank; the negative amount nets the column.
+            detalhe += ' <span class="noreceipt">(estorno / crédito)</span>'
+        elif not r["matched"]:
             note = (r.get("note") or "").strip()
             if note:
                 # User-typed justification prints in place of the blank line.
@@ -616,7 +622,7 @@ def _open_items_html(data: dict) -> str:
     """A page listing the card charges with no receipt, each with its
     justification below. Sits between the front-page spreadsheet and the
     receipt-image grid. Renders nothing when every charge is matched."""
-    open_rows = [r for r in data.get("rows", []) if not r.get("matched")]
+    open_rows = [r for r in data.get("rows", []) if not r.get("matched") and not r.get("credit")]
     if not open_rows:
         return ""
 
@@ -884,6 +890,7 @@ def report_rows_view(
                 "index": r["index"],
                 "receipt_ids": r["receipt_ids"],
                 "matched": r["matched"],
+                "credit": r.get("credit", False),
                 "date": r["date"],
                 "cost_center": r["cost_center"],  # raw (receipt-joined or override)
                 "cost_center_effective": r["cost_center"] or default_cc,
