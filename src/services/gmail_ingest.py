@@ -775,6 +775,23 @@ def sync_new_receipts(
                 source="csv",
             )
 
+        # Same-ride re-send guard. Uber emails one ride more than once (trip
+        # receipt + tax/summary), each with its own message-id. When an email
+        # has no parseable trip id, synthetic_filename falls back to
+        # gm-<msg_id> (per-email), so the filename dedup above and the .csv
+        # cross-source check both miss an already-imported *Gmail* row, and the
+        # second email lands as a duplicate. So when this email carries no trip
+        # id, match ANY existing Uber row on (date, amount, currency) — vendor
+        # is always Uber on this path. Gated on `trip_id is None`: two distinct
+        # same-day same-fare rides carry distinct trip ids and so are caught by
+        # the filename dedup, never here — they must not be collapsed.
+        if not existing and parsed.trip_id is None:
+            existing = db.find_uber_receipt_by_date_amount(
+                parsed.date,
+                parsed.total_amount,
+                parsed.currency,
+            )
+
         if not existing and attach_only:
             # CSV is the source of truth — don't insert a new row.
             unmatched.append(
