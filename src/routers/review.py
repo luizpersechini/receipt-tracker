@@ -10,10 +10,11 @@ import logging
 import os
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, Response
 
 from ..config import settings
+from ..schemas.receipts import ReviewCommitRequest
 from ..services import review_queue
 from .receipts import commit_boxes_to_receipts
 
@@ -40,16 +41,14 @@ async def get_review_queue():
 
 
 @router.post("/review-queue/{item_id}/commit")
-async def commit_review_item(item_id: int, body: dict = Body(...)):
+async def commit_review_item(item_id: int, body: ReviewCommitRequest):
     """OCR the user-confirmed boxes for one queued page and drop it from the
-    queue. Body: `{bboxes: [{x,y,w,h}, ...]}`."""
+    queue. Body: `{bboxes: [{x,y,w,h}, ...]}` — validated, so a malformed box
+    422s instead of 500ing mid-commit."""
     item = await asyncio.to_thread(review_queue.get, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Review item not found")
-    bboxes = body.get("bboxes") if isinstance(body, dict) else None
-    if not bboxes:
-        raise HTTPException(status_code=400, detail="No boxes provided")
-    saved = await commit_boxes_to_receipts(item["filename"], bboxes, item.get("description"))
+    saved = await commit_boxes_to_receipts(item["filename"], body.bboxes, item.get("description"))
     await asyncio.to_thread(review_queue.remove, item_id)
     return JSONResponse({"success": True, "count": len(saved), "receipts": saved})
 

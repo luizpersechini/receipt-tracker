@@ -143,12 +143,19 @@ def _write_category_subtotals(
     ws, receipts: list, row: int, target_currency: str, fx_rates: dict
 ) -> int:
     totals: dict = {}
+    unconverted = 0
     for r in receipts:
         meta = _parse_meta(r)
         cat = meta.get("category") or "other"
         amount = _fmt_amount(meta.get("total_amount")) or 0.0
         currency = (meta.get("currency") or "BRL").upper()
-        converted = convert(amount, currency, target_currency, fx_rates) or 0.0
+        converted = convert(amount, currency, target_currency, fx_rates)
+        if converted is None:
+            # Missing FX rate — don't silently count the receipt as zero;
+            # tally it and flag below so the totals are honest.
+            if amount:
+                unconverted += 1
+            converted = 0.0
         totals[cat] = totals.get(cat, 0.0) + converted
 
     ws.cell(row=row, column=1, value="SUBTOTALS BY CATEGORY").font = Font(bold=True, size=10)
@@ -169,7 +176,19 @@ def _write_category_subtotals(
     for c in (gt1, gt2, gt3):
         c.fill = TOTAL_FILL
         c.font = TOTAL_FONT
-    row += 2
+    row += 1
+    if unconverted:
+        w = ws.cell(
+            row=row,
+            column=1,
+            value=(
+                f"WARNING: {unconverted} receipt(s) lacked an FX rate to "
+                f"{target_currency} and are EXCLUDED from these totals"
+            ),
+        )
+        w.font = Font(italic=True, bold=True, size=10, color="B45309")
+        row += 1
+    row += 1
     return row
 
 
@@ -217,6 +236,7 @@ def _create_summary_sheet(ws, receipts, statements, target_currency, fx_rates):
 
     total_original: dict = {}
     total_converted = 0.0
+    unconverted = 0
     for r in receipts:
         meta = _parse_meta(r)
         amt = _fmt_amount(meta.get("total_amount")) or 0.0
@@ -225,10 +245,19 @@ def _create_summary_sheet(ws, receipts, statements, target_currency, fx_rates):
         cv = convert(amt, cur, target_currency, fx_rates)
         if cv is not None:
             total_converted += cv
+        elif amt:
+            unconverted += 1
 
     for cur, amt in sorted(total_original.items()):
         data.append((f"Total ({cur})", round(amt, 2)))
     data.append((f"Grand Total ({target_currency})", round(total_converted, 2)))
+    if unconverted:
+        data.append(
+            (
+                "Unconverted (no FX rate — excluded from Grand Total)",
+                unconverted,
+            )
+        )
 
     for i, (label, value) in enumerate(data, 3):
         ws.cell(row=i, column=1, value=label).font = Font(bold=True)

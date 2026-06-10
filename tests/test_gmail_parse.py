@@ -353,3 +353,23 @@ def test_returns_none_amount_when_no_total_in_body():
         plain=None,
     )
     assert p.total_amount is None
+
+
+def test_extract_total_skips_subtotal_line():
+    """Regression: '(?:total|amount)' matched the 'total' inside 'Subtotal',
+    importing the pre-tip amount when Subtotal printed first."""
+    from src.services.gmail_ingest import _extract_total
+
+    amt, cur = _extract_total("Subtotal R$ 20,00\nTotal R$ 25,50")
+    assert amt == 25.50
+    assert cur == "BRL"
+
+
+def test_extract_total_skips_refund_lines():
+    from src.services.gmail_ingest import _extract_total
+
+    amt, _ = _extract_total("Refund total R$ 15,00\nOther text")
+    assert amt is None
+    # ...but a normal total after a refund mention on ANOTHER line still wins.
+    amt2, _ = _extract_total("Your refund was processed\nTotal R$ 30,00")
+    assert amt2 == 30.00

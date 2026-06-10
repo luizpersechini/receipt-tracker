@@ -17,6 +17,15 @@ function escUrlSeg(v) {
   return encodeURIComponent(String(v ?? ""));
 }
 
+// Guarded metadata parse — one malformed DB row must not blank a whole tab.
+function parseMeta(r) {
+  try {
+    return JSON.parse((r && r.metadata) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
 const api = async (method, path, body) => {
   const opts = { method };
   if (body instanceof FormData) opts.body = body;
@@ -184,7 +193,7 @@ let allReceipts = [];
 function populateMonths(receipts) {
   const months = new Set();
   receipts.forEach((r) => {
-    const meta = JSON.parse(r.metadata || "{}");
+    const meta = parseMeta(r);
     const d = meta.date || (r.created_at || "").slice(0, 7);
     if (d && d.length >= 7) months.add(d.slice(0, 7));
   });
@@ -220,7 +229,7 @@ $("monthSelect").addEventListener("change", (e) => {
 function filterByMonth(receipts) {
   if (currentMonth === "all") return receipts;
   return receipts.filter((r) => {
-    const meta = JSON.parse(r.metadata || "{}");
+    const meta = parseMeta(r);
     const d = meta.date || (r.created_at || "").slice(0, 7);
     return d && d.slice(0, 7) === currentMonth;
   });
@@ -292,7 +301,7 @@ function applyReceiptFilters(receipts, opts = {}) {
   return receipts.filter((r) => {
     const m = (() => {
       try {
-        return JSON.parse(r.metadata || "{}");
+        return parseMeta(r);
       } catch {
         return {};
       }
@@ -348,7 +357,7 @@ function sortReceiptList(receipts, sort) {
   const get = (r) => {
     const m = (() => {
       try {
-        return JSON.parse(r.metadata || "{}");
+        return parseMeta(r);
       } catch {
         return {};
       }
@@ -414,7 +423,7 @@ function populateCurrencyFilter(receipts) {
   const seen = new Set();
   receipts.forEach((r) => {
     try {
-      const c = JSON.parse(r.metadata || "{}").currency;
+      const c = parseMeta(r).currency;
       if (c) seen.add(c);
     } catch {}
   });
@@ -480,8 +489,33 @@ async function loadStats() {
     $("hPending").textContent = s.pending_receipts ?? 0;
     $("hMatched").textContent = s.matched_receipts ?? 0;
     $("hUnmatched").textContent = s.unmatched_receipts ?? 0;
-    $("hAmount").textContent = fmt.currency(s.total_receipt_amount, "BRL");
-  } catch {}
+    // One sum per currency — USD+BRL added together meant nothing.
+    const byCur = s.amounts_by_currency || {};
+    const curs = Object.keys(byCur).sort((a, b) =>
+      a === "BRL" ? -1 : b === "BRL" ? 1 : a.localeCompare(b),
+    );
+    const el = $("hAmount");
+    if (curs.length > 1) {
+      // Currency CODES here — fmt.currency renders USD and CAD as the same
+      // bare "$", indistinguishable side by side.
+      el.textContent = curs
+        .map((c) =>
+          c === "BRL"
+            ? fmt.currency(byCur[c], "BRL")
+            : `${c} ${(+byCur[c]).toFixed(2)}`,
+        )
+        .join(" · ");
+      el.title = "Totals per currency (not converted)";
+    } else {
+      el.textContent = fmt.currency(
+        curs.length ? byCur[curs[0]] : s.total_receipt_amount,
+        curs[0] || "BRL",
+      );
+      el.title = "";
+    }
+  } catch (e) {
+    toast("Couldn't load stats: " + e.message);
+  }
 }
 
 // ─── Bulk-selection state ────────────────────────────────────────────────────
@@ -578,7 +612,7 @@ function renderReceipts(receipts) {
 
   tbody.innerHTML = filtered
     .map((r) => {
-      const meta = JSON.parse(r.metadata || "{}");
+      const meta = parseMeta(r);
       const hasErr = !!meta.error;
       const ext = (r.filename || "").split(".").pop().toLowerCase();
       const browserViewable = ["jpg", "jpeg", "png", "gif", "webp"].includes(
@@ -716,7 +750,10 @@ async function loadReceipts() {
     populateCurrencyFilter(receipts);
     renderReceipts(receipts);
     updateProgress(receipts);
-  } catch {}
+  } catch (e) {
+    // Swallowing this left a silently blank tab with no clue why.
+    toast("Couldn't load receipts: " + e.message);
+  }
 }
 
 async function deleteReceipt(id) {
@@ -746,7 +783,9 @@ async function loadStatements() {
     ]);
     statements = sRes.statements || [];
     matches = mRes.matches || [];
-  } catch {}
+  } catch (e) {
+    toast("Couldn't load statements: " + e.message);
+  }
   // Outstanding (not-yet-completed) statements drive the nav badge.
   const activeCount = statements.filter((s) => !s.archived).length;
   $("navStmtCount").textContent = activeCount;
@@ -891,6 +930,8 @@ async function deleteStatement(id) {
 let _stmtDetailRows = []; // working copy filtered by the search box
 let _stmtDetailAll = []; // full transactions array — search filters against this
 
+let _stmtDetailSeq = 0;
+
 async function openStatementDetail(id) {
   $("stmtDetailModal").classList.add("open");
   $("stmtDetailTitle").textContent = "Statement";
@@ -899,8 +940,10 @@ async function openStatementDetail(id) {
   $("stmtDetailSum").textContent = "—";
   $("stmtDetailQ").value = "";
 
+  const seq = ++_stmtDetailSeq;
   try {
     const res = await api("GET", `/api/statements/${id}/transactions`);
+    if (seq !== _stmtDetailSeq) return; // a newer open superseded this fetch
     const s = res.statement || {};
     _stmtDetailAll = res.transactions || [];
     _stmtDetailRows = _stmtDetailAll;
@@ -909,6 +952,7 @@ async function openStatementDetail(id) {
     $("stmtDetailSub").textContent = `${_stmtDetailAll.length} transactions`;
     _renderStmtDetail();
   } catch (e) {
+    if (seq !== _stmtDetailSeq) return;
     $("stmtDetailSub").innerHTML =
       `<span class="status-msg err">Failed to load: ${escHtml(e.message)}</span>`;
   }
@@ -1003,20 +1047,9 @@ function closeStatementDetail() {
   _stmtDetailRows = [];
 }
 
-// Small local escape helper — `_esc` exists inside the Reconcile module
-// closure but isn't reachable here. Define a sibling for this module.
+// Alias of the global escHtml (kept for the call sites in this module).
 function _esc(s) {
-  return String(s == null ? "" : s).replace(
-    /[&<>"']/g,
-    (c) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-      })[c],
-  );
+  return escHtml(s);
 }
 
 // Wire the search box + dismiss handlers once.
@@ -1110,7 +1143,7 @@ function _renderReconcileLegacyUnused(result) {
           <tbody>
             ${unmatched_receipts
               .map((r) => {
-                const meta = JSON.parse(r.metadata || "{}");
+                const meta = parseMeta(r);
                 return `<tr class="data-row">
                 <td class="fname" title="${r.filename}" style="font-weight:500">${fmt.file(r.filename)}</td>
                 <td style="white-space:nowrap">${fmt.date(meta.date)}</td>
@@ -1239,17 +1272,7 @@ const Reconcile = (() => {
   }
 
   function _esc(s) {
-    return String(s == null ? "" : s).replace(
-      /[&<>"']/g,
-      (c) =>
-        ({
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#39;",
-        })[c],
-    );
+    return escHtml(s); // alias of the global helper
   }
 
   function _isGoodMatch(rcpt, txn) {
@@ -1318,7 +1341,7 @@ const Reconcile = (() => {
       reconState.receipts = (rcpts.receipts || []).map((r) => {
         const m = (() => {
           try {
-            return JSON.parse(r.metadata || "{}");
+            return parseMeta(r);
           } catch {
             return {};
           }
@@ -2248,7 +2271,7 @@ const Reconcile = (() => {
       reconState.receipts = (rcpts.receipts || []).map((r) => {
         const m = (() => {
           try {
-            return JSON.parse(r.metadata || "{}");
+            return parseMeta(r);
           } catch {
             return {};
           }
@@ -2550,7 +2573,16 @@ async function _downloadReport(sid, uid, venc, fmt = "pdf") {
   const res = await fetch(`/api/statements/${sid}/${path}${qs}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    // FastAPI detail can be structured — stringify so the toast doesn't
+    // read "[object Object]".
+    const detail = err.detail;
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : detail
+          ? JSON.stringify(detail)
+          : res.statusText,
+    );
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -2871,7 +2903,7 @@ async function openReimbModal() {
       .map((r) => {
         let m = {};
         try {
-          m = JSON.parse(r.metadata || "{}");
+          m = parseMeta(r);
         } catch {}
         return {
           date: m.date || "",
@@ -3354,17 +3386,7 @@ function _clearScanTimers() {
 }
 
 function _escape(s) {
-  return String(s).replace(
-    /[&<>"']/g,
-    (c) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-      })[c],
-  );
+  return escHtml(s); // alias of the global helper
 }
 
 // ─── Secondary modal: edit receipts inside a scanned file ──────────────────
@@ -4216,7 +4238,7 @@ function openEditModalById(id) {
 
 function openEditModal(r) {
   editingReceiptId = r.id;
-  const meta = JSON.parse(r.metadata || "{}");
+  const meta = parseMeta(r);
   $("editModalSub").textContent = r.filename || `Receipt #${r.id}`;
 
   $("editVendor").value = meta.vendor_name || "";
@@ -4250,7 +4272,12 @@ function _normalizeDate(s) {
   const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
   const d = new Date(s);
-  if (!isNaN(d)) return d.toISOString().slice(0, 10);
+  if (!isNaN(d)) {
+    // Format from LOCAL components — toISOString() is UTC and rolls a
+    // local-midnight parse back a day in positive-offset timezones.
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
   return "";
 }
 

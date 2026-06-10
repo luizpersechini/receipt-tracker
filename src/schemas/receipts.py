@@ -32,6 +32,13 @@ class ReceiptCommitRequest(BaseModel):
     description: Optional[str] = None
 
 
+class ReviewCommitRequest(BaseModel):
+    """Body for POST /api/review-queue/{id}/commit — the queue item already
+    knows its file; only the user-confirmed boxes travel."""
+
+    bboxes: List[BBox] = Field(..., min_length=1, max_length=20)
+
+
 # Fields that live on the metadata JSON blob — anything in this set will be
 # merged into the receipt's metadata column. Top-level fields (description,
 # expense_type) go to their own columns; the router splits them.

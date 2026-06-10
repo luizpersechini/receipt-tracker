@@ -84,3 +84,28 @@ def clear_statement(statement_id: int) -> None:
     data = _read()
     if data.pop(str(statement_id), None) is not None:
         _write(data)
+
+
+@locked(_path)
+def remap_statement(statement_id: int, mapping: dict) -> None:
+    """Re-key this statement's per-index entries after a reparse changed row
+    order (old index -> new index). Entries whose old index isn't in
+    `mapping` are dropped — better gone than attached to the wrong charge."""
+    data = _read()
+    sid = str(statement_id)
+    bucket = data.get(sid) or {}
+    if not bucket:
+        return
+    new_bucket = {}
+    for k, v in bucket.items():
+        try:
+            old = int(k)
+        except (TypeError, ValueError):
+            continue
+        if old in mapping:
+            new_bucket[str(mapping[old])] = v
+    if new_bucket:
+        data[sid] = new_bucket
+    else:
+        data.pop(sid, None)
+    _write(data)

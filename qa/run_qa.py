@@ -429,42 +429,58 @@ def _c_report(client, ctx):
     return "expense report ok"
 
 
-# ─── real-world corpus: CORD receipts, scored against ground truth ───────────
-# Every run pulls a fresh RANDOM sample of real receipts from the CORD dataset
-# (naver-clova-ix/cord-v2, HuggingFace, CC BY 4.0 — real photos + ground-truth
-# totals), runs them through the OCR pipeline, scores total-amount accuracy,
-# and appends to qa/corpus_scoreboard.jsonl so you can see whether an algo
-# change moves the number. Needs `datasets` + network; warns (never hard-fails)
-# if either is missing or the sample is just hard.
+# ─── real-world corpora: Portuguese + English receipts, scored ───────────────
+# Focused on the receipts this app actually sees:
+#   • EN — random real English receipts from the SROIE dataset (mp-02/sroie,
+#     HuggingFace), with ground-truth totals reconstructed from the S-TOTAL
+#     NER tag. Images are small (512px tall), so we upscale before OCR.
+#   • PT — a random sample of YOUR OWN Brazilian (BRL) receipts from the live
+#     data/, re-OCR'd and scored against the stored total (true ground truth
+#     for the ones you've corrected; a regression signal for the rest).
+# Both score total-amount accuracy, append to qa/corpus_scoreboard.jsonl
+# (per-corpus), and print a trend. Need `datasets` (EN) / a live DB (PT);
+# warn (never hard-fail) when unavailable. Real OCR only.
 
 SCOREBOARD = ROOT / "qa" / "corpus_scoreboard.jsonl"
 
 
-def _cord_gt_total(ground_truth_str):
-    """Ground-truth total from a CORD example → integer minor-unit-free amount
-    (CORD is Indonesian rupiah, whole numbers: "60.000" → 60000)."""
+def _to_amount(v):
     try:
-        gt = json.loads(ground_truth_str)
-        tp = ((gt.get("gt_parse") or {}).get("total") or {}).get("total_price")
-        digits = re.sub(r"[^\d]", "", str(tp or ""))
-        return int(digits) if digits else None
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _norm_amount(v):
-    """Our extracted total → rounded int for comparison with the GT integer."""
-    try:
-        return round(float(v))
+        f = float(v)
+        return f if f == f else None  # NaN guard
     except (TypeError, ValueError):
         return None
 
 
-def _append_scoreboard(ctx, scored, correct, acc):
+def _amount_ok(got, gt):
+    if got is None or gt is None:
+        return False
+    return abs(got - gt) <= max(0.01, abs(gt) * 0.005)  # cents + small relative
+
+
+def _fmt_amt(v):
+    if v is None:
+        return "None"
+    return f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def _upscale(img, target=1500):
+    from PIL import Image as _Im
+
+    w, h = img.size
+    longest = max(w, h)
+    if longest >= target:
+        return img
+    scale = target / longest
+    return img.resize((max(1, int(w * scale)), max(1, int(h * scale))), _Im.LANCZOS)
+
+
+def _append_scoreboard(ctx, corpus, scored, correct, acc):
     from src.services import ocr_settings
 
     rec = {
         "ts": ctx["ts"],
+        "corpus": corpus,
         "backend": ocr_settings.effective_backend(),
         "text_model": ocr_settings.effective_text_model(),
         "n": len(scored),
@@ -477,75 +493,149 @@ def _append_scoreboard(ctx, scored, correct, acc):
         f.write(json.dumps(rec) + "\n")
 
 
-@check("real corpus: CORD total-amount accuracy (random sample, scored)")
-def _c_corpus(client, ctx):
-    if ctx["ocr"] != "real":
-        raise Warn("corpus scoring needs --ocr real (mock can't read totals)")
-    n = ctx["corpus_n"]
-    if n <= 0:
-        raise Warn("corpus step disabled (--corpus 0)")
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        raise Warn("`uv pip install datasets` to enable the CORD corpus step")
-
-    import itertools
-
-    try:
-        ds = load_dataset("naver-clova-ix/cord-v2", split="test", streaming=True)
-        ds = ds.shuffle(seed=ctx["seed"], buffer_size=64)  # fresh random sample / run
-        samples = list(itertools.islice(ds, n))
-    except Exception as e:  # noqa: BLE001 — network / HF down / rate-limited
-        raise Warn(f"couldn't load CORD (offline / HF down?): {str(e)[:120]}")
-    if not samples:
-        raise Warn("CORD returned no samples")
-
+def _score_pairs(ctx, corpus, pairs):
+    """pairs: list of (PIL image, gt_float). OCR each, score the extracted
+    total, append the scoreboard, return a one-line note."""
     from src.services.llm_processor import ocr_crops
 
     rows = []
-    for s in samples:
-        gt = _cord_gt_total(s["ground_truth"])
+    for img, gt in pairs:
         try:
-            meta = ocr_crops([s["image"].convert("RGB")])[0]["metadata"]
-            got = _norm_amount(meta.get("total_amount"))
+            meta = ocr_crops([img.convert("RGB")])[0]["metadata"]
+            got = _to_amount(meta.get("total_amount"))
         except Exception:  # noqa: BLE001
             got = None
-        ok = gt is not None and got is not None and abs(got - gt) <= 1
-        rows.append({"gt": gt, "got": got, "ok": ok})
-
+        rows.append({"gt": gt, "got": got, "ok": _amount_ok(got, gt)})
     scored = [r for r in rows if r["gt"] is not None]
     if not scored:
         raise Warn("no ground-truth totals in this sample")
     correct = sum(r["ok"] for r in scored)
     acc = correct / len(scored)
-    _append_scoreboard(ctx, scored, correct, acc)
-
-    miss = [f"{r['gt']}→{r['got']}" for r in scored if not r["ok"]][:6]
+    _append_scoreboard(ctx, corpus, scored, correct, acc)
+    miss = [f"{_fmt_amt(r['gt'])}→{_fmt_amt(r['got'])}" for r in scored if not r["ok"]][:6]
     note = f"{correct}/{len(scored)} totals correct ({acc:.0%})"
     if miss:
         note += " · gt→got misses: " + ", ".join(miss)
-    if correct == 0:
-        raise Warn(note + " — every total wrong; likely a parse/locale gap")
     return note
+
+
+@check("corpus EN: SROIE total accuracy (random sample, scored)")
+def _c_sroie(client, ctx):
+    if ctx["ocr"] != "real":
+        raise Warn("needs --ocr real (mock can't read totals)")
+    if ctx["corpus_n"] <= 0:
+        raise Warn("corpus disabled (--corpus 0)")
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        raise Warn("`uv pip install datasets` to enable the SROIE corpus")
+
+    import itertools
+
+    from src.services.money import parse_money
+
+    try:
+        ds = load_dataset("mp-02/sroie", split="test", streaming=True)
+        names = ds.features["ner_tags"].feature.names
+        tot_tag = next(i for i, nm in enumerate(names) if "total" in nm.lower())
+        ds = ds.shuffle(seed=ctx["seed"], buffer_size=64)
+        samples = list(itertools.islice(ds, ctx["corpus_n"]))
+    except Exception as e:  # noqa: BLE001
+        raise Warn(f"couldn't load SROIE (offline / HF down?): {str(e)[:110]}")
+
+    pairs = []
+    for s in samples:
+        toks = [w for w, t in zip(s["words"], s["ner_tags"]) if t == tot_tag]
+        cands = [c for c in (parse_money(w) for w in toks) if c]
+        gt = max(cands) if cands else None  # grand total = largest tagged amount
+        pairs.append((_upscale(s["image"]), gt))  # tiny images → upscale for OCR
+    return _score_pairs(ctx, "sroie-en", pairs)
+
+
+@check("corpus PT: your own BRL receipts vs stored total (regression)")
+def _c_own_pt(client, ctx):
+    if ctx["ocr"] != "real":
+        raise Warn("needs --ocr real")
+    if ctx["corpus_n"] <= 0:
+        raise Warn("corpus disabled (--corpus 0)")
+    import sqlite3
+
+    from PIL import Image
+
+    real_db = ctx.get("real_db")
+    if not real_db or not Path(real_db).exists():
+        raise Warn("no live DB found to sample your own receipts from")
+    try:
+        con = sqlite3.connect(f"file:{real_db}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        rows = con.execute("SELECT filepath, metadata FROM receipts").fetchall()
+        con.close()
+    except Exception as e:  # noqa: BLE001
+        raise Warn(f"couldn't read live DB read-only: {str(e)[:90]}")
+
+    # Only real photographed receipts — exclude Uber rides (CSV/Gmail imports,
+    # often PDFs with no receipt image) and any non-image file.
+    img_ext = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tiff", ".bmp"}
+    pool = []
+    for r in rows:
+        try:
+            m = json.loads(r["metadata"] or "{}")
+        except Exception:  # noqa: BLE001
+            continue
+        total, fp = m.get("total_amount"), r["filepath"]
+        if not (total and fp) or (m.get("currency") or "").upper() != "BRL":
+            continue
+        p = Path(fp)
+        if p.name.lower().startswith("uber_") or p.suffix.lower() not in img_ext:
+            continue
+        if p.exists():
+            pool.append((fp, float(total)))
+    if not pool:
+        raise Warn("no BRL image receipts with a total in your live data/")
+
+    # Many of your BRL receipts are HEIC (iPhone) — register the opener so
+    # they're not silently skipped (which would empty the sample).
+    try:
+        import pillow_heif
+
+        pillow_heif.register_heif_opener()
+    except Exception:  # noqa: BLE001
+        pass
+
+    sample = random.Random(ctx["seed"]).sample(pool, min(ctx["corpus_n"], len(pool)))
+    pairs = []
+    for fp, gt in sample:
+        try:
+            pairs.append((Image.open(fp), gt))
+        except Exception:  # noqa: BLE001
+            continue
+    if not pairs:
+        raise Warn("sampled receipts couldn't be opened (unsupported format?)")
+    return _score_pairs(ctx, "own-pt", pairs)
 
 
 def _print_scoreboard_trend():
     if not SCOREBOARD.exists():
         return
     try:
-        lines = SCOREBOARD.read_text(encoding="utf-8").strip().splitlines()[-5:]
-        recs = [json.loads(x) for x in lines]
+        recs = [
+            json.loads(x) for x in SCOREBOARD.read_text(encoding="utf-8").splitlines() if x.strip()
+        ]
     except Exception:  # noqa: BLE001
         return
-    if not recs:
-        return
-    print("\n  CORD total-accuracy trend (last 5 runs)")
-    print("  " + "─" * 64)
+    by_corpus: dict = {}
     for r in recs:
-        print(
-            f"    {r.get('ts', '?'):<20} {r.get('text_model', '?'):<14} "
-            f"{r.get('correct', 0)}/{r.get('n', 0)}  {r.get('accuracy', 0):.0%}"
-        )
+        by_corpus.setdefault(r.get("corpus", "?"), []).append(r)
+    if not by_corpus:
+        return
+    print("\n  Total-accuracy trend (last 3 runs per corpus)")
+    print("  " + "─" * 64)
+    for corpus, rs in by_corpus.items():
+        for r in rs[-3:]:
+            print(
+                f"    [{corpus:<8}] {r.get('ts', '?'):<20} {r.get('text_model', '?'):<13} "
+                f"{r.get('correct', 0)}/{r.get('n', 0)}  {r.get('accuracy', 0):.0%}"
+            )
 
 
 # ─── runner ──────────────────────────────────────────────────────────────────
@@ -621,7 +711,7 @@ def main():
         "--corpus-seed",
         type=int,
         default=None,
-        help="fix the CORD sample for a reproducible A/B (default: random each run)",
+        help="fix the corpus sample for a reproducible A/B (default: random each run)",
     )
     args = ap.parse_args()
 
@@ -634,13 +724,18 @@ def main():
     # to use (the persisted picker choice), so the corpus measures reality —
     # not a hardcoded 3b that may be far weaker than what you run.
     text_model = args.text_model
-    if text_model is None:
-        try:
-            from src.services.ocr_settings import effective_text_model
+    real_db = None
+    try:
+        from src.services.ocr_settings import effective_text_model
+        from src.config import settings as _real
 
+        # Capture the live DB path BEFORE build_client repoints it to the
+        # sandbox — the PT corpus reads your real receipts (read-only).
+        real_db = str(Path(_real.db_path).resolve())
+        if text_model is None:
             text_model = effective_text_model()
-        except Exception:  # noqa: BLE001
-            text_model = "llama3.2:3b"
+    except Exception:  # noqa: BLE001
+        text_model = text_model or "llama3.2:3b"
 
     tmp = Path(tempfile.mkdtemp(prefix="rt_qa_"))
     print(f"QA harness · ocr={args.ocr} · text_model={text_model} · sandbox={tmp}")
@@ -656,6 +751,7 @@ def main():
             if args.corpus_seed is not None
             else random.randint(0, 1_000_000),  # fixed → reproducible A/B; else fresh
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "real_db": real_db,
         }
         max_runs = 5 if args.until_clean else max(1, args.loops)
         for i in range(1, max_runs + 1):

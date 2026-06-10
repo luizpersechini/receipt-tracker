@@ -320,12 +320,20 @@ class ParsedUberEmail:
 
 
 _AMOUNT_PATTERNS = [
-    # "Total $32.29", "Total: R$ 41,78", "Total CA$ 12.34"
+    # "Total $32.29", "Total: R$ 41,78", "Total CA$ 12.34". The leading \b
+    # keeps "Subtotal" from matching as "…total" — subtotals print BEFORE the
+    # total in Uber templates and used to win.
     re.compile(
-        r"(?:total|amount)\s*[:\-]?\s*([A-Z]{0,3}\$|R\$|€|£|¥|CA\$|US\$)?\s*([0-9][0-9.,]*)",
+        r"\b(?:total|amount)\b\s*[:\-]?\s*([A-Z]{0,3}\$|R\$|€|£|¥|CA\$|US\$)?\s*([0-9][0-9.,]*)",
         re.IGNORECASE,
     ),
 ]
+
+# Lines that look like totals but are credits — importing a refund email as a
+# positive expense double-bills the user.
+_REFUND_LINE = re.compile(
+    r"\b(refund|reembolso|estorno|devolu[çc][ãa]o|credited?)\b", re.IGNORECASE
+)
 
 _CURRENCY_SYMBOL_MAP = {
     "$": "USD",
@@ -346,9 +354,20 @@ def _parse_amount_str(s: str) -> Optional[float]:
 
 
 def _extract_total(text: str) -> tuple[Optional[float], Optional[str]]:
-    """Return (amount, currency) — currency may be None."""
+    """Return (amount, currency) — currency may be None.
+
+    Scans the whole text (label and amount can sit on different lines after
+    HTML table extraction — \\s* in the pattern crosses the newline), but a
+    match whose surrounding lines mention refund/estorno is skipped: that
+    "total" is money coming BACK, not an expense."""
     for pat in _AMOUNT_PATTERNS:
         for m in pat.finditer(text):
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            line_end = text.find("\n", m.end())
+            if line_end == -1:
+                line_end = len(text)
+            if _REFUND_LINE.search(text[line_start:line_end]):
+                continue
             sym = (m.group(1) or "").lower().strip()
             amt = _parse_amount_str(m.group(2))
             if amt is None:
@@ -478,13 +497,18 @@ def _extract_date_from_subject(subject: Optional[str]) -> Optional[str]:
 
 
 def _extract_date_from_header(date_header: Optional[str]) -> Optional[str]:
-    """Parse RFC 2822 Date header into YYYY-MM-DD."""
+    """Parse RFC 2822 Date header into YYYY-MM-DD, in the USER'S timezone.
+    The header carries the sender's offset (Uber sends UTC) — formatting it
+    raw dates a late-night local ride to the next day, which then breaks the
+    same-date cross-source dedup against the CSV row."""
     if not date_header:
         return None
     from email.utils import parsedate_to_datetime
 
     try:
         dt = parsedate_to_datetime(date_header)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()  # local timezone
         return dt.strftime("%Y-%m-%d")
     except (TypeError, ValueError):
         return None
@@ -1031,7 +1055,16 @@ def reset_processed_label(only_unimported: bool = True) -> dict:
                 html=html,
                 plain=plain,
             )
-            if parsed.trip_id and db.get_receipt_by_filename(parsed.synthetic_filename()):
+            # Imported rows may carry .pdf (rendered email), .eml (legacy) or
+            # .csv (CSV import sharing the trip id) filenames — and gm-
+            # fallback ids have no trip_id but still produce filenames. The
+            # old `.eml`-only + trip_id-required check unlabeled successfully
+            # imported messages, churning them through every future sync.
+            imported = any(
+                db.get_receipt_by_filename(parsed.synthetic_filename(ext))
+                for ext in (".pdf", ".eml", ".csv")
+            )
+            if imported:
                 kept += 1
                 continue
         try:

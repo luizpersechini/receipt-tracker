@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import shutil
 from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -20,6 +19,7 @@ from ..schemas.receipts import (
 from ..services import review_queue
 from ..services.llm_processor import ocr_crops, process_with_segments
 from ..services.receipt_segmenter import segment_with_boxes
+from ..services.uploads import safe_name, save_upload
 
 router = APIRouter(prefix="/api", tags=["receipts"])
 logger = logging.getLogger(__name__)
@@ -63,10 +63,9 @@ async def upload_receipt_preview(
 
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"receipt_{timestamp}_{file.filename}"
+        filename = f"receipt_{timestamp}_{safe_name(file.filename)}"
         filepath = settings.receipts_dir / filename
-        with open(filepath, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
+        await save_upload(file, filepath)
 
         # ── PDF path: rasterise → segment each page → queue EVERY page for
         # box review (no OCR yet). The frontend opens the editor per page so
@@ -147,6 +146,8 @@ async def upload_receipt_preview(
                 "forced_single": single,
             }
         )
+    except HTTPException:
+        raise  # e.g. 413 from save_upload — don't flatten to 500
     except Exception as e:
         logger.exception("upload_receipt_preview failed")
         raise HTTPException(status_code=500, detail=str(e))
@@ -179,7 +180,13 @@ async def commit_boxes_to_receipts(filename: str, bboxes: list, description=None
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     try:
-        pil = await asyncio.to_thread(lambda: Image.open(filepath).convert("RGB"))
+        # Same orientation rules as the segmenter/_open_as_rgb: the boxes
+        # were drawn on the EXIF-rotated image the browser displayed.
+        from PIL import ImageOps
+
+        pil = await asyncio.to_thread(
+            lambda: ImageOps.exif_transpose(Image.open(filepath)).convert("RGB")
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not open image: {e}")
 
@@ -242,11 +249,9 @@ async def upload_receipt_commit(body: ReceiptCommitRequest):
 async def upload_receipt(file: UploadFile = File(...), description: str = Form(None)):
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"receipt_{timestamp}_{file.filename}"
+        filename = f"receipt_{timestamp}_{safe_name(file.filename)}"
         filepath = settings.receipts_dir / filename
-
-        with open(filepath, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
+        await save_upload(file, filepath)
 
         async with _ocr_semaphore:
             items = await asyncio.to_thread(process_with_segments, str(filepath))
@@ -316,6 +321,8 @@ async def upload_receipt(file: UploadFile = File(...), description: str = Form(N
                 "metadata": saved[0]["metadata"],
             }
         )
+    except HTTPException:
+        raise  # e.g. 413 from save_upload — don't flatten to 500
     except Exception as e:
         logger.exception("upload_receipt failed")
         raise HTTPException(status_code=500, detail=str(e))
@@ -732,22 +739,31 @@ async def dedupe_all(dry_run: bool = False):
 
             # Sort descending by amount, then by id ascending — keeper is row[0]
             rows.sort(key=lambda x: (-x["amount"], x["id"] or 0))
-            keeper = rows[0]
+            kept_rows = [rows[0]]
+            removed_here: list = []
 
             for victim in rows[1:]:
+                # Compare against the nearest larger KEPT row, not just the
+                # single max keeper — otherwise equal-amount duplicates at
+                # lower amounts in the same group survive.
+                ref = kept_rows[-1]
                 # Pattern 1: same amount within a cent
-                if abs(victim["amount"] - keeper["amount"]) <= 0.01:
-                    to_remove.append(victim["id"])
+                if abs(victim["amount"] - ref["amount"]) <= 0.01:
+                    removed_here.append(victim["id"])
                     continue
-                # Pattern 2: tip-pair. Victim must be 70–95% of keeper's amount.
-                ratio = victim["amount"] / keeper["amount"] if keeper["amount"] else 0
+                # Pattern 2: tip-pair. Victim must be 70–95% of the kept amount.
+                ratio = victim["amount"] / ref["amount"] if ref["amount"] else 0
                 if 0.70 <= ratio <= 0.95:
-                    to_remove.append(victim["id"])
+                    removed_here.append(victim["id"])
                     continue
                 # Otherwise leave it — likely a legitimate second visit same day.
+                kept_rows.append(victim)
 
-            if to_remove:
+            if removed_here:
+                # Count only groups that actually contributed removals (the
+                # old check tested the GLOBAL list, inflating the count).
                 groups_with_dupes += 1
+                to_remove.extend(removed_here)
 
         if not dry_run:
             for rid in to_remove:
@@ -788,11 +804,15 @@ async def bulk_delete(body: BulkDeleteRequest):
 @router.patch("/receipts/{receipt_id}/expense-type")
 async def set_expense_type(receipt_id: int, body: ExpenseTypeUpdate):
     try:
-        await asyncio.to_thread(db.update_receipt_expense_type, receipt_id, body.expense_type)
-        return JSONResponse({"success": True, "expense_type": body.expense_type})
+        changed = await asyncio.to_thread(
+            db.update_receipt_expense_type, receipt_id, body.expense_type
+        )
     except Exception as e:
         logger.exception("update expense_type failed")
         raise HTTPException(status_code=500, detail=str(e))
+    if not changed:
+        raise HTTPException(status_code=404, detail=f"Receipt {receipt_id} not found")
+    return JSONResponse({"success": True, "expense_type": body.expense_type})
 
 
 @router.patch("/receipts/{receipt_id}")

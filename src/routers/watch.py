@@ -22,12 +22,13 @@ _scan_lock = asyncio.Lock()
 async def watch_folder_status():
     inbox = await asyncio.to_thread(resolve_inbox)
     pending = await asyncio.to_thread(count_pending)
+    last = await asyncio.to_thread(get_watch_log, 10)
     return JSONResponse(
         {
             "enabled": True,
             "folder": str(inbox),
             "pending": pending,
-            "last_processed": get_watch_log(10),
+            "last_processed": last,
         }
     )
 

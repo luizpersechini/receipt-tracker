@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import shutil
 from datetime import datetime
 from typing import Optional
 
@@ -12,6 +11,7 @@ from fastapi.responses import JSONResponse
 from ..config import settings
 from ..db import database as db
 from ..services.uber_csv import is_uber_csv, parse_uber_csv
+from ..services.uploads import safe_name, save_upload
 
 router = APIRouter(prefix="/api", tags=["uber"])
 logger = logging.getLogger(__name__)
@@ -41,12 +41,12 @@ async def upload_uber_csv(
     try:
         # Persist the file so we can parse it from disk
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"uber_{timestamp}_{file.filename}"
+        filename = f"uber_{timestamp}_{safe_name(file.filename)}"
         filepath = settings.statements_dir / filename
-        with open(filepath, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
+        await save_upload(file, filepath)
 
         if not await asyncio.to_thread(is_uber_csv, str(filepath)):
+            filepath.unlink(missing_ok=True)  # don't leave rejected files behind
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -65,6 +65,7 @@ async def upload_uber_csv(
     except HTTPException:
         raise
     except ValueError as e:
+        filepath.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("upload_uber_csv failed")

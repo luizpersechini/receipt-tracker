@@ -53,3 +53,37 @@ def test_stores_are_independent(data_dir):
     assert statement_costcenters.get_cost_center(9, 0) == "20101/AA1"
     assert (data_dir / "statement_labels.json").exists()
     assert (data_dir / "statement_costcenters.json").exists()
+
+
+def test_build_index_mapping_reorder_and_drop():
+    from src.services.statement_parser import build_index_mapping
+
+    old = [
+        {"date": "2026-01-05", "amount": 10.0, "description": "A"},
+        {"date": "2026-01-06", "amount": 20.0, "description": "B"},
+        {"date": "2026-01-07", "amount": 30.0, "description": "C"},
+    ]
+    # Parser fix reorders B before A and drops C.
+    new = [old[1], old[0]]
+    m = build_index_mapping(old, new)
+    assert m == {0: 1, 1: 0}  # C (index 2) unmappable → absent
+
+
+def test_build_index_mapping_duplicates_pair_in_order():
+    from src.services.statement_parser import build_index_mapping
+
+    dup = {"date": "2026-01-05", "amount": 10.0, "description": "UBER"}
+    m = build_index_mapping([dup, dict(dup)], [dict(dup), dict(dup)])
+    assert m == {0: 0, 1: 1}
+
+
+def test_remap_statement_rekeys_and_drops(tmp_path, monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    from src.services import statement_notes
+
+    statement_notes.set_note(7, 0, "first")
+    statement_notes.set_note(7, 2, "third")
+    statement_notes.remap_statement(7, {0: 1})  # row 0 → 1, row 2 vanished
+    assert statement_notes.get_notes(7) == {1: "first"}

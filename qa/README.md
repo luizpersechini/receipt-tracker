@@ -14,13 +14,13 @@ python qa/run_qa.py --loops 3      # run the battery 3×
 python qa/run_qa.py --until-clean  # loop until a fully green run (cap 5)
 python qa/run_qa.py --keep         # keep the temp sandbox for inspection
 python qa/run_qa.py --report qa/last.json   # also dump JSON results
-python qa/run_qa.py --corpus 8 --corpus-seed 7   # 8 CORD receipts, FIXED sample (reproducible A/B)
+python qa/run_qa.py --corpus 8 --corpus-seed 7   # 8 receipts/corpus, FIXED sample (reproducible A/B)
 python qa/run_qa.py --text-model llama3.1:8b     # force a specific structuring model
 ```
 
 The structuring model defaults to your **configured effective model** (the
 persisted picker choice), so the corpus measures what your app actually runs.
-`--corpus-seed N` pins the random CORD sample so you can compare a before/after
+`--corpus-seed N` pins the random sample so you can compare a before/after
 algo change on the _same_ receipts; omit it for a fresh sample each run.
 
 Exit code is `0` when every check passes (warnings allowed), `1` otherwise —
@@ -40,24 +40,29 @@ fast gate; `--ocr real` additionally exercises the OCR/structuring pipeline.
 | matching                   | `POST /match` runs without error; `/stats` shape                                       |
 | review queue               | PDF preview queues pages → commit drains the item                                      |
 | report                     | expense report generates (warns, not fails, if FX/network is offline)                  |
-| real corpus (CORD)         | random real receipts from the CORD dataset, OCR'd + scored vs ground-truth totals      |
+| corpus EN (SROIE)          | random real English receipts (SROIE), OCR'd + scored vs ground-truth totals            |
+| corpus PT (your own)       | random real BRL image receipts from your data/, re-OCR'd + scored vs the stored total  |
 
-### Real-corpus accuracy step (CORD)
+### Real-corpus accuracy steps (Portuguese + English)
 
-Each run pulls a **fresh random sample** of real receipt photos from the
-[CORD dataset](https://huggingface.co/datasets/naver-clova-ix/cord-v2)
-(HuggingFace, CC BY 4.0 — images + ground-truth totals), OCRs them through the
-real pipeline, and **scores total-amount accuracy** against ground truth.
-Results append to `qa/corpus_scoreboard.jsonl` (gitignored) and the last 5
-runs' accuracy print as a trend, so you can see whether an algo change moves
-the number — the "test and improve" loop.
+Focused on the receipts this app actually sees. Each run scores total-amount
+accuracy and appends to `qa/corpus_scoreboard.jsonl` (gitignored); the last 3
+runs per corpus print as a trend — the "test and improve" loop.
 
-- Needs `datasets` + network: `uv pip install --python .venv/bin/python datasets`.
-- Real OCR only (mock can't read totals). Controlled by `--corpus N`
-  (default 3, `--no-corpus` to skip). Warns (never hard-fails) if `datasets`
-  is missing, HF is unreachable, or the sample is just hard.
-- CORD is Indonesian (IDR), so it stress-tests locale/number handling beyond
-  the user's BRL/CAD receipts.
+- **EN — SROIE** ([mp-02/sroie](https://huggingface.co/datasets/mp-02/sroie)):
+  a fresh random sample of real English receipts; ground-truth total comes
+  from the `S-TOTAL` NER tag. SROIE images are small (512px tall), so they're
+  upscaled before OCR — expect noisier scores than PT.
+- **PT — your own receipts:** a random sample of your real **BRL image**
+  receipts (Uber rides and non-image files excluded), read-only from the live
+  DB, re-OCR'd and scored against the **stored** total. For receipts you've
+  corrected this is true ground truth; for the rest it's a regression signal
+  (a drop means a change broke something). HEIC (iPhone) receipts included.
+
+Both need real OCR (`--ocr real`); EN also needs `datasets` + network
+(`uv pip install --python .venv/bin/python datasets`). `--corpus N` sets the
+sample size per corpus (default 3, `--no-corpus` to skip). Warn (never
+hard-fail) when a source is unavailable or a sample is just hard.
 
 Checks raise `Warn` (non-fatal, shown as `!`) for variance-prone outcomes
 (e.g. real OCR recovered no total, segmenter over-merged a 2-receipt image,

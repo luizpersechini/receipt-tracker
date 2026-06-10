@@ -120,3 +120,32 @@ def test_delete_statement_keeps_receipts_matched_elsewhere(client):
 
     r = db.get_receipt_by_id(rid)
     assert r["match_status"] == "matched"  # still matched on sid2
+
+
+def test_delete_receipt_removes_unreferenced_file(client):
+    _, db = client
+    f = settings.receipts_dir / "r1.jpg"
+    f.write_bytes(b"x")
+    rid = db.save_receipt("r1.jpg", str(f), {}, "")
+    db.delete_receipt(rid)
+    assert not f.exists()
+
+
+def test_delete_receipt_keeps_file_shared_by_other_rows(client):
+    _, db = client
+    f = settings.receipts_dir / "page.png"
+    f.write_bytes(b"x")
+    r1 = db.save_receipt("page_seg1.png", str(f), {}, "")
+    db.save_receipt("page_seg2.png", str(f), {}, "")
+    db.delete_receipt(r1)
+    assert f.exists()
+
+
+def test_delete_statement_removes_its_file(client):
+    _, db = client
+    (settings.data_dir / "statements").mkdir(parents=True, exist_ok=True)
+    f = settings.data_dir / "statements" / "stmt.csv"
+    f.write_bytes(b"x")
+    sid = db.save_statement("stmt.csv", str(f), [{"amount": "10", "date": "2026-04-01"}])
+    db.delete_statement(sid)
+    assert not f.exists()

@@ -258,12 +258,15 @@ def update_receipt_match_status(receipt_id: int, status: str):
     conn.close()
 
 
-def update_receipt_expense_type(receipt_id: int, expense_type: str):
+def update_receipt_expense_type(receipt_id: int, expense_type: str) -> bool:
+    """Returns False when no such receipt exists (caller 404s)."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE receipts SET expense_type = ? WHERE id = ?", (expense_type, receipt_id))
+    changed = cursor.rowcount > 0
     conn.commit()
     conn.close()
+    return changed
 
 
 def update_receipt(receipt_id: int, column_patch: dict, metadata_patch: dict) -> bool:
@@ -314,10 +317,40 @@ def update_receipt(receipt_id: int, column_patch: dict, metadata_patch: dict) ->
 def delete_receipt(receipt_id: int):
     conn = get_connection()
     cursor = conn.cursor()
+    cursor.execute("SELECT filepath FROM receipts WHERE id = ?", (receipt_id,))
+    row = cursor.fetchone()
+    filepath = row["filepath"] if row else None
     cursor.execute("DELETE FROM matches WHERE receipt_id = ?", (receipt_id,))
     cursor.execute("DELETE FROM receipts WHERE id = ?", (receipt_id,))
     conn.commit()
+
+    # Remove the underlying file once nothing references it — multi-receipt
+    # pages and Uber CSV imports share one file across rows (and statements
+    # reference uploaded files too), so refcount before unlinking.
+    if filepath:
+        cursor.execute("SELECT COUNT(*) FROM receipts WHERE filepath = ?", (filepath,))
+        refs = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM statements WHERE filepath = ?", (filepath,))
+        refs += cursor.fetchone()[0]
+        if refs == 0:
+            _unlink_data_file(filepath)
     conn.close()
+
+
+def _unlink_data_file(filepath: str) -> None:
+    """Best-effort unlink, restricted to the app's own data dir."""
+    import os
+    from pathlib import Path
+
+    from ..config import settings
+
+    roots = (settings.data_dir, settings.receipts_dir, settings.statements_dir)
+    try:
+        p = Path(filepath).resolve()
+        if p.is_file() and any(p.is_relative_to(r.resolve()) for r in roots):
+            os.remove(p)
+    except OSError:
+        pass
 
 
 # Statements
@@ -358,6 +391,9 @@ def get_all_statements() -> list:
 def delete_statement(statement_id: int):
     conn = get_connection()
     cursor = conn.cursor()
+    cursor.execute("SELECT filepath FROM statements WHERE id = ?", (statement_id,))
+    row = cursor.fetchone()
+    stmt_filepath = row["filepath"] if row else None
     # Deleting the matches must also release their receipts — otherwise they
     # stay 'matched' with no match row and vanish from the default (active)
     # receipts view.
@@ -372,6 +408,16 @@ def delete_statement(statement_id: int):
             cursor.execute("UPDATE receipts SET match_status = 'pending' WHERE id = ?", (rid,))
     cursor.execute("DELETE FROM statements WHERE id = ?", (statement_id,))
     conn.commit()
+
+    # Remove the statement file unless other rows still reference it (Uber
+    # CSV receipt rows point at files in statements_dir too).
+    if stmt_filepath:
+        cursor.execute("SELECT COUNT(*) FROM receipts WHERE filepath = ?", (stmt_filepath,))
+        refs = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM statements WHERE filepath = ?", (stmt_filepath,))
+        refs += cursor.fetchone()[0]
+        if refs == 0:
+            _unlink_data_file(stmt_filepath)
     conn.close()
 
 
@@ -519,6 +565,46 @@ def get_statement_by_id(statement_id: int) -> Optional[dict]:
     return s
 
 
+def remap_matches_for_statement(statement_id: int, mapping: dict) -> dict:
+    """After a reparse changed row order/count, re-key this statement's
+    matches through `mapping` (old transaction_index → new). Matches whose
+    old index has no content-identical new row are deleted and their
+    receipts released back to 'pending' (unless matched elsewhere).
+    Legacy matches with a NULL index are left untouched."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, receipt_id, transaction_index FROM matches WHERE statement_id = ?",
+        (statement_id,),
+    )
+    rows = cursor.fetchall()
+    kept = dropped = 0
+    dropped_receipts: list = []
+    for row in rows:
+        old_idx = row["transaction_index"]
+        if old_idx is None:
+            continue
+        if int(old_idx) in mapping:
+            cursor.execute(
+                "UPDATE matches SET transaction_index = ? WHERE id = ?",
+                (mapping[int(old_idx)], row["id"]),
+            )
+            kept += 1
+        else:
+            cursor.execute("DELETE FROM matches WHERE id = ?", (row["id"],))
+            dropped += 1
+            dropped_receipts.append(row["receipt_id"])
+    released = 0
+    for rid in set(dropped_receipts):
+        cursor.execute("SELECT COUNT(*) FROM matches WHERE receipt_id = ?", (rid,))
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("UPDATE receipts SET match_status = 'pending' WHERE id = ?", (rid,))
+            released += 1
+    conn.commit()
+    conn.close()
+    return {"matches_kept": kept, "matches_dropped": dropped, "receipts_released": released}
+
+
 def clear_matches_for_statement(statement_id: int):
     conn = get_connection()
     cursor = conn.cursor()
@@ -655,12 +741,24 @@ def get_statistics() -> dict:
     total_matches = cursor.fetchone()["count"]
 
     cursor.execute("SELECT metadata FROM receipts")
-    total_amount = 0.0
+    # Per-currency sums — adding USD to BRL numerically (the old behaviour)
+    # produced a number that meant nothing. `total_receipt_amount` stays for
+    # back-compat but is now the BRL-only sum.
+    amounts_by_currency: dict = {}
     for row in cursor.fetchall():
-        meta = json.loads(row["metadata"] or "{}")
+        try:
+            meta = json.loads(row["metadata"] or "{}")
+        except json.JSONDecodeError:
+            continue
         amt = meta.get("total_amount")
-        if amt:
-            total_amount += float(amt)
+        if not amt:
+            continue
+        cur = (meta.get("currency") or "BRL").upper()
+        try:
+            amounts_by_currency[cur] = amounts_by_currency.get(cur, 0.0) + float(amt)
+        except (TypeError, ValueError):
+            continue
+    total_amount = amounts_by_currency.get("BRL", 0.0)
 
     conn.close()
     return {
@@ -673,4 +771,5 @@ def get_statistics() -> dict:
         "total_statements": total_statements,
         "total_matches": total_matches,
         "total_receipt_amount": total_amount,
+        "amounts_by_currency": amounts_by_currency,
     }

@@ -133,8 +133,12 @@ def test_commit_without_boxes_400(client):
     from src.services import review_queue
 
     it = review_queue.add(filename="p.png", image_w=1, image_h=1, bboxes=[])
+    # Pydantic now rejects an empty/malformed bbox list at the validation
+    # layer (422) instead of the old hand-rolled 400.
     r = c.post(f"/api/review-queue/{it['id']}/commit", json={"bboxes": []})
-    assert r.status_code == 400
+    assert r.status_code == 422
+    r = c.post(f"/api/review-queue/{it['id']}/commit", json={"bboxes": [{"x": "nope"}]})
+    assert r.status_code == 422
     # Item stays queued — nothing was committed.
     assert review_queue.get(it["id"]) is not None
 

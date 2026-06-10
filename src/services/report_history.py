@@ -22,6 +22,10 @@ from .json_store import locked, write_json
 
 logger = logging.getLogger(__name__)
 
+# Every report download appends a record + a PDF copy; without a cap the
+# reports dir grows forever. Oldest records (and their files) get pruned.
+MAX_HISTORY = 100
+
 
 def _dir() -> Path:
     d = settings.reports_dir
@@ -97,6 +101,12 @@ def record(
         "download_name": download_name or fname,
     }
     records.insert(0, rec)  # newest first
+    for old in records[MAX_HISTORY:]:
+        try:
+            (_dir() / old["file"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+    records = records[:MAX_HISTORY]
     _write(records)
     logger.info("report history: saved #%d (%s, %d bytes)", next_id, kind, len(pdf_bytes))
     return rec

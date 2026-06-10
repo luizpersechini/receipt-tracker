@@ -83,10 +83,22 @@ def _append_log(entry: dict):
 
 
 def get_watch_log(n: int = 10) -> list:
-    """Return the last `n` log entries (newest first)."""
-    if not settings.watch_log_path.exists():
+    """Return the last `n` log entries (newest first). Reads only the file's
+    tail — the JSONL log grows forever and used to be slurped whole on every
+    status poll."""
+    path = settings.watch_log_path
+    if not path.exists():
         return []
-    lines = settings.watch_log_path.read_text(encoding="utf-8").splitlines()
+    tail_bytes = 64 * 1024
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - tail_bytes))
+        chunk = f.read()
+    text = chunk.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if size > tail_bytes and lines:
+        lines = lines[1:]  # drop the (probably truncated) first line
     entries: list = []
     for line in reversed(lines):
         line = line.strip()

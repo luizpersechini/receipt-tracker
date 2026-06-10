@@ -412,17 +412,36 @@ def _receipt_meta_from_match(m: dict) -> dict:
 # ─── HTML rendering ─────────────────────────────────────────────────────────
 
 
+def _fmt_total_parts(grand_totals: dict) -> str:
+    """'1.234,56' for a plain BRL report; 'R$ 30,00 · CAD 8,00' when the
+    report spans currencies (or a single non-BRL currency)."""
+    if set(grand_totals) == {"BRL"}:
+        return _fmt_brl(grand_totals["BRL"])
+    parts = []
+    for cur in sorted(grand_totals):
+        prefix = "R$" if cur == "BRL" else cur
+        parts.append(f"{prefix} {_fmt_brl(grand_totals[cur])}")
+    return " · ".join(parts)
+
+
 def _front_page_html(data: dict, profile: dict) -> str:
     rows = data["rows"]
     iof = data["iof"]
 
-    # Column totals + grand total.
-    col_totals = {c: 0.0 for c in _COLS}
+    # Column totals + grand total, PER CURRENCY. Unfiltered reimbursement
+    # reports can mix currencies (CAD 8 + BRL 30) and a single summed number
+    # printed a lie. Statement rows carry no currency → BRL.
+    col_totals_by_cur: dict = {}
     for r in rows:
-        col_totals[r["col"]] += r["amount"]
-    if iof:
-        col_totals["outros"] += iof
-    grand_total = sum(col_totals.values())
+        cur = (r.get("currency") or "BRL").upper()
+        bucket = col_totals_by_cur.setdefault(cur, {c: 0.0 for c in _COLS})
+        bucket[r["col"]] += r["amount"]
+    if iof:  # IOF is always billed in BRL
+        col_totals_by_cur.setdefault("BRL", {c: 0.0 for c in _COLS})["outros"] += iof
+    if not col_totals_by_cur:
+        col_totals_by_cur["BRL"] = {c: 0.0 for c in _COLS}
+    multi_currency = len(col_totals_by_cur) > 1
+    grand_totals = {cur: sum(ct.values()) for cur, ct in col_totals_by_cur.items()}
 
     default_conta = profile.get("conta_contabil") or ""
     default_cc = profile.get("centro_custo") or profile.get("cost_center") or ""
@@ -476,13 +495,18 @@ def _front_page_html(data: dict, profile: dict) -> str:
     for _ in range(2):
         body_rows.append(f'<tr class="blank">{blank_cells}</tr>')
 
-    total_row = (
-        '<tr class="grand">'
-        '<td colspan="4" class="totlbl">TOTAL</td>'
-        + "".join(f'<td class="num">{_fmt_brl(col_totals[c])}</td>' for c in _COLS)
-        + f'<td class="num tot">{_fmt_brl(grand_total)}</td>'
-        + "</tr>"
-    )
+    total_row_parts = []
+    for cur in sorted(col_totals_by_cur):
+        ct = col_totals_by_cur[cur]
+        label = "TOTAL" if (not multi_currency and cur == "BRL") else f"TOTAL ({cur})"
+        total_row_parts.append(
+            '<tr class="grand">'
+            f'<td colspan="4" class="totlbl">{escape(label)}</td>'
+            + "".join(f'<td class="num">{_fmt_brl(ct[c])}</td>' for c in _COLS)
+            + f'<td class="num tot">{_fmt_brl(grand_totals[cur])}</td>'
+            + "</tr>"
+        )
+    total_row = "".join(total_row_parts)
 
     logo = _logo_data_uri()
     logo_html = (
@@ -529,7 +553,7 @@ def _front_page_html(data: dict, profile: dict) -> str:
             <div><span>CPF / RG:</span><u>{escape(profile.get("cpf_rg") or "")}</u></div>
           </td>
           <td class="pay">
-            <div><span>Valor total</span><u>{_fmt_brl(grand_total)}</u></div>
+            <div><span>Valor total</span><u>{escape(_fmt_total_parts(grand_totals))}</u></div>
           </td>
         </tr>
       </table>
@@ -915,6 +939,7 @@ def _assemble_reimbursement(receipts: list) -> dict[str, Any]:
                 "cost_center": "",
                 "col": col,
                 "amount": amount,
+                "currency": (meta.get("currency") or "BRL").upper(),
                 "matched": True,  # reimbursement rows always have a receipt
             }
         )

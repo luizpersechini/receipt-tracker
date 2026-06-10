@@ -139,6 +139,31 @@ def _parse_simple_csv(filepath: str) -> list:
     return transactions
 
 
+def build_index_mapping(old_txns: list, new_txns: list) -> dict:
+    """Map old transaction indices to new ones after a reparse, matching rows
+    by content (date, rounded amount, description). Duplicate rows pair off
+    in order; old rows with no content-identical new row are absent from the
+    mapping (their matches/overrides get dropped rather than silently
+    re-anchored to a different charge)."""
+
+    def key(t: dict):
+        try:
+            amt = round(float(t.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            amt = 0.0
+        return (t.get("date"), amt, (t.get("description") or "").strip())
+
+    new_by_key: dict = {}
+    for j, t in enumerate(new_txns or []):
+        new_by_key.setdefault(key(t), []).append(j)
+    mapping: dict = {}
+    for i, t in enumerate(old_txns or []):
+        candidates = new_by_key.get(key(t))
+        if candidates:
+            mapping[i] = candidates.pop(0)
+    return mapping
+
+
 def detect_csv_format(filepath: str) -> dict:
     try:
         with open(filepath, "r", encoding="utf-8") as f:

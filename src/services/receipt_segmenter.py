@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import List
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 logger = logging.getLogger(__name__)
 
@@ -413,6 +413,11 @@ def _text_cluster_boxes(image_path: str, image_size: tuple) -> list:
 
 def _open_as_rgb(image_path: str) -> Image.Image:
     img = Image.open(image_path)
+    # Apply the EXIF orientation FIRST: browsers display the rotated image
+    # (image-orientation: from-image), so segmentation boxes and image_size
+    # must be computed on the same orientation or portrait phone photos get
+    # boxes drawn/cropped against sideways pixels.
+    img = ImageOps.exif_transpose(img)
     if img.mode != "RGB":
         img = img.convert("RGB")
     return img

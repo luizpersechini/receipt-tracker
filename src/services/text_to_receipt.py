@@ -183,15 +183,21 @@ def structure_text_as_receipt(text: str, *, model: Optional[str] = None) -> dict
     raw = re.sub(r"^```[a-z]*\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw)
 
-    # Most models honour format=json, but be defensive about trailing text
+    # Most models honour format=json, but be defensive about trailing text —
+    # and about valid-but-non-object JSON (a bare list/string would crash the
+    # caller's `raw["ocr_text"] = ...`, killing every other segment on the page).
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
     except json.JSONDecodeError:
         # Find the outermost {...} block in the response
         start, end = raw.find("{"), raw.rfind("}") + 1
         if start != -1 and end > start:
             try:
-                return json.loads(raw[start:end])
+                parsed = json.loads(raw[start:end])
+                if isinstance(parsed, dict):
+                    return parsed
             except json.JSONDecodeError:
                 pass
     return {"error": f"JSON parse failed. Raw: {raw[:300]}"}

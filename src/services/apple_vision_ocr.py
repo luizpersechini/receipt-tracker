@@ -59,6 +59,7 @@ def is_available() -> bool:
     _AVAILABILITY_CHECKED = True
     try:
         from Vision import VNRecognizeTextRequest, VNImageRequestHandler  # noqa: F401
+
         _AVAILABLE = True
     except Exception as e:
         _AVAILABILITY_ERROR = f"{type(e).__name__}: {e}"
@@ -75,8 +76,13 @@ def unavailability_reason() -> Optional[str]:
 
 # ─── Core OCR ──────────────────────────────────────────────────────────────
 
-def extract_text_from_file(image_path: str, *, level: int = RECOGNITION_LEVEL_ACCURATE,
-                           languages: Optional[List[str]] = None) -> str:
+
+def extract_text_from_file(
+    image_path: str,
+    *,
+    level: int = RECOGNITION_LEVEL_ACCURATE,
+    languages: Optional[List[str]] = None,
+) -> str:
     """
     Run Apple Vision OCR on `image_path` and return a single newline-joined
     text blob with one detected line per row. Returns "" if no text is
@@ -91,9 +97,10 @@ def extract_text_from_file(image_path: str, *, level: int = RECOGNITION_LEVEL_AC
             f"Apple Vision OCR not available: {_AVAILABILITY_ERROR or 'unknown reason'}"
         )
 
-    from Foundation import NSURL                          # noqa: E402
-    from Vision import (                                  # noqa: E402
-        VNRecognizeTextRequest, VNImageRequestHandler,
+    from Foundation import NSURL  # noqa: E402
+    from Vision import (  # noqa: E402
+        VNRecognizeTextRequest,
+        VNImageRequestHandler,
     )
 
     url = NSURL.fileURLWithPath_(image_path)
@@ -117,8 +124,12 @@ def extract_text_from_file(image_path: str, *, level: int = RECOGNITION_LEVEL_AC
     return "\n".join(lines)
 
 
-def extract_text_from_pil(img: Image.Image, *, level: int = RECOGNITION_LEVEL_ACCURATE,
-                          languages: Optional[List[str]] = None) -> str:
+def extract_text_from_pil(
+    img: Image.Image,
+    *,
+    level: int = RECOGNITION_LEVEL_ACCURATE,
+    languages: Optional[List[str]] = None,
+) -> str:
     """Same as extract_text_from_file but takes a PIL image. We write to a
     temp PNG because VNImageRequestHandler's CIImage initialiser is tricky
     to feed from raw Python bytes; a 1.5 MB temp PNG is cheap."""
@@ -127,6 +138,9 @@ def extract_text_from_pil(img: Image.Image, *, level: int = RECOGNITION_LEVEL_AC
             f"Apple Vision OCR not available: {_AVAILABILITY_ERROR or 'unknown reason'}"
         )
 
+    from PIL import ImageOps
+
+    img = ImageOps.exif_transpose(img)  # no-op for crops; fixes raw EXIF images
     if img.mode != "RGB":
         img = img.convert("RGB")
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
@@ -141,9 +155,13 @@ def extract_text_from_pil(img: Image.Image, *, level: int = RECOGNITION_LEVEL_AC
             pass
 
 
-def extract_text_boxes_from_file(image_path: str, image_size: tuple,
-                                 *, level: int = RECOGNITION_LEVEL_ACCURATE,
-                                 languages: Optional[List[str]] = None) -> List[dict]:
+def extract_text_boxes_from_file(
+    image_path: str,
+    image_size: tuple,
+    *,
+    level: int = RECOGNITION_LEVEL_ACCURATE,
+    languages: Optional[List[str]] = None,
+) -> List[dict]:
     """
     Run Apple Vision OCR and return one dict per recognised text line with
     both the text AND its bounding box in IMAGE PIXEL coordinates:
@@ -163,9 +181,10 @@ def extract_text_boxes_from_file(image_path: str, image_size: tuple,
             f"Apple Vision OCR not available: {_AVAILABILITY_ERROR or 'unknown reason'}"
         )
 
-    from Foundation import NSURL                          # noqa: E402
-    from Vision import (                                  # noqa: E402
-        VNRecognizeTextRequest, VNImageRequestHandler,
+    from Foundation import NSURL  # noqa: E402
+    from Vision import (  # noqa: E402
+        VNRecognizeTextRequest,
+        VNImageRequestHandler,
     )
 
     img_w, img_h = image_size
@@ -182,7 +201,7 @@ def extract_text_boxes_from_file(image_path: str, image_size: tuple,
         raise RuntimeError(f"Vision request failed: {err}")
 
     items: List[dict] = []
-    for obs in (request.results() or []):
+    for obs in request.results() or []:
         top = obs.topCandidates_(1)
         if top.count() == 0:
             continue
@@ -192,16 +211,18 @@ def extract_text_boxes_from_file(image_path: str, image_size: tuple,
         # Convert to pixel coords with origin at TOP-LEFT.
         bb = obs.boundingBox()
         nx = float(bb.origin.x)
-        ny_bl = float(bb.origin.y)        # y measured from bottom
+        ny_bl = float(bb.origin.y)  # y measured from bottom
         nw = float(bb.size.width)
         nh = float(bb.size.height)
         px = int(nx * img_w)
         py = int((1.0 - ny_bl - nh) * img_h)
         pw = int(nw * img_w)
         ph = int(nh * img_h)
-        items.append({
-            "text": text,
-            "bbox": (px, py, pw, ph),
-            "confidence": confidence,
-        })
+        items.append(
+            {
+                "text": text,
+                "bbox": (px, py, pw, ph),
+                "confidence": confidence,
+            }
+        )
     return items

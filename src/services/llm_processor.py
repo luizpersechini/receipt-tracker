@@ -180,6 +180,9 @@ def _load_image_bytes(image_path: str) -> bytes:
     OCR thrashing — the encoding choice doesn't affect that.
     """
     img = Image.open(image_path)
+    from PIL import ImageOps
+
+    img = ImageOps.exif_transpose(img)  # portrait phone photos arrive sideways otherwise
     if img.mode != "RGB":
         img = img.convert("RGB")
     return _image_to_ocr_bytes(img)
@@ -1106,6 +1109,14 @@ def _normalize_one_receipt(data: dict) -> dict:
     sanity checks. Extracted as its own function so it can be applied per
     element of a multi-receipt response.
     """
+    # The model controls these values: valid JSON can still carry a number
+    # where we expect a string (vendor_name: 123) or a list — and one typed
+    # surprise must not crash the whole page's normalisation.
+    for field in ("vendor_name", "payment_method", "date", "city", "state", "country"):
+        v = data.get(field)
+        if v is not None and not isinstance(v, str):
+            data[field] = str(v)
+
     data["currency"] = _normalize_currency(data.get("currency"))
     # Coerce country to ISO-2 — the model often returns the full name
     # ("Canada", "Brasil", …) despite the prompt asking for ISO-2.
@@ -1284,11 +1295,14 @@ def process_with_segments(image_path: str, *, skip_segmentation: bool = False) -
         else:
             results = _process_via_ollama_vision(segments, is_multi)
 
-        # Drop errored entries when at least one segment succeeded so the
-        # user gets the receipts we DID parse without a phantom error row.
-        non_error = [r for r in results if not r["metadata"].get("error")]
-        if non_error:
-            return non_error
+        # Single-segment images: drop a phantom error row when another entry
+        # succeeded. Multi-receipt pages: an errored segment is a REAL
+        # receipt that failed — keep its error row so the user sees it (and
+        # can re-OCR/edit) instead of the receipt silently vanishing.
+        if not is_multi:
+            non_error = [r for r in results if not r["metadata"].get("error")]
+            if non_error:
+                return non_error
         return results or _fail("No receipts extracted")
 
     except Exception as e:
@@ -1652,7 +1666,11 @@ _TOTAL_NEGATIVE_KEYWORDS = (
 
 # Matches a money-like token: 1234,56 or 1234.56, optionally with thousands
 # separators. The leading char must not be alnum so "id2928" doesn't match.
-_MONEY_RE = re.compile(r"(?<![\w.,])(\d{1,3}(?:[.,\s]\d{3})*[.,]\d{2})(?!\d)")
+_MONEY_RE = re.compile(
+    # Grouped (1.234,56 / 1,234.56 / 1 234,56) OR plain 4+ digits with two
+    # decimals (1234.56) — hotel/flight-sized totals print without grouping.
+    r"(?<![\w.,])(\d{1,3}(?:[.,\s]\d{3})*[.,]\d{2}|\d{4,}[.,]\d{2})(?!\d)"
+)
 
 
 def _parse_money_token(token: str) -> Optional[float]:
