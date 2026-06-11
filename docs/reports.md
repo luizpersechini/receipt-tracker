@@ -58,10 +58,13 @@ A single self-contained PDF mirroring the Atlantic Nickel
   negative amount and an `(estorno / crédito)` marker instead of the
   justification blank — a refund nets its category column and the
   TOTAL, and never expects a receipt.
-- **Totals are per currency** when the rows span more than one (an
-  unfiltered reimbursement report can mix BRL and CAD): one
-  `TOTAL (BRL)` / `TOTAL (CAD)` row each, and the footer's "Valor
-  total" lists them side by side — never summed into one number.
+- **Totals.** Statement-report amounts are all BRL (the card's bill
+  amount). The **reimbursement** report converts every receipt to BRL at
+  the latest FX rate and prints **one** `TOTAL` — a single payable
+  amount; each converted row keeps its original currency + amount in
+  Detalhamento (e.g. `· CAD 8,00`) for audit. A currency with no
+  available rate falls back to its own `TOTAL (XYZ)` bucket rather than
+  being silently summed into BRL.
 - **IOF row**: Brazilian tax on international transactions, pulled live
   from the saved statement PDF (the parser drops it from the txn list,
   but the form shows it as a line in Outros).
@@ -313,21 +316,43 @@ button builds the same form from those receipts directly:
   bank-details block (Favorecido / Banco / …) so the payee can be paid.
 - Receipt grid is the same — each reimbursement receipt's image.
 
-**Currency scoping.** The modal scopes to one currency (the dropdown
-defaults to the most common currency among your reimbursement receipts,
-listed with counts like `BRL (10)`) — one report per currency keeps the
-classic single-Total form. When the filter is omitted and receipts span
-several currencies, the report stays honest anyway: one `TOTAL (BRL)` /
-`TOTAL (CAD)` row per currency and a multi-part "Valor total" in the
-footer, never a single summed number.
+**Currencies → one BRL total.** The report includes **all**
+reimbursement receipts and converts each to BRL at the latest FX rate,
+so the form yields a single payable `TOTAL` in R$. Each non-BRL row keeps
+its original currency + amount in Detalhamento (`· CAD 8,00`) for audit.
+The modal's currency dropdown defaults to **All currencies → BRL**; the
+per-currency entries are optional scoping (still converted to BRL). A
+currency with no rate available falls back to its own `TOTAL (XYZ)`
+bucket so nothing is hidden. (FX uses the **latest** rate, not the rate
+as of each receipt's date.)
 
 The modal also takes an optional **date range** and a **cardholder**
 (for the name + bank footer). A live "N in scope" count shows how many
-receipts the current filters select and disables Download at zero.
+receipts the current filters select and disables Download at zero;
+already-`reimbursed` receipts (from a completed report) are excluded.
 
 Code: `expense_report_pdf.build_reimbursement_report(user_id, date_from,
-date_to, currency)`. It pulls `get_receipts_by_period(..., "reimbursement")`,
-filters currency in Python, and reuses the shared renderers.
+date_to, currency)`. Selection is `_select_reimbursement_receipts` —
+`get_receipts_by_period(..., "reimbursement")`, **excluding already-
+`reimbursed`** receipts and the optional currency filter — then
+`fetch_rates(..., "BRL")` + `convert` per row, reusing the shared
+renderers. `reimbursement_receipt_ids(...)` returns that same selection's
+ids, recorded with the report so it can be marked completed (below).
+
+### Marking a report completed
+
+Once a reimbursement report is **issued and marked completed**, the
+receipts it covered are settled — they shouldn't sit on the active board
+or be pulled into a later report. The report-history row (see
+[History](#history)) shows a **Mark completed** button; clicking it flips
+those receipts' `match_status` to **`reimbursed`** — a purple badge,
+hidden from the Active filter, counted in the **Reimbursed** topbar stat,
+and excluded from future reimbursement reports. **Reopen** reverts them
+to `pending`. The link is the `receipt_ids` stored on the report at
+generation, so only reports created after this feature carry the button.
+Endpoint: `POST /api/report-history/{id}/complete` `{completed}` →
+`report_history.set_completed` + `db.update_receipts_match_status(ids,
+"reimbursed" | "pending")`.
 
 ## History
 
@@ -335,7 +360,9 @@ Every PDF the app builds — statement _and_ reimbursement — is saved and
 listed on the **Reports tab**. Each row shows a kind badge, a title
 (e.g. `Statement · LUIZ EDUARDO PERSECHINI` or
 `Reimbursement · TONY · BRL`), the period/currency/size/timestamp, and
-**Download** / **Del** buttons.
+**Download** / **Del** buttons. Reimbursement rows also get **Mark
+completed** / **Completed ✓** / **Reopen** (see [Marking a report
+completed](#marking-a-report-completed)).
 
 Persistence is `report_history.py`: the PDF bytes are written to
 `data/reports/report_{id}.pdf` and indexed in
@@ -345,27 +372,32 @@ endpoints call `report_history.record(...)` after building, labelling
 the entry with the resolved cardholder name
 (`expense_report_pdf.cardholder_name`). History is **capped at 100**
 records — the oldest entry and its PDF are pruned when a new one lands,
-so `data/reports/` can't grow forever.
+so `data/reports/` can't grow forever. Reimbursement records also store
+`receipt_ids` (which receipts went in) plus a `completed` flag +
+`completed_at`, driving the Mark-completed / Reopen actions and the
+`reimbursed` status.
 
 ## Endpoints
 
-| Method | Path                                   | Purpose                               |
-| ------ | -------------------------------------- | ------------------------------------- |
-| GET    | `/api/report-profile`                  | global default front-page fields      |
-| PUT    | `/api/report-profile`                  | save the global default               |
-| GET    | `/api/report-users`                    | list cardholders                      |
-| POST   | `/api/report-users`                    | create a cardholder                   |
-| PUT    | `/api/report-users/{id}`               | update a cardholder                   |
-| DELETE | `/api/report-users/{id}`               | delete a cardholder                   |
-| GET    | `/api/statements/{id}/guess-user`      | best-match cardholder for a statement |
-| GET    | `/api/statements/{id}/report?user_id=` | build + stream the statement PDF      |
-| GET    | `/api/reports/reimbursement?...`       | build + stream the reimbursement PDF  |
-| GET    | `/api/report-history`                  | list saved reports (newest first)     |
-| GET    | `/api/report-history/{id}/download`    | re-download a saved report            |
-| DELETE | `/api/report-history/{id}`             | delete a saved report + its file      |
+| Method | Path                                   | Purpose                                                                       |
+| ------ | -------------------------------------- | ----------------------------------------------------------------------------- |
+| GET    | `/api/report-profile`                  | global default front-page fields                                              |
+| PUT    | `/api/report-profile`                  | save the global default                                                       |
+| GET    | `/api/report-users`                    | list cardholders                                                              |
+| POST   | `/api/report-users`                    | create a cardholder                                                           |
+| PUT    | `/api/report-users/{id}`               | update a cardholder                                                           |
+| DELETE | `/api/report-users/{id}`               | delete a cardholder                                                           |
+| GET    | `/api/statements/{id}/guess-user`      | best-match cardholder for a statement                                         |
+| GET    | `/api/statements/{id}/report?user_id=` | build + stream the statement PDF                                              |
+| GET    | `/api/reports/reimbursement?...`       | build + stream the reimbursement PDF                                          |
+| GET    | `/api/report-history`                  | list saved reports (newest first)                                             |
+| GET    | `/api/report-history/{id}/download`    | re-download a saved report                                                    |
+| DELETE | `/api/report-history/{id}`             | delete a saved report + its file                                              |
+| POST   | `/api/report-history/{id}/complete`    | mark a reimbursement report completed → its receipts `reimbursed` (or reopen) |
 
 `/api/reports/reimbursement` takes `user_id`, `date_from`, `date_to`,
-`currency` (all optional). See [`api.md`](api.md) for request/response
+`currency` (all optional); it always converts to BRL — `currency` only
+scopes which receipts. See [`api.md`](api.md) for request/response
 shapes.
 
 ## Gotchas
