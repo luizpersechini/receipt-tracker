@@ -3008,11 +3008,16 @@ async function openReimbModal() {
     if (r.currency) counts[r.currency] = (counts[r.currency] || 0) + 1;
   });
   const byFreq = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  // Default = all currencies, converted to BRL for one payable total. The
+  // per-currency entries stay as optional scoping (still converted to BRL).
   const csel = $("reimbCurrency");
-  csel.innerHTML = byFreq
-    .map((c) => `<option value="${c}">${c} (${counts[c]})</option>`)
-    .join("");
-  if (!byFreq.length) csel.innerHTML = '<option value="">(none)</option>';
+  csel.innerHTML =
+    '<option value="">All currencies → BRL</option>' +
+    byFreq
+      .map(
+        (c) => `<option value="${c}">Only ${c} → BRL (${counts[c]})</option>`,
+      )
+      .join("");
 
   $("reimbFrom").value = "";
   $("reimbTo").value = "";
