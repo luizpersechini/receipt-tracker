@@ -247,6 +247,15 @@ text against user names. Full detail in [reports.md](reports.md).
 - Persisted state (filter bars, sort order, last-sync timestamps,
   reconcile flash dismissals) lives in `localStorage` under `rt.*`
   keys.
+- **New-row flagging.** The Receipts table marks rows added since you
+  last looked: a row is "new" when its `created_at` (SQLite UTC string,
+  lexically comparable) is past the `receiptsSeenAt` high-water mark in
+  `localStorage` (baselined to the newest row on first load, so nothing
+  false-flags). New rows get a green **NEW** pill; a banner above the
+  table counts them across **all** receipts — including the
+  `matched`/`reimbursed` ones the Active filter hides, which is how
+  freshly-synced (and already-matched) rows still surface. "Show new"
+  reveals + filters to them; "Mark all seen" advances the mark.
 
 ## Where to look when something breaks
 

@@ -554,9 +554,30 @@ visit; tokens land in `data/gmail/token.json` after consent.
 
 ### `POST /api/gmail/sync`
 
-Pull Uber receipt emails. Query params: `business_only` (bool),
-`attach_only` (bool — if true, only attach PDFs to existing rows;
-don't create new rows from emails).
+Pull Uber receipt emails and turn them into receipts. Query params, all
+optional: `business_only` (narrow to `[Business]` rides), `after` /
+`before` (YYYY-MM-DD), `max_messages`, and `attach_only`.
+
+- **`attach_only=false` (default — "Add new rows" on):** create a new row
+  for each unmatched email. **Flood guard:** the UI pre-fills the **From**
+  date with 90 days ago, and if it's left blank the sync still clamps to
+  the last 90 days — a first sync with no date once pulled the entire
+  mailbox and created dozens of stale rows.
+- **`attach_only=true`:** the CSV is the source of truth — attach a
+  matching email's PDF to an existing row (by date + amount + currency);
+  never create rows. Unmatched emails come back in `unmatched` and stay
+  re-syncable.
+
+**Dedup.** Fast path is the receipt filename — `uber_<trip-id>.pdf`, or
+`uber_gm-<msg-id>.pdf` when the email carries no trip id. Uber emails the
+same ride more than once (trip receipt + tax/summary), so when an email
+has **no trip id** the sync also matches any existing Uber row on
+(date, amount, currency); this is gated on "no trip id" so two genuinely
+distinct same-day same-fare rides (which carry distinct trip ids) are
+never collapsed. Logic in `gmail_ingest.sync_new_receipts`.
+
+Returns `{success, imported, upgraded, skipped, scanned, errors,
+unmatched, business_only, attach_only}`.
 
 ### `POST /api/gmail/render-pdfs`
 
@@ -565,8 +586,12 @@ the Uber receipt parser changes.
 
 ### `POST /api/gmail/reset`
 
-Remove the `rt-processed` Gmail label from every thread so the next
-sync re-imports them. Power-user button — no UI control.
+Remove the `rt-processed` Gmail label so the next sync re-examines those
+threads. Query param `only_unimported` (default `true`) keeps the label
+on threads that did produce a row, clearing it only from un-imported
+ones — so a re-sync recovers genuinely-missed rides without re-touching
+what you already have. Returns `{success, cleared, kept_imported,
+scanned}`. Power-user button.
 
 ## Uber CSV
 
