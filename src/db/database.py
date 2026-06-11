@@ -258,6 +258,25 @@ def update_receipt_match_status(receipt_id: int, status: str):
     conn.close()
 
 
+def update_receipts_match_status(receipt_ids: list, status: str) -> int:
+    """Bulk-set match_status for many receipts (e.g. flipping a completed
+    reimbursement report's receipts to 'reimbursed'). Returns rows changed."""
+    ids = [int(i) for i in (receipt_ids or [])]
+    if not ids:
+        return 0
+    conn = get_connection()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in ids)
+    cursor.execute(
+        f"UPDATE receipts SET match_status = ? WHERE id IN ({placeholders})",
+        (status, *ids),
+    )
+    changed = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return changed
+
+
 def update_receipt_expense_type(receipt_id: int, expense_type: str) -> bool:
     """Returns False when no such receipt exists (caller 404s)."""
     conn = get_connection()
@@ -728,6 +747,9 @@ def get_statistics() -> dict:
     cursor.execute("SELECT COUNT(*) as count FROM receipts WHERE match_status = 'pending'")
     pending_receipts = cursor.fetchone()["count"]
 
+    cursor.execute("SELECT COUNT(*) as count FROM receipts WHERE match_status = 'reimbursed'")
+    reimbursed_receipts = cursor.fetchone()["count"]
+
     cursor.execute("SELECT COUNT(*) as count FROM receipts WHERE expense_type = 'corp_card'")
     corp_card_receipts = cursor.fetchone()["count"]
 
@@ -766,6 +788,7 @@ def get_statistics() -> dict:
         "matched_receipts": matched_receipts,
         "unmatched_receipts": unmatched_receipts,
         "pending_receipts": pending_receipts,
+        "reimbursed_receipts": reimbursed_receipts,
         "corp_card_receipts": corp_card_receipts,
         "reimbursement_receipts": reimbursement_receipts,
         "total_statements": total_statements,

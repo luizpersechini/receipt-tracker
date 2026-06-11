@@ -775,3 +775,40 @@ def test_report_rows_view_carries_credit_flag(report_env):
     view = erp.report_rows_view(sid, None, None)
     assert view["rows"][0]["credit"] is True
     assert view["rows"][0]["amount"] == -10.0
+
+
+def test_reimbursement_excludes_already_reimbursed(report_env, monkeypatch):
+    """A receipt already marked `reimbursed` by a completed report is excluded
+    from a new report's receipt-id list and from the rendered PDF."""
+    db = report_env
+    r1 = _add_reimb(db, "Keep BR", 10.0, "BRL", "2026-04-01")
+    r2 = _add_reimb(db, "Done BR", 20.0, "BRL", "2026-04-02")
+    for rid in (r1, r2):
+        db.update_receipt(rid, column_patch={"expense_type": "reimbursement"}, metadata_patch={})
+    db.update_receipt_match_status(r2, "reimbursed")  # claimed by a prior report
+
+    assert erp.reimbursement_receipt_ids() == [r1]
+
+    monkeypatch.setattr(erp, "fetch_rates", lambda currencies, to: {"BRL": 1.0})
+    pdf = erp.build_reimbursement_report()
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        front = doc[0].get_text().upper()
+        assert "KEEP BR" in front
+        assert "DONE BR" not in front
+    finally:
+        doc.close()
+
+
+def test_update_receipts_match_status_bulk(report_env):
+    db = report_env
+    r1 = _add_reimb(db, "A", 1.0, "BRL", "2026-04-01")
+    r2 = _add_reimb(db, "B", 2.0, "BRL", "2026-04-02")
+    assert db.update_receipts_match_status([r1, r2], "reimbursed") == 2
+    assert db.get_receipt_by_id(r1)["match_status"] == "reimbursed"
+    assert db.get_receipt_by_id(r2)["match_status"] == "reimbursed"
+    # Reopen path + empty no-op.
+    assert db.update_receipts_match_status([r1], "pending") == 1
+    assert db.get_receipt_by_id(r1)["match_status"] == "pending"
+    assert db.update_receipts_match_status([], "reimbursed") == 0

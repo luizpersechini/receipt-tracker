@@ -134,6 +134,7 @@ function statusBadge(status) {
     matched: ["badge-green", "Matched"],
     unmatched: ["badge-red", "Unmatched"],
     pending: ["badge-gray", "Pending"],
+    reimbursed: ["badge-purple", "Reimbursed"],
   };
   const [cls, label] = map[status] || [
     "badge-gray",
@@ -337,10 +338,10 @@ function applyReceiptFilters(receipts, opts = {}) {
     if (!opts.ignoreStatus) {
       const st = f.status || "active";
       const ms = r.match_status || "pending";
-      // "active" hides archived (matched) receipts; "all" shows everything;
-      // anything else is an exact status match.
+      // "active" hides settled (matched + reimbursed) receipts; "all" shows
+      // everything; anything else is an exact status match.
       if (st === "active") {
-        if (ms === "matched") return false;
+        if (ms === "matched" || ms === "reimbursed") return false;
       } else if (st !== "all" && ms !== st) {
         return false;
       }
@@ -489,6 +490,8 @@ async function loadStats() {
     $("hPending").textContent = s.pending_receipts ?? 0;
     $("hMatched").textContent = s.matched_receipts ?? 0;
     $("hUnmatched").textContent = s.unmatched_receipts ?? 0;
+    const hReimb = $("hReimbursed");
+    if (hReimb) hReimb.textContent = s.reimbursed_receipts ?? 0;
     // One sum per currency — USD+BRL added together meant nothing.
     const byCur = s.amounts_by_currency || {};
     const curs = Object.keys(byCur).sort((a, b) =>
@@ -2987,7 +2990,11 @@ async function openReimbModal() {
   try {
     const { receipts } = await api("GET", "/api/receipts");
     _reimbReceipts = (receipts || [])
-      .filter((r) => (r.expense_type || "corp_card") === "reimbursement")
+      .filter(
+        (r) =>
+          (r.expense_type || "corp_card") === "reimbursement" &&
+          (r.match_status || "pending") !== "reimbursed",
+      )
       .map((r) => {
         let m = {};
         try {
@@ -3123,12 +3130,26 @@ async function loadReportHistory() {
       const meta = [r.period, r.currency, _fmtSize(r.size)]
         .filter(Boolean)
         .join(" · ");
+      // Reimbursement reports can be marked completed → their receipts flip to
+      // "reimbursed". Show the control only when there are linked receipts.
+      const nRcpt = (r.receipt_ids || []).length;
+      let completeCtl = "";
+      if (r.kind === "reimbursement") {
+        if (r.completed) {
+          completeCtl =
+            `<span class="badge badge-purple" title="${nRcpt} receipt(s) marked reimbursed">Completed ✓</span>` +
+            `<button class="btn btn-ghost btn-sm" onclick="completeReportHistory(${r.id}, false)">Reopen</button>`;
+        } else if (nRcpt) {
+          completeCtl = `<button class="btn btn-outline btn-sm" onclick="completeReportHistory(${r.id}, true)" title="Set ${nRcpt} receipt(s) to Reimbursed">Mark completed</button>`;
+        }
+      }
       return `<div class="rh-row">
         <span class="badge ${kindCls}">${kindLbl}</span>
         <div class="rh-main">
           <div class="rh-title">${_esc(r.title || "Report")}</div>
           <div class="rh-meta">${_esc(meta)} · ${when}</div>
         </div>
+        ${completeCtl}
         <a class="btn btn-outline btn-sm" href="/api/report-history/${r.id}/download">Download</a>
         <button class="btn btn-ghost btn-sm" onclick="deleteReportHistory(${r.id})">Del</button>
       </div>`;
@@ -3149,6 +3170,30 @@ async function deleteReportHistory(id) {
     loadReportHistory();
   } catch (e) {
     alert("Failed to delete: " + e.message);
+  }
+}
+
+async function completeReportHistory(id, completed) {
+  const msg = completed
+    ? "Mark this report completed? The receipts it covers will be set to Reimbursed."
+    : "Reopen this report? Its receipts go back to Pending.";
+  if (!confirm(msg)) return;
+  try {
+    const res = await api("POST", `/api/report-history/${id}/complete`, {
+      completed,
+    });
+    const n = res.receipts_changed ?? 0;
+    toast(
+      completed
+        ? `Marked completed · ${n} receipt${n === 1 ? "" : "s"} set to reimbursed`
+        : `Reopened · ${n} receipt${n === 1 ? "" : "s"} back to pending`,
+      "ok",
+    );
+    loadReportHistory();
+    loadReceipts().catch(() => {});
+    loadStats().catch(() => {});
+  } catch (e) {
+    toast("Failed: " + e.message);
   }
 }
 

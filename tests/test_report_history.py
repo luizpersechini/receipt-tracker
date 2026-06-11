@@ -73,3 +73,27 @@ def test_record_carries_metadata(hist_env):
     assert r["period"] == "2026-04-01 to 2026-04-30"
     assert r["download_name"] == "reembolso.pdf"
     assert r["size"] == len(b"%PDF")
+
+
+def test_set_completed_toggles_and_stamps(hist_env):
+    """Completing a report flips its flag + stamps completed_at; reopening
+    clears it. Unknown id → None. receipt_ids round-trip through the record."""
+    rh = hist_env
+    rec = rh.record(
+        b"%PDF",
+        kind="reimbursement",
+        title="Reimb",
+        receipt_ids=[5, 7, 9],
+        created_at="2026-05-01T10:00:00",
+    )
+    assert rec["receipt_ids"] == [5, 7, 9]
+    assert rec["completed"] is False and rec["completed_at"] is None
+
+    done = rh.set_completed(rec["id"], True)
+    assert done["completed"] is True and done["completed_at"]
+    assert rh.get_record(rec["id"])["completed"] is True
+
+    reopened = rh.set_completed(rec["id"], False)
+    assert reopened["completed"] is False and reopened["completed_at"] is None
+
+    assert rh.set_completed(9999, True) is None

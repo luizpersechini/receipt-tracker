@@ -77,11 +77,14 @@ def record(
     period: Optional[str] = None,
     download_name: Optional[str] = None,
     created_at: Optional[str] = None,
+    receipt_ids: Optional[list] = None,
 ) -> dict:
     """Save a generated PDF + append an index record. Returns the record.
 
     `kind` is 'statement' or 'reimbursement'. `created_at` lets the caller
-    pass a timestamp (tests); defaults to now.
+    pass a timestamp (tests); defaults to now. `receipt_ids` records which
+    receipts went into the report, so marking it completed can flip exactly
+    those to `reimbursed`.
     """
     records = _read()
     next_id = _next_id(records)
@@ -99,6 +102,9 @@ def record(
         "size": len(pdf_bytes),
         "file": fname,
         "download_name": download_name or fname,
+        "receipt_ids": list(receipt_ids or []),
+        "completed": False,
+        "completed_at": None,
     }
     records.insert(0, rec)  # newest first
     for old in records[MAX_HISTORY:]:
@@ -121,6 +127,25 @@ def get_record(rid: int) -> Optional[dict]:
         if int(r.get("id", -1)) == int(rid):
             return r
     return None
+
+
+@locked(_index_path)
+def set_completed(rid: int, completed: bool) -> Optional[dict]:
+    """Flip a report's `completed` flag (and stamp `completed_at`). Returns the
+    updated record, or None if no such report. Caller flips the linked
+    receipts' status based on the returned record's `receipt_ids`."""
+    records = _read()
+    updated = None
+    for r in records:
+        if int(r.get("id", -1)) == int(rid):
+            r["completed"] = bool(completed)
+            r["completed_at"] = datetime.now().isoformat(timespec="seconds") if completed else None
+            updated = r
+            break
+    if updated is None:
+        return None
+    _write(records)
+    return updated
 
 
 def read_pdf(rid: int) -> Optional[bytes]:

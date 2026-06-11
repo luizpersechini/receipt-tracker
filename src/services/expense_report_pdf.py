@@ -980,6 +980,33 @@ def _assemble_reimbursement(receipts: list, fx_rates: dict | None = None) -> dic
     return {"statement": {"filename": None}, "rows": rows, "iof": None, "receipts": grid}
 
 
+def _select_reimbursement_receipts(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    currency: Optional[str] = None,
+) -> list:
+    """The reimbursement-type receipts a report covers: in the optional date
+    range + currency, already-`reimbursed` ones excluded (a completed report
+    already claimed them), sorted chronologically."""
+    receipts = db.get_receipts_by_period(date_from, date_to, "reimbursement")
+    receipts = [r for r in receipts if (r.get("match_status") or "") != "reimbursed"]
+    if currency:
+        cur = currency.upper()
+        receipts = [r for r in receipts if (_receipt_meta(r).get("currency") or "").upper() == cur]
+    receipts.sort(key=lambda r: _receipt_meta(r).get("date") or "")
+    return receipts
+
+
+def reimbursement_receipt_ids(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    currency: Optional[str] = None,
+) -> list[int]:
+    """The receipt ids a reimbursement report would cover — recorded with the
+    report so 'Mark completed' can flip exactly these to `reimbursed`."""
+    return [r["id"] for r in _select_reimbursement_receipts(date_from, date_to, currency)]
+
+
 def build_reimbursement_report(
     user_id: Optional[int] = None,
     date_from: Optional[str] = None,
@@ -991,15 +1018,9 @@ def build_reimbursement_report(
     currency, followed by their images. Raises ValueError if none match."""
     from weasyprint import HTML
 
-    receipts = db.get_receipts_by_period(date_from, date_to, "reimbursement")
-    if currency:
-        cur = currency.upper()
-        receipts = [r for r in receipts if (_receipt_meta(r).get("currency") or "").upper() == cur]
+    receipts = _select_reimbursement_receipts(date_from, date_to, currency)
     if not receipts:
         raise ValueError("No reimbursement receipts match the selected filters")
-
-    # Sort by date so the table reads chronologically.
-    receipts.sort(key=lambda r: _receipt_meta(r).get("date") or "")
 
     # Convert every receipt to BRL for one reimbursable total — the form is
     # paid in a single currency, so mixed-currency receipts are converted at
