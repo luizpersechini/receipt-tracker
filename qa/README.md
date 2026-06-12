@@ -111,8 +111,11 @@ Surfaced while building/running this harness:
    `ocr_only` in `/api/ocr/config` and the picker labels it "⚠ OCR-only" +
    warns when it's the active one-shot model.
 
-3. **No automated gate.** Nothing enforces green before push. Wire
-   `python qa/run_qa.py --ocr mock` + `pytest -q` into a pre-push hook or CI.
+3. ~~**No automated gate.**~~ **DONE.** `.github/workflows/ci.yml` runs
+   `pytest -q` + `qa/run_qa.py --ocr mock` on every push / PR — both fully
+   offline (no Ollama, no network). A pre-push hook isn't used because this
+   repo's global `core.hooksPath` (the gitleaks pre-commit) would shadow a
+   project-local hook.
 
 4. **Report needs live FX network.** `/reports/expense` calls `fetch_rates`,
    so reports fail offline — at odds with the app's "fully local/offline" goal.
