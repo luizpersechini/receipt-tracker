@@ -10,8 +10,9 @@ Python · FastAPI · Ollama (local LLM) · Pillow · pandas · openpyxl · SQLit
 # Ollama must be running first:
 ollama serve
 
-# Then start the API:
-uvicorn src.main:app --reload
+# Then start the API (the DYLD var lets weasyprint find Homebrew's
+# pango/cairo under uv's standalone Python):
+DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib uv run uvicorn src.main:app --reload
 ```
 
 ## Structure
@@ -30,15 +31,21 @@ uvicorn src.main:app --reload
 - `qa/` — disposable end-to-end QA harness (`run_qa.py`); boots the app on a
   throwaway db/data dir and drives the real flows. See `qa/README.md`.
 - `data/` — SQLite DB, uploads, generated reports (auto-created, gitignored)
-- `pyproject.toml` / `requirements.txt` — Python deps
+- `pyproject.toml` + `uv.lock` — Python deps (uv; `requirements.txt` is a
+  secondary pip fallback, regenerate with `uv export` if you need it in sync)
 - `.env.example` — copy to `.env` and edit
 
 ## Setup (first time)
 
 ```
-pip install -r requirements.txt --break-system-packages
+uv sync              # builds .venv (Python 3.13) from the hash-pinned uv.lock
 ollama pull llama3   # or whichever model is configured
 ```
+
+uv (>=0.11) is the package manager. `uv.lock` pins every dep to an exact
+version + sha256. `.python-version` pins CPython 3.13. To re-lock with a
+7-day cooldown (skip just-published versions): `uv lock --exclude-newer
+$(date -v-7d +%Y-%m-%d)`.
 
 ## Don't touch
 
