@@ -863,19 +863,38 @@ def test_ocr_crops_uses_apple_vision_backend(monkeypatch):
     monkeypatch.setattr(llm.ocr_settings, "effective_backend", lambda: "apple_vision")
     called = {}
 
-    def fake_apple(crops, is_multi):
-        called["apple"] = (len(crops), is_multi)
+    def fake_text_extract(crops, is_multi, *, backend):
+        called["text"] = (len(crops), is_multi, backend)
         return [{"metadata": {"vendor_name": "A"}, "crop": crops[0]}]
 
-    monkeypatch.setattr(llm, "_process_via_apple_vision", fake_apple)
+    monkeypatch.setattr(llm, "_process_via_text_extraction", fake_text_extract)
     monkeypatch.setattr(
         llm,
         "_process_via_ollama_vision",
         lambda *a, **k: pytest.fail("ollama path must not run under apple_vision"),
     )
     out = llm.ocr_crops(_one_crop())
-    assert called["apple"] == (1, True)  # crops forwarded, treated as pre-segmented
+    assert called["text"] == (1, True, "apple_vision")  # forwarded, pre-segmented
     assert out[0]["metadata"]["vendor_name"] == "A"
+
+
+def test_ocr_crops_uses_paddle_backend(monkeypatch):
+    monkeypatch.setattr(llm.ocr_settings, "effective_backend", lambda: "paddle_ocr")
+    called = {}
+
+    def fake_text_extract(crops, is_multi, *, backend):
+        called["text"] = (len(crops), is_multi, backend)
+        return [{"metadata": {"vendor_name": "P"}, "crop": crops[0]}]
+
+    monkeypatch.setattr(llm, "_process_via_text_extraction", fake_text_extract)
+    monkeypatch.setattr(
+        llm,
+        "_process_via_ollama_vision",
+        lambda *a, **k: pytest.fail("ollama path must not run under paddle_ocr"),
+    )
+    out = llm.ocr_crops(_one_crop())
+    assert called["text"] == (1, True, "paddle_ocr")
+    assert out[0]["metadata"]["vendor_name"] == "P"
 
 
 def test_ocr_crops_uses_ollama_backend(monkeypatch):
@@ -889,8 +908,8 @@ def test_ocr_crops_uses_ollama_backend(monkeypatch):
     monkeypatch.setattr(llm, "_process_via_ollama_vision", fake_ollama)
     monkeypatch.setattr(
         llm,
-        "_process_via_apple_vision",
-        lambda *a, **k: pytest.fail("apple path must not run under ollama_vision"),
+        "_process_via_text_extraction",
+        lambda *a, **k: pytest.fail("text-extraction path must not run under ollama_vision"),
     )
     out = llm.ocr_crops(_one_crop())
     assert called["ollama"] == (1, True)

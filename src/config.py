@@ -1,9 +1,20 @@
 """Centralised configuration loaded from environment / .env."""
 
+import sys
 from pathlib import Path
 from typing import Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _default_ocr_backend() -> str:
+    """Pick the on-device text-extraction backend that actually works on this
+    platform. Apple Vision is macOS-only; everywhere else (Windows/Linux) the
+    cross-platform PaddleOCR engine is the right default. Both fall through to
+    the same `text_to_receipt` structuring step. Overridable via OCR_BACKEND
+    in .env or the runtime sidebar picker."""
+    return "apple_vision" if sys.platform == "darwin" else "paddle_ocr"
 
 
 class Settings(BaseSettings):
@@ -40,16 +51,27 @@ class Settings(BaseSettings):
     ocr_warmup: bool = True  # preload the vision model at server start
     ocr_preprocess: bool = True  # auto-rotate + CLAHE + unsharp before OCR
 
-    # OCR backend selector. "apple_vision" (default) runs Apple's on-device
-    # Vision framework for text + a small text LLM (settings.ocr_text_model)
-    # to structure it — fast on Apple Silicon, low RAM, and reliable. This is
-    # the default because the "ollama_vision" one-shot path depends on the
-    # vision model following a JSON-extraction prompt; the shipped
-    # ollama_model (glm-ocr) is a pure OCR/transcription model that loops on
-    # that prompt and times out. Only switch to "ollama_vision" with a vision
-    # model that does instruction-following extraction (llava, minicpm-v).
-    ocr_backend: str = "apple_vision"
-    ocr_text_model: str = "llama3.2:3b"  # used when ocr_backend=apple_vision
+    # OCR backend selector. Three on-/off-device backends:
+    #   "apple_vision" — Apple's on-device Vision framework for text + a small
+    #       text LLM (settings.ocr_text_model) to structure it. Fast on Apple
+    #       Silicon, low RAM, reliable — but macOS-only.
+    #   "paddle_ocr"   — PaddleOCR (PP-OCR), the cross-platform equivalent:
+    #       local CPU text extraction + the same text-LLM structuring step.
+    #       The right default on Windows/Linux where Apple Vision is absent.
+    #   "ollama_vision"— one vision model reads AND structures in a single shot.
+    #       Heavier (RAM) and depends on the vision model following a JSON
+    #       prompt; the shipped glm-ocr is OCR-only and loops/times out on it.
+    # The default is platform-adaptive (see `_default_ocr_backend`); both
+    # text-extraction backends feed the identical structuring step, so the
+    # rest of the pipeline is unaffected by which one runs.
+    ocr_backend: str = ""  # blank → resolved per-platform in _apply_backend_default
+    ocr_text_model: str = "llama3.2:3b"  # used by apple_vision / paddle_ocr
+
+    # PaddleOCR (paddle_ocr backend) tuning.
+    paddle_lang: str = "pt"  # recognition language; "pt" covers pt-BR + Latin
+    # receipts. Use "en", "ch", "latin", "ml" etc. per
+    # PaddleOCR's supported language list.
+    paddle_use_gpu: bool = False  # CPU by default; GPU needs paddlepaddle-gpu+CUDA
 
     # Gmail ingestion (Phase B of the Uber integration)
     # Set up: see scripts/gmail_auth.py for the one-time OAuth dance.
@@ -69,6 +91,14 @@ class Settings(BaseSettings):
 
     # Upload limit (currently advisory; FastAPI doesn't enforce by default)
     max_upload_mb: int = 25
+
+    @model_validator(mode="after")
+    def _apply_backend_default(self) -> "Settings":
+        # Resolve a blank OCR_BACKEND to the platform-appropriate on-device
+        # engine. An explicit value (env or .env) is always respected.
+        if not (self.ocr_backend or "").strip():
+            self.ocr_backend = _default_ocr_backend()
+        return self
 
 
 settings = Settings()

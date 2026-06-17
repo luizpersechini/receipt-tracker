@@ -33,3 +33,12 @@ pymupdf>=1.24.0
 # requirements.txt declares it for parity with development setup.
 pyobjc-framework-Vision==11.1; sys_platform == "darwin"
 pyobjc-framework-Quartz==11.1; sys_platform == "darwin"
+# Windows / non-macOS — the paddle_ocr backend (cross-platform on-device OCR,
+# the Apple Vision equivalent). CPU build by default. The first OCR run
+# auto-downloads the small PP-OCR detection/recognition models to a local
+# cache. Marked win32 so Mac/Linux dev installs aren't bloated; Linux users
+# who want this backend can install both manually:
+#   pip install "paddleocr>=2.7" "paddlepaddle>=2.6"
+# For GPU, install paddlepaddle-gpu (needs CUDA) and set PADDLE_USE_GPU=true.
+paddleocr>=2.7; sys_platform == "win32"
+paddlepaddle>=2.6; sys_platform == "win32"

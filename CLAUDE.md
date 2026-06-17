@@ -47,9 +47,17 @@ ollama pull llama3   # or whichever model is configured
 ## Notes
 
 - Ollama must be running locally before starting the app
-- Default OCR backend is `apple_vision` (on-device text extraction + an
-  Ollama text model for structuring); `ollama_vision` is the one-shot
-  vision-model alternative. Ollama calls run at temperature 0.
+- OCR backend is platform-adaptive (blank `OCR_BACKEND` resolves per-OS):
+  `apple_vision` on macOS, `paddle_ocr` (PaddleOCR, cross-platform) on
+  Windows/Linux. Both do on-device text extraction + an Ollama text model for
+  structuring — only the OCR engine differs, so the rest of the pipeline is
+  identical. `ollama_vision` is the one-shot vision-model alternative. Ollama
+  calls run at temperature 0.
+- Windows/Linux setup for `paddle_ocr`: `pip install paddleocr paddlepaddle`
+  (CPU; first OCR run auto-downloads the small PP-OCR models). The Mac-only
+  Apple Vision pyobjc deps are a no-op off Darwin.
+- QA can A/B the text-extraction backends: `qa/run_qa.py --ocr real --backend
+  {apple_vision|paddle_ocr} --corpus N` scores total accuracy per backend.
 - Statement estornos/refunds are captured as negative `credit` rows; the
   PDF parser is Itaú-targeted (column-aware, year-boundary rollback)
 - No external API calls — fully local/offline (FX rates + Gmail optional)

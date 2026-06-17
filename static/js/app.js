@@ -5214,13 +5214,20 @@ async function loadOcrConfig() {
   }
 }
 
+// Both on-device text-extraction backends use a separate text LLM to
+// structure the OCR'd text, so they share the structuring-model dropdown.
+function _usesTextModel(selValue) {
+  return selValue === "apple" || selValue === "paddle";
+}
+
 function _renderOcrPicker(cfg) {
   const sel = $("ocrModelSelect");
   if (!sel) return;
   const models = cfg.models || [];
   const vision = models.filter((m) => m.vision && !m.over_cap);
   const opts = [
-    `<option value="apple"${cfg.backend === "apple_vision" ? " selected" : ""}>Apple Vision (on-device)</option>`,
+    `<option value="apple"${cfg.backend === "apple_vision" ? " selected" : ""}>Apple Vision (on-device · macOS)</option>`,
+    `<option value="paddle"${cfg.backend === "paddle_ocr" ? " selected" : ""}>PaddleOCR (on-device · cross-platform)${cfg.paddle_available === false ? " · not installed" : ""}</option>`,
   ];
   if (vision.length) {
     opts.push('<optgroup label="Ollama vision (one-shot)">');
@@ -5255,7 +5262,7 @@ function _renderOcrPicker(cfg) {
       `<option value="${_esc(cfg.text_model)}" selected>${_esc(cfg.text_model)} (not installed)</option>`,
     );
   }
-  $("ocrTextModelRow").style.display = sel.value === "apple" ? "" : "none";
+  $("ocrTextModelRow").style.display = _usesTextModel(sel.value) ? "" : "none";
   _renderOcrStatus(cfg);
 }
 
@@ -5271,15 +5278,20 @@ function _renderOcrStatus(cfg) {
   const activeOcrOnly =
     cfg.backend === "ollama_vision" &&
     (cfg.models || []).some((m) => m.name === cfg.vision_model && m.ocr_only);
+  const textModelMissing = !(cfg.models || []).some(
+    (m) => m.name === cfg.text_model,
+  );
   if (cfg.backend === "ollama_vision" && !hasVision) {
     el.innerHTML =
       '<span class="ocr-warn">No vision model installed — run <code>ollama pull glm-ocr</code></span>';
   } else if (activeOcrOnly) {
     el.innerHTML = `<span class="ocr-warn">⚠ <code>${_esc(cfg.vision_model)}</code> is OCR-only — it loops on one-shot extraction and times out. Prefer <b>Apple Vision</b>, or a JSON-capable vision model (llava, minicpm-v).</span>`;
-  } else if (
-    cfg.backend === "apple_vision" &&
-    !(cfg.models || []).some((m) => m.name === cfg.text_model)
-  ) {
+  } else if (cfg.backend === "paddle_ocr" && cfg.paddle_available === false) {
+    el.innerHTML =
+      '<span class="ocr-warn">PaddleOCR not installed — run <code>pip install paddleocr paddlepaddle</code></span>';
+  } else if (cfg.backend === "paddle_ocr" && textModelMissing) {
+    el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed</span>`;
+  } else if (cfg.backend === "apple_vision" && textModelMissing) {
     el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed</span>`;
   } else {
     el.innerHTML = '<span class="ocr-ok">Applies on next OCR.</span>';
@@ -5292,6 +5304,11 @@ async function _saveOcrConfig() {
   if (sel.value === "apple") {
     patch = {
       backend: "apple_vision",
+      text_model: $("ocrTextModelSelect").value,
+    };
+  } else if (sel.value === "paddle") {
+    patch = {
+      backend: "paddle_ocr",
       text_model: $("ocrTextModelSelect").value,
     };
   } else {
@@ -5314,7 +5331,7 @@ async function _saveOcrConfig() {
   const sel = $("ocrModelSelect");
   if (sel)
     sel.addEventListener("change", () => {
-      $("ocrTextModelRow").style.display = sel.value === "apple" ? "" : "none";
+      $("ocrTextModelRow").style.display = _usesTextModel(sel.value) ? "" : "none";
       _saveOcrConfig();
     });
   const tsel = $("ocrTextModelSelect");

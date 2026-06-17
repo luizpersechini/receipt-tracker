@@ -376,20 +376,45 @@ def _merge_close_cluster_boxes(boxes: list, gap: float) -> list:
     return [_cluster_bbox(g) for g in groups.values()]
 
 
+def _text_box_extractor():
+    """Pick an on-device text-box engine for clustering. Prefer the one that
+    matches the active OCR backend (Apple Vision on macOS, PaddleOCR on
+    Windows/Linux), but fall back to whichever is installed — segmentation is
+    a pre-OCR aid and benefits from boxes regardless of the chosen backend.
+    Returns the module or None if no engine is available."""
+    from . import ocr_settings
+
+    backend = ocr_settings.effective_backend()
+    order = ["paddle_ocr", "apple_vision"] if backend == "paddle_ocr" else [
+        "apple_vision",
+        "paddle_ocr",
+    ]
+    for name in order:
+        if name == "apple_vision":
+            from . import apple_vision_ocr as mod
+        else:
+            from . import paddle_ocr as mod
+        try:
+            if mod.is_available():
+                return mod
+        except Exception:  # noqa: BLE001 — a probe failure just means "skip it"
+            continue
+    return None
+
+
 def _text_cluster_boxes(image_path: str, image_size: tuple) -> list:
-    """Use Apple Vision text bboxes + spatial clustering to find receipt
-    regions. Returns [{"x","y","w","h"}] dicts (no padding — caller adds).
+    """Use on-device text bboxes + spatial clustering to find receipt regions.
+    Returns [{"x","y","w","h"}] dicts (no padding — caller adds).
 
-    Empty list if Apple Vision is unavailable, returns < 2 useful clusters,
-    or any error occurs (caller falls back to image-only methods).
+    Empty list if no text engine is available, fewer than 2 useful clusters
+    result, or any error occurs (caller falls back to image-only methods).
     """
-    from . import apple_vision_ocr
-
-    if not apple_vision_ocr.is_available():
+    ocr_mod = _text_box_extractor()
+    if ocr_mod is None:
         return []
 
     W, H = image_size
-    text_items = apple_vision_ocr.extract_text_boxes_from_file(image_path, image_size)
+    text_items = ocr_mod.extract_text_boxes_from_file(image_path, image_size)
     if len(text_items) < 2:
         return []
 
