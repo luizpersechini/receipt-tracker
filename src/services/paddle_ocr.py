@@ -155,7 +155,9 @@ def warmup() -> bool:
 
 def _invoke(inst, image_path: str):
     """Run inference. `.ocr()` exists on both 2.x and 3.x (3.x deprecates it
-    but still returns results); `.predict()` is the 3.x-native entry point."""
+    but still returns a materialised list); `.predict()` is the 3.x-native
+    entry point and may return a generator — materialise it to a list so the
+    downstream `raw[0]` indexing in `_normalize` is always safe."""
     try:
         return inst.ocr(image_path)
     except TypeError:
@@ -163,7 +165,8 @@ def _invoke(inst, image_path: str):
     except Exception as e:  # noqa: BLE001
         logger.debug("PaddleOCR.ocr() raised (%s); trying predict()", e)
     if hasattr(inst, "predict"):
-        return inst.predict(image_path)
+        out = inst.predict(image_path)
+        return out if isinstance(out, (list, tuple)) else list(out)
     return inst.ocr(image_path, cls=True)
 
 
