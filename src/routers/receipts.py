@@ -640,7 +640,13 @@ async def reocr_receipt(receipt_id: int):
         raise HTTPException(status_code=400, detail="File outside receipts_dir")
 
     async with _ocr_semaphore:
-        items = await asyncio.to_thread(process_with_segments, str(filepath))
+        # A receipt row is a single receipt, so never re-split it: the
+        # segmenter can carve a footer (e.g. "Powered by Rede") into its own
+        # bogus segment, and reocr would keep that 13-char strip instead of
+        # the real receipt. OCR the whole image as one.
+        items = await asyncio.to_thread(
+            process_with_segments, str(filepath), skip_segmentation=True
+        )
 
     if not items:
         raise HTTPException(status_code=500, detail="OCR returned nothing")
