@@ -73,6 +73,20 @@ class Settings(BaseSettings):
     # PaddleOCR's supported language list.
     paddle_use_gpu: bool = False  # CPU by default; GPU needs paddlepaddle-gpu+CUDA
 
+    # Structuring backend — which LLM turns the OCR'd text into receipt JSON.
+    # This is SEPARATE from the OCR backend: OCR always runs locally
+    # (apple_vision / paddle_ocr); only the structuring step's LLM changes.
+    #   "ollama"    — local Ollama text model (settings.ocr_text_model). Default;
+    #                 keeps the app fully local/offline.
+    #   "anthropic" — hosted Claude API. Lets a low-powered machine use a much
+    #                 stronger model for structuring (the real accuracy lever),
+    #                 at the cost of sending the receipt TEXT (not the image) to
+    #                 the API. Needs ANTHROPIC_API_KEY. Opt-in only.
+    structure_backend: str = "ollama"
+    anthropic_api_key: Optional[str] = None  # falls back to the ANTHROPIC_API_KEY env var
+    anthropic_model: str = "claude-opus-4-8"  # structuring is simple+high-volume —
+    # claude-haiku-4-5 is far cheaper and ample here; override via ANTHROPIC_MODEL.
+
     # Gmail ingestion (Phase B of the Uber integration)
     # Set up: see scripts/gmail_auth.py for the one-time OAuth dance.
     gmail_credentials_path: Path = Path("data/gmail/credentials.json")

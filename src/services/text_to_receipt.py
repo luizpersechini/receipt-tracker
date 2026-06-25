@@ -162,6 +162,32 @@ def _ollama_chat(model: str, prompt: str) -> dict:
     return resp.json()
 
 
+def _anthropic_chat(prompt: str, *, model: Optional[str] = None) -> str:
+    """Structure the receipt via the hosted Claude API. Returns the raw text
+    response (expected to be a single JSON object). Raises on any SDK/transport
+    error — the caller maps that to an {"error": ...} result.
+
+    Only the OCR'd *text* is sent (never the receipt image). The structuring
+    task is simple + high volume, so a small model (claude-haiku-4-5) is ample
+    and far cheaper; configure via ANTHROPIC_MODEL. Lazy import so the offline
+    Ollama default never needs the `anthropic` package installed."""
+    import anthropic
+
+    model = (model or "").strip() or settings.anthropic_model
+    key = (settings.anthropic_api_key or "").strip()
+    # api_key omitted → SDK reads ANTHROPIC_API_KEY from the environment.
+    client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+    msg = client.with_options(timeout=settings.ocr_timeout_seconds).messages.create(
+        model=model,
+        max_tokens=settings.ocr_num_predict or 2048,
+        # Doubles as a "final answer only" guard so Opus models don't narrate
+        # reasoning into the visible response when thinking is off.
+        system="You output only a single valid JSON object — no prose, no markdown fences.",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
+
+
 def structure_text_as_receipt(text: str, *, model: Optional[str] = None) -> dict:
     """
     Run the structuring step. `model` defaults to settings.ocr_text_model.
@@ -172,16 +198,22 @@ def structure_text_as_receipt(text: str, *, model: Optional[str] = None) -> dict
     if not text:
         return {"error": "no OCR text to structure"}
 
-    model = model or ocr_settings.effective_text_model()
     prompt = PROMPT.replace("{text}", text)
+    backend = (settings.structure_backend or "ollama").strip().lower()
     try:
-        response = _ollama_chat(model, prompt)
+        if backend == "anthropic":
+            raw = _anthropic_chat(prompt, model=model)
+        else:
+            ollama_model = model or ocr_settings.effective_text_model()
+            response = _ollama_chat(ollama_model, prompt)
+            raw = response.get("message", {}).get("content", "").strip()
     except requests.Timeout:
         return {"error": f"Ollama text-model timed out after {settings.ocr_timeout_seconds}s"}
     except requests.RequestException as e:
         return {"error": f"Ollama text-model request failed: {e}"}
+    except Exception as e:  # noqa: BLE001 — anthropic SDK / import / transport errors
+        return {"error": f"{backend} structuring failed: {e}"}
 
-    raw = response.get("message", {}).get("content", "").strip()
     raw = re.sub(r"^```[a-z]*\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw)
 

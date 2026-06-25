@@ -1034,7 +1034,13 @@ def warmup() -> Optional[str]:
                 logger.info("PaddleOCR model preloaded")
         except Exception as e:  # noqa: BLE001
             logger.warning("PaddleOCR preload failed: %s", e)
+    structure_backend = (settings.structure_backend or "ollama").strip().lower()
     if backend in ("apple_vision", "paddle_ocr"):
+        # When structuring runs on the hosted Claude API there's no local text
+        # model to warm (and Ollama may not even be running on this deployment).
+        if structure_backend == "anthropic":
+            logger.info("OCR warmup: structuring=anthropic — no Ollama text model to warm")
+            return None
         model = ocr_settings.effective_text_model()
     else:
         try:

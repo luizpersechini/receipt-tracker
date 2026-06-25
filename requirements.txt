@@ -17,6 +17,10 @@ python-dotenv>=1.0.1
 pydantic>=2.9.0
 pydantic-settings>=2.4.0
 ollama>=0.3.3
+# Optional — only used when STRUCTURE_BACKEND=anthropic (hosted Claude API for
+# the receipt-structuring step). Harmless to install for the default local
+# (Ollama) path; imported lazily, so it's never loaded unless that backend is on.
+anthropic>=0.69.0
 watchdog>=4.0.0
 beautifulsoup4>=4.12.3
 google-auth>=2.32.0

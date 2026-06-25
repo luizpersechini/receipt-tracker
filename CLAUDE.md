@@ -58,9 +58,16 @@ ollama pull llama3   # or whichever model is configured
   Apple Vision pyobjc deps are a no-op off Darwin.
 - QA can A/B the text-extraction backends: `qa/run_qa.py --ocr real --backend
   {apple_vision|paddle_ocr} --corpus N` scores total accuracy per backend.
+- Structuring backend (`STRUCTURE_BACKEND`, separate from the OCR backend):
+  `ollama` (default, fully local) turns OCR'd text into receipt JSON with a
+  local model; `anthropic` sends only the receipt *text* (never the image) to
+  the hosted Claude API — opt-in, needs `ANTHROPIC_API_KEY`, lets a low-powered
+  machine use a much stronger model for the accuracy-critical structuring step
+  (`claude-haiku-4-5` is the cheap default). OCR always stays local either way.
 - Statement estornos/refunds are captured as negative `credit` rows; the
   PDF parser is Itaú-targeted (column-aware, year-boundary rollback)
-- No external API calls — fully local/offline (FX rates + Gmail optional)
+- Local/offline by default — no external API calls unless you opt into
+  `STRUCTURE_BACKEND=anthropic` (FX rates + Gmail also optional)
 - QA: `qa/run_qa.py --ocr mock` is the fast gate; `--corpus N
 --corpus-seed S` scores OCR total accuracy against real receipts
   (scoreboard in `qa/corpus_scoreboard.jsonl`)

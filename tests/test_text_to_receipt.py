@@ -105,6 +105,48 @@ def test_handles_request_timeout(monkeypatch):
     assert "timed out" in out.get("error", "").lower()
 
 
+# ─── structuring backend = anthropic ────────────────────────────────────────
+
+
+def test_anthropic_backend_routes_and_parses(monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "structure_backend", "anthropic")
+    captured = {}
+
+    def _fake_anthropic(prompt, *, model=None):
+        captured["prompt"] = prompt
+        captured["model"] = model
+        return json.dumps({"vendor_name": "Padaria", "total_amount": "70,00", "currency": "BRL"})
+
+    def _no_ollama(*_a, **_k):
+        raise AssertionError("Ollama must not be called when backend=anthropic")
+
+    monkeypatch.setattr(t2r, "_anthropic_chat", _fake_anthropic)
+    monkeypatch.setattr(t2r, "_ollama_chat", _no_ollama)
+
+    out = t2r.structure_text_as_receipt("PADARIA\nTotal R$ 70,00")
+    assert out["vendor_name"] == "Padaria"
+    assert out["currency"] == "BRL"
+    assert "PADARIA" in captured["prompt"]
+    assert captured["model"] is None  # falls back to settings.anthropic_model
+
+
+def test_anthropic_backend_errors_are_caught(monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "structure_backend", "anthropic")
+
+    def _boom(prompt, *, model=None):
+        raise RuntimeError("401 unauthorized")
+
+    monkeypatch.setattr(t2r, "_anthropic_chat", _boom)
+
+    out = t2r.structure_text_as_receipt("foo")
+    assert "anthropic structuring failed" in out.get("error", "")
+    assert "401" in out["error"]
+
+
 def test_uses_custom_model_when_passed(monkeypatch):
     captured = {}
 
