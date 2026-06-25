@@ -254,6 +254,35 @@ def test_reimbursement_report_empty_raises(report_env):
         erp.build_reimbursement_report(currency="BRL")
 
 
+def test_reimbursement_converts_all_currencies_to_brl(report_env, monkeypatch):
+    """Mixed-currency reimbursement → one BRL payable total, not per-currency
+    subtotals. The original currency/amount stays visible for audit."""
+    db = report_env
+    r1 = _add_reimb(db, "Cafe BR", 30.0, "BRL", "2026-04-10")
+    r2 = _add_reimb(db, "Coffee CA", 8.0, "CAD", "2026-04-11")
+    for rid in (r1, r2):
+        db.update_receipt(rid, column_patch={"expense_type": "reimbursement"}, metadata_patch={})
+
+    # Pin the rate so the test is offline + deterministic: 1 CAD = 4 BRL.
+    monkeypatch.setattr(erp, "fetch_rates", lambda currencies, to: {"CAD": 4.0, "BRL": 1.0})
+
+    pdf = erp.build_reimbursement_report()  # no currency filter → all currencies
+    assert pdf[:4] == b"%PDF"
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        front = doc[0].get_text()
+        # Both rides present, summed into ONE BRL total: 30 + 8×4 = 62.
+        assert "CAFE BR" in front.upper()
+        assert "COFFEE CA" in front.upper()
+        assert "TOTAL (CAD)" not in front.upper()  # no per-currency split
+        assert "62,00" in front
+        # CAD original kept visible for audit against the receipt image.
+        assert "CAD 8,00" in front
+    finally:
+        doc.close()
+
+
 # ─── Open-item justification notes ──────────────────────────────────────────
 
 
@@ -746,3 +775,40 @@ def test_report_rows_view_carries_credit_flag(report_env):
     view = erp.report_rows_view(sid, None, None)
     assert view["rows"][0]["credit"] is True
     assert view["rows"][0]["amount"] == -10.0
+
+
+def test_reimbursement_excludes_already_reimbursed(report_env, monkeypatch):
+    """A receipt already marked `reimbursed` by a completed report is excluded
+    from a new report's receipt-id list and from the rendered PDF."""
+    db = report_env
+    r1 = _add_reimb(db, "Keep BR", 10.0, "BRL", "2026-04-01")
+    r2 = _add_reimb(db, "Done BR", 20.0, "BRL", "2026-04-02")
+    for rid in (r1, r2):
+        db.update_receipt(rid, column_patch={"expense_type": "reimbursement"}, metadata_patch={})
+    db.update_receipt_match_status(r2, "reimbursed")  # claimed by a prior report
+
+    assert erp.reimbursement_receipt_ids() == [r1]
+
+    monkeypatch.setattr(erp, "fetch_rates", lambda currencies, to: {"BRL": 1.0})
+    pdf = erp.build_reimbursement_report()
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        front = doc[0].get_text().upper()
+        assert "KEEP BR" in front
+        assert "DONE BR" not in front
+    finally:
+        doc.close()
+
+
+def test_update_receipts_match_status_bulk(report_env):
+    db = report_env
+    r1 = _add_reimb(db, "A", 1.0, "BRL", "2026-04-01")
+    r2 = _add_reimb(db, "B", 2.0, "BRL", "2026-04-02")
+    assert db.update_receipts_match_status([r1, r2], "reimbursed") == 2
+    assert db.get_receipt_by_id(r1)["match_status"] == "reimbursed"
+    assert db.get_receipt_by_id(r2)["match_status"] == "reimbursed"
+    # Reopen path + empty no-op.
+    assert db.update_receipts_match_status([r1], "pending") == 1
+    assert db.get_receipt_by_id(r1)["match_status"] == "pending"
+    assert db.update_receipts_match_status([], "reimbursed") == 0

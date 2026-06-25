@@ -47,13 +47,13 @@ laptop — no external API calls except optional Gmail.
 
 Five tables. Schema lives in `src/db/database.py:init_db()`.
 
-| Table             | What it stores                                                                                                                                                                                                                                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `receipts`        | Uploaded receipt rows. `metadata` is a JSON blob holding the extracted fields (vendor, total, date, currency, country, items, category, etc). `filepath` points at the saved image / PDF. `match_status` is one of `pending` / `matched` / `unmatched`. `expense_type` is `corp_card` (default) or `reimbursement`. |
-| `statements`      | Uploaded monthly statements. `transactions` is a JSON array of parsed rows — the same shape regardless of CSV or PDF source.                                                                                                                                                                                        |
-| `matches`         | Pairs a receipt to a specific transaction inside a statement. Columns: `receipt_id`, `statement_id`, `transaction_index` (which row inside `statements.transactions`), `transaction_data` (snapshot of the row at match time), `match_score` (0–1, null for manual), `match_kind` (`auto` or `manual`).             |
-| `expense_reports` | Excel-report history.                                                                                                                                                                                                                                                                                               |
-| `fx_rates`        | Cached FX rates (`date`, `from_currency`, `to_currency`, `rate`).                                                                                                                                                                                                                                                   |
+| Table             | What it stores                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `receipts`        | Uploaded receipt rows. `metadata` is a JSON blob holding the extracted fields (vendor, total, date, currency, country, items, category, etc). `filepath` points at the saved image / PDF. `match_status` is one of `pending` / `matched` / `unmatched` / `reimbursed` (the last set when a reimbursement report covering the receipt is marked completed). `expense_type` is `corp_card` (default) or `reimbursement`. |
+| `statements`      | Uploaded monthly statements. `transactions` is a JSON array of parsed rows — the same shape regardless of CSV or PDF source.                                                                                                                                                                                                                                                                                           |
+| `matches`         | Pairs a receipt to a specific transaction inside a statement. Columns: `receipt_id`, `statement_id`, `transaction_index` (which row inside `statements.transactions`), `transaction_data` (snapshot of the row at match time), `match_score` (0–1, null for manual), `match_kind` (`auto` or `manual`).                                                                                                                |
+| `expense_reports` | Excel-report history.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `fx_rates`        | Cached FX rates (`date`, `from_currency`, `to_currency`, `rate`).                                                                                                                                                                                                                                                                                                                                                      |
 
 `matches` is N:1 — a transaction can hold several rows (cumulative
 pairing), but a receipt appears in at most one. Every row **must** carry
@@ -111,15 +111,22 @@ splits into >1 receipt. The user confirms/adjusts the auto-detected
 receipt boxes before OCR runs, so a page with several receipts becomes
 several correctly-cropped rows instead of one garbled extraction.
 
-`llm_processor` dispatches to one of two backends configured by
-`OCR_BACKEND`:
+`llm_processor` dispatches on `OCR_BACKEND` (both the segment path and
+the bbox/review-queue `ocr_crops` path honour it):
 
-- **`ollama_vision`** — single call per segment to the Ollama vision
-  model. JSON-mode prompt; we ask for a strict schema.
-- **`apple_vision`** — Apple's on-device Vision framework extracts
-  text first (fast, accurate on printed text); a smaller text-only
-  Ollama model (`OCR_TEXT_MODEL`, default `llama3.2:3b`) structures
+- **`apple_vision`** (default, the only one in the UI) — Apple's on-device
+  Vision framework extracts text first (fast, accurate on printed text); a
+  text-only Ollama model (`OCR_TEXT_MODEL`, e.g. `llama3.1:8b`) structures
   the OCR text into the receipt schema.
+- **`ollama_vision`** — single call per segment to an Ollama vision model
+  (glm-ocr/llava). Removed from the sidebar picker: a per-config, per-field
+  bake-off (`qa/bakeoff.py`) had glm-ocr at **0% on every field** (it loops
+  on the JSON-extraction prompt and times out) and 4× slower than apple. Kept
+  reachable via `.env` only. Don't pair it with the shipped `OLLAMA_MODEL`
+  (glm-ocr) — that's an OCR-only transcription model, not an extractor.
+
+Model choice matters: total-amount accuracy is strongly model-bound
+(`llama3.1:8b` ≫ `llama3.2:3b` on hard receipts).
 
 Ollama calls run at **temperature 0** — extraction must be
 deterministic (the 0.8 default made identical receipts parse
@@ -240,6 +247,15 @@ text against user names. Full detail in [reports.md](reports.md).
 - Persisted state (filter bars, sort order, last-sync timestamps,
   reconcile flash dismissals) lives in `localStorage` under `rt.*`
   keys.
+- **New-row flagging.** The Receipts table marks rows added since you
+  last looked: a row is "new" when its `created_at` (SQLite UTC string,
+  lexically comparable) is past the `receiptsSeenAt` high-water mark in
+  `localStorage` (baselined to the newest row on first load, so nothing
+  false-flags). New rows get a green **NEW** pill; a banner above the
+  table counts them across **all** receipts — including the
+  `matched`/`reimbursed` ones the Active filter hides, which is how
+  freshly-synced (and already-matched) rows still surface. "Show new"
+  reveals + filters to them; "Mark all seen" advances the mark.
 
 ## Where to look when something breaks
 

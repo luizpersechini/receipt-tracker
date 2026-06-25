@@ -355,6 +355,56 @@ def test_post_process_arithmetic_triple_rescues_unsupported_total():
     assert data["total_amount"] == 8.40
 
 
+# ─── column-split totals (Brazilian NFC-e: labels block, values block) ──────
+
+# Apple Vision reads these as columns: every label first, then every value
+# below. "323,0" has one decimal (OCR dropped a digit) so it isn't money-
+# shaped — the gross 3.884,94 prints once, the real total 3.561,94 twice
+# (TOTAL R$ line == Cartão de Crédito line).
+_NFCE_TAIL = (
+    "Total bruto dos itens\n"
+    "Desconto R$\n"
+    "TOTAL R$\n"
+    "Cartão de Crédito\n"
+    "No.venda: 64 - mesa 320\n"
+    "Trib aprox R$: 0,00 Fed\n"
+    "3.884,94\n"
+    "323,0\n"
+    "3.561,94\n"
+    "3.561,94\n"
+)
+
+
+def test_column_split_total_prefers_repeated_over_gross():
+    """The value printed twice (TOTAL == payment) wins over the once-printed
+    gross 'Total bruto'."""
+    assert llm._column_split_total(_NFCE_TAIL) == 3561.94
+
+
+def test_column_split_total_none_without_keyword_anchor():
+    """No total/payment keyword → no anchor → no guess."""
+    assert llm._column_split_total("3.884,94\n3.561,94\n3.561,94\n") is None
+
+
+def test_post_process_repairs_column_split_nfce_total():
+    """Real case (#1231): the model grabbed a 446,94 line value, returned as a
+    comma-string "exactly as printed". The repair must parse that locale-
+    tolerantly and promote it to the 3.561,94 on the TOTAL + card lines."""
+    data = {"vendor_name": "Olegário", "total_amount": "446,94", "currency": "BRL"}
+    text = "475 REF COCA COLA\nUN 446,94\n446,94\n" + _NFCE_TAIL
+    llm._post_process_with_ocr_text(data, text)
+    assert data["total_amount"] == 3561.94
+
+
+def test_post_process_column_split_skipped_when_inline_total_present():
+    """The fallback only runs when no inline total is found, so a normal
+    receipt with 'Total $35.00' is untouched."""
+    data = {"vendor_name": "X", "total_amount": 35.00, "currency": "USD"}
+    text = "Subtotal $30.00\nTotal $35.00\n"
+    llm._post_process_with_ocr_text(data, text)
+    assert data["total_amount"] == 35.00
+
+
 def test_post_process_tax_completion_for_exclusive_subtotal():
     """Column-split receipt advertising an inclusive total: the model
     returned the tax-exclusive amount; its own value + its own tax is

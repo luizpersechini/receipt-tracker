@@ -608,6 +608,38 @@ tr.data-row:hover td {
   color: var(--accent);
   border-color: var(--accent-border);
 }
+/* New-row flag — solid green pill, sized to read as a tag next to the date. */
+.badge-new {
+  background: var(--green);
+  color: #fff;
+  border-color: var(--green);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  text-transform: uppercase;
+}
+/* "N new receipts since you last looked" banner above the receipts table. */
+.new-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  margin-bottom: 12px;
+  background: var(--green-bg);
+  border: 1px solid var(--green-border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text);
+}
+.new-banner-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--green);
+  box-shadow: 0 0 0 3px var(--green-bg);
+}
 .badge-purple {
   background: var(--purple-bg);
   color: var(--purple);
@@ -3515,10 +3547,23 @@ tr.stmt-archived:hover {
   width: 100%;
 }
 
-/* OCR / Vision model picker (sidebar card) */
+/* OCR model picker (sidebar card) — Apple Vision + structuring LLM */
 #ocrModelCard .ocr-select {
   width: 100%;
   margin-top: 2px;
+}
+.ocr-fixed-backend {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 7px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ocr-fixed-backend span {
+  font-weight: 400;
+  color: var(--text-3);
 }
 .ocr-textmodel {
   margin-top: 8px;
