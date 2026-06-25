@@ -42,6 +42,7 @@ from . import (
     statement_labels,
     statement_notes,
 )
+from .fx_fetcher import convert, fetch_rates
 
 logger = logging.getLogger(__name__)
 
@@ -922,31 +923,48 @@ def report_rows_view(
 # ─── Reimbursement report (receipts only — no statement, no matching) ────────
 
 
-def _assemble_reimbursement(receipts: list) -> dict[str, Any]:
+def _assemble_reimbursement(receipts: list, fx_rates: dict | None = None) -> dict[str, Any]:
     """Build the report data from a flat list of reimbursement receipts.
 
     Same shape as `_assemble` but: no statement, every row is "matched"
     (the receipt IS the proof — no justification note), and no IOF.
+
+    Every row is converted to BRL via `fx_rates` so the form yields a single
+    reimbursable total. A row whose currency has no rate falls back to its
+    original currency (so it prints in its own TOTAL bucket — visible, never
+    silently summed into BRL).
     """
+    fx_rates = fx_rates or {}
     rows: list[dict] = []
     grid: list[dict] = []
     for r in receipts:
         meta = _receipt_meta(r)
-        amount = float(meta.get("total_amount") or 0)
+        orig_amount = float(meta.get("total_amount") or 0)
+        orig_cur = (meta.get("currency") or "BRL").upper()
         label = meta.get("vendor_name") or r.get("description") or "Receipt"
         col = _bucket(meta.get("category"), label)
+        brl = convert(orig_amount, orig_cur, "BRL", fx_rates)
+        if brl is not None:
+            amount, currency = brl, "BRL"
+        else:
+            amount, currency = orig_amount, orig_cur
+        # Reimbursement receipts have clean vendor names, so the vendor is the
+        # most useful Detalhamento (cf. cryptic card descriptors). For a
+        # converted row, keep the original currency + amount visible so the
+        # BRL figure is auditable against the receipt image.
+        detalhe = label.upper().strip() or "—"
+        if currency == "BRL" and orig_cur != "BRL":
+            detalhe = f"{detalhe} · {orig_cur} {_fmt_brl(orig_amount)}"
         rows.append(
             {
                 "date": _fmt_date_br(meta.get("date")),
                 "conta": "",
-                # Reimbursement receipts have clean vendor names, so the vendor
-                # is the most useful Detalhamento (cf. cryptic card descriptors).
-                "detalhe": label.upper().strip() or "—",
+                "detalhe": detalhe,
                 "desc": label,
                 "cost_center": "",
                 "col": col,
                 "amount": amount,
-                "currency": (meta.get("currency") or "BRL").upper(),
+                "currency": currency,
                 "matched": True,  # reimbursement rows always have a receipt
             }
         )
@@ -962,6 +980,33 @@ def _assemble_reimbursement(receipts: list) -> dict[str, Any]:
     return {"statement": {"filename": None}, "rows": rows, "iof": None, "receipts": grid}
 
 
+def _select_reimbursement_receipts(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    currency: Optional[str] = None,
+) -> list:
+    """The reimbursement-type receipts a report covers: in the optional date
+    range + currency, already-`reimbursed` ones excluded (a completed report
+    already claimed them), sorted chronologically."""
+    receipts = db.get_receipts_by_period(date_from, date_to, "reimbursement")
+    receipts = [r for r in receipts if (r.get("match_status") or "") != "reimbursed"]
+    if currency:
+        cur = currency.upper()
+        receipts = [r for r in receipts if (_receipt_meta(r).get("currency") or "").upper() == cur]
+    receipts.sort(key=lambda r: _receipt_meta(r).get("date") or "")
+    return receipts
+
+
+def reimbursement_receipt_ids(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    currency: Optional[str] = None,
+) -> list[int]:
+    """The receipt ids a reimbursement report would cover — recorded with the
+    report so 'Mark completed' can flip exactly these to `reimbursed`."""
+    return [r["id"] for r in _select_reimbursement_receipts(date_from, date_to, currency)]
+
+
 def build_reimbursement_report(
     user_id: Optional[int] = None,
     date_from: Optional[str] = None,
@@ -973,17 +1018,16 @@ def build_reimbursement_report(
     currency, followed by their images. Raises ValueError if none match."""
     from weasyprint import HTML
 
-    receipts = db.get_receipts_by_period(date_from, date_to, "reimbursement")
-    if currency:
-        cur = currency.upper()
-        receipts = [r for r in receipts if (_receipt_meta(r).get("currency") or "").upper() == cur]
+    receipts = _select_reimbursement_receipts(date_from, date_to, currency)
     if not receipts:
         raise ValueError("No reimbursement receipts match the selected filters")
 
-    # Sort by date so the table reads chronologically.
-    receipts.sort(key=lambda r: _receipt_meta(r).get("date") or "")
-
-    data = _assemble_reimbursement(receipts)
+    # Convert every receipt to BRL for one reimbursable total — the form is
+    # paid in a single currency, so mixed-currency receipts are converted at
+    # the latest FX rate instead of being split into per-currency subtotals.
+    currencies = sorted({(_receipt_meta(r).get("currency") or "BRL").upper() for r in receipts})
+    fx_rates = fetch_rates(currencies, "BRL") if currencies else {}
+    data = _assemble_reimbursement(receipts, fx_rates)
 
     # Profile: explicit user → global default. No statement to guess from.
     if user_id is not None and report_users.get_user(user_id):
@@ -991,9 +1035,8 @@ def build_reimbursement_report(
     else:
         profile = report_profile.load_profile()
     # GL accounts always come from the global config, and force reembolso.
-    profile = {**_with_global_accounts(profile), "expense_kind": "reembolso"}
-    if currency:
-        profile["moeda"] = currency.upper() if currency.upper() != "BRL" else "R$"
+    # Everything is converted to BRL, so the form currency is always R$.
+    profile = {**_with_global_accounts(profile), "expense_kind": "reembolso", "moeda": "R$"}
 
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"

@@ -134,6 +134,7 @@ function statusBadge(status) {
     matched: ["badge-green", "Matched"],
     unmatched: ["badge-red", "Unmatched"],
     pending: ["badge-gray", "Pending"],
+    reimbursed: ["badge-purple", "Reimbursed"],
   };
   const [cls, label] = map[status] || [
     "badge-gray",
@@ -337,10 +338,10 @@ function applyReceiptFilters(receipts, opts = {}) {
     if (!opts.ignoreStatus) {
       const st = f.status || "active";
       const ms = r.match_status || "pending";
-      // "active" hides archived (matched) receipts; "all" shows everything;
-      // anything else is an exact status match.
+      // "active" hides settled (matched + reimbursed) receipts; "all" shows
+      // everything; anything else is an exact status match.
       if (st === "active") {
-        if (ms === "matched") return false;
+        if (ms === "matched" || ms === "reimbursed") return false;
       } else if (st !== "all" && ms !== st) {
         return false;
       }
@@ -489,6 +490,8 @@ async function loadStats() {
     $("hPending").textContent = s.pending_receipts ?? 0;
     $("hMatched").textContent = s.matched_receipts ?? 0;
     $("hUnmatched").textContent = s.unmatched_receipts ?? 0;
+    const hReimb = $("hReimbursed");
+    if (hReimb) hReimb.textContent = s.reimbursed_receipts ?? 0;
     // One sum per currency — USD+BRL added together meant nothing.
     const byCur = s.amounts_by_currency || {};
     const curs = Object.keys(byCur).sort((a, b) =>
@@ -574,12 +577,87 @@ function clearSelection() {
 }
 
 // ─── Receipts ─────────────────────────────────────────────────────────────────
+// ─── New-row flagging ────────────────────────────────────────────────────
+// Surfaces rows added by a sync/import. `receiptsSeenAt` (localStorage) holds
+// the created_at high-water mark the user last acknowledged; anything newer is
+// flagged. created_at is SQLite "YYYY-MM-DD HH:MM:SS" (UTC) — lexically
+// sortable, so plain string compares are timezone-safe and we never compare
+// against the browser clock.
+let _newOnly = false; // transient "show only new" view toggle
+function _receiptsSeenAt() {
+  try {
+    return localStorage.getItem("receiptsSeenAt") || "";
+  } catch {
+    return "";
+  }
+}
+function _setReceiptsSeenAt(v) {
+  try {
+    localStorage.setItem("receiptsSeenAt", v || "");
+  } catch {
+    /* private mode / storage disabled — flagging just no-ops */
+  }
+}
+function _maxCreatedAt(list) {
+  let m = "";
+  for (const r of list || [])
+    if (r && r.created_at && r.created_at > m) m = r.created_at;
+  return m;
+}
+function _renderNewBanner(n) {
+  const b = $("newReceiptsBanner");
+  if (!b) return;
+  if (n > 0) {
+    $("newReceiptsText").textContent =
+      `${n} new receipt${n === 1 ? "" : "s"} since you last looked` +
+      (_newOnly ? " · showing only new" : "");
+    b.style.display = "";
+  } else {
+    b.style.display = "none";
+    _newOnly = false;
+  }
+}
+function showNewReceipts() {
+  // Reveal matched/archived rows too — synced rows often land as `matched`
+  // and would otherwise stay hidden behind the Active filter.
+  _newOnly = true;
+  if (typeof receiptFilters === "object" && receiptFilters)
+    receiptFilters.status = "all";
+  const sf = $("rfStatus");
+  if (sf) sf.value = "all";
+  renderReceipts(allReceipts);
+  $("newReceiptsBanner")?.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+}
+function markReceiptsSeen() {
+  _setReceiptsSeenAt(_maxCreatedAt(allReceipts));
+  _newOnly = false;
+  renderReceipts(allReceipts);
+}
+
 function renderReceipts(receipts) {
+  // New-row flagging — a row is "new" if created since the board was last
+  // marked seen (localStorage). Baseline on first load so nothing flags
+  // initially; later syncs/imports then stand out. The banner counts new
+  // rows across ALL receipts, so freshly-synced rows that are `matched`
+  // (hidden by the Active filter) are still surfaced.
+  let _seen = _receiptsSeenAt();
+  const _maxC = _maxCreatedAt(receipts);
+  if (!_seen && _maxC) {
+    _seen = _maxC;
+    _setReceiptsSeenAt(_maxC);
+  }
+  const _isNew = (r) => !!(r.created_at && r.created_at > _seen);
+  _renderNewBanner(receipts.filter(_isNew).length);
+
   // Pipeline: month filter → filter-bar filters → sort. All three are
   // pure client-side over `allReceipts` so the response shape from the API
   // hasn't changed and the existing edit / delete / bulk paths still work.
   let filtered = filterByMonth(receipts);
   filtered = applyReceiptFilters(filtered);
+  if (_newOnly) filtered = filtered.filter(_isNew);
   filtered = sortReceiptList(filtered, receiptSort);
   const tbody = $("receiptsTbody");
   $("navReceiptCount").textContent = filtered.length;
@@ -674,7 +752,7 @@ function renderReceipts(receipts) {
       return `<tr class="data-row">
       <td style="text-align:center"><input type="checkbox" class="row-select" data-id="${r.id}" ${isSelected ? "checked" : ""}></td>
       <td style="padding:6px 10px">${thumbEl}</td>
-      <td style="font-variant-numeric:tabular-nums;white-space:nowrap">${fmt.date(meta.date)}</td>
+      <td style="font-variant-numeric:tabular-nums;white-space:nowrap">${fmt.date(meta.date)}${_isNew(r) ? ' <span class="badge badge-new" title="Added since you last marked the board seen">NEW</span>' : ""}</td>
       <td style="font-weight:500">${vendor}</td>
       <td style="font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap">${fmt.currency(meta.total_amount, meta.currency)}</td>
       <td>${meta.currency ? `<span class="badge badge-gray mono">${escHtml(meta.currency)}</span>` : "—"}</td>
@@ -2912,7 +2990,11 @@ async function openReimbModal() {
   try {
     const { receipts } = await api("GET", "/api/receipts");
     _reimbReceipts = (receipts || [])
-      .filter((r) => (r.expense_type || "corp_card") === "reimbursement")
+      .filter(
+        (r) =>
+          (r.expense_type || "corp_card") === "reimbursement" &&
+          (r.match_status || "pending") !== "reimbursed",
+      )
       .map((r) => {
         let m = {};
         try {
@@ -2933,11 +3015,16 @@ async function openReimbModal() {
     if (r.currency) counts[r.currency] = (counts[r.currency] || 0) + 1;
   });
   const byFreq = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  // Default = all currencies, converted to BRL for one payable total. The
+  // per-currency entries stay as optional scoping (still converted to BRL).
   const csel = $("reimbCurrency");
-  csel.innerHTML = byFreq
-    .map((c) => `<option value="${c}">${c} (${counts[c]})</option>`)
-    .join("");
-  if (!byFreq.length) csel.innerHTML = '<option value="">(none)</option>';
+  csel.innerHTML =
+    '<option value="">All currencies → BRL</option>' +
+    byFreq
+      .map(
+        (c) => `<option value="${c}">Only ${c} → BRL (${counts[c]})</option>`,
+      )
+      .join("");
 
   $("reimbFrom").value = "";
   $("reimbTo").value = "";
@@ -3043,12 +3130,26 @@ async function loadReportHistory() {
       const meta = [r.period, r.currency, _fmtSize(r.size)]
         .filter(Boolean)
         .join(" · ");
+      // Reimbursement reports can be marked completed → their receipts flip to
+      // "reimbursed". Show the control only when there are linked receipts.
+      const nRcpt = (r.receipt_ids || []).length;
+      let completeCtl = "";
+      if (r.kind === "reimbursement") {
+        if (r.completed) {
+          completeCtl =
+            `<span class="badge badge-purple" title="${nRcpt} receipt(s) marked reimbursed">Completed ✓</span>` +
+            `<button class="btn btn-ghost btn-sm" onclick="completeReportHistory(${r.id}, false)">Reopen</button>`;
+        } else if (nRcpt) {
+          completeCtl = `<button class="btn btn-outline btn-sm" onclick="completeReportHistory(${r.id}, true)" title="Set ${nRcpt} receipt(s) to Reimbursed">Mark completed</button>`;
+        }
+      }
       return `<div class="rh-row">
         <span class="badge ${kindCls}">${kindLbl}</span>
         <div class="rh-main">
           <div class="rh-title">${_esc(r.title || "Report")}</div>
           <div class="rh-meta">${_esc(meta)} · ${when}</div>
         </div>
+        ${completeCtl}
         <a class="btn btn-outline btn-sm" href="/api/report-history/${r.id}/download">Download</a>
         <button class="btn btn-ghost btn-sm" onclick="deleteReportHistory(${r.id})">Del</button>
       </div>`;
@@ -3069,6 +3170,30 @@ async function deleteReportHistory(id) {
     loadReportHistory();
   } catch (e) {
     alert("Failed to delete: " + e.message);
+  }
+}
+
+async function completeReportHistory(id, completed) {
+  const msg = completed
+    ? "Mark this report completed? The receipts it covers will be set to Reimbursed."
+    : "Reopen this report? Its receipts go back to Pending.";
+  if (!confirm(msg)) return;
+  try {
+    const res = await api("POST", `/api/report-history/${id}/complete`, {
+      completed,
+    });
+    const n = res.receipts_changed ?? 0;
+    toast(
+      completed
+        ? `Marked completed · ${n} receipt${n === 1 ? "" : "s"} set to reimbursed`
+        : `Reopened · ${n} receipt${n === 1 ? "" : "s"} back to pending`,
+      "ok",
+    );
+    loadReportHistory();
+    loadReceipts().catch(() => {});
+    loadStats().catch(() => {});
+  } catch (e) {
+    toast("Failed: " + e.message);
   }
 }
 
@@ -4942,6 +5067,17 @@ function restoreLastSync() {
   } catch {}
 }
 
+// Pre-fill the Gmail "From" date with 90 days ago so the default sync window
+// is visible and editable up front; To is left empty (= up to now) so it never
+// goes stale. The at-sync clamp below still guards if From is cleared.
+(() => {
+  const el = $("gmailAfter");
+  if (el && !el.value) {
+    const d = new Date(Date.now() - 90 * 864e5);
+    el.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+})();
+
 $("gmailSyncBtn").addEventListener("click", async () => {
   const btn = $("gmailSyncBtn");
   const status = $("gmailStatus");
@@ -4949,8 +5085,18 @@ $("gmailSyncBtn").addEventListener("click", async () => {
   // Inverted from prior "attach-only" checkbox: ticked = also create new
   // rows for unmatched emails. Default unticked = attach-only.
   const attachOnly = !$("gmailAddNewRows").checked;
-  const after = $("gmailAfter").value || "";
+  let after = $("gmailAfter").value || "";
   const before = $("gmailBefore").value || "";
+
+  // Flood guard: "Add new rows" with no From date once pulled the entire
+  // mailbox and created dozens of stale rows. When creating rows and no
+  // From is set, clamp to the last 90 days and tell the user how to widen.
+  let guardNote = "";
+  if (!attachOnly && !after) {
+    const d = new Date(Date.now() - 90 * 864e5);
+    after = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    guardNote = `No “From” date set — limited to since ${after} so a sync can’t import years of history. Set a From date to widen.`;
+  }
 
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span> Syncing…';
@@ -4968,6 +5114,9 @@ $("gmailSyncBtn").addEventListener("click", async () => {
     renderLastSync(res);
     status.textContent = "";
     status.className = "status-msg";
+    if (guardNote) {
+      status.innerHTML = `<div style="font-size:11px;color:var(--amber);line-height:1.5;margin-bottom:6px">${escHtml(guardNote)}</div>`;
+    }
     if (res.unmatched && res.unmatched.length) {
       // Surface a few examples so the user can spot-check what was skipped.
       const preview = res.unmatched
@@ -4982,7 +5131,7 @@ $("gmailSyncBtn").addEventListener("click", async () => {
         res.unmatched.length > 5
           ? `<br>… and ${res.unmatched.length - 5} more`
           : "";
-      status.innerHTML = `<div style="font-size:11px;color:var(--text-3);line-height:1.5">${preview}${more}</div>`;
+      status.innerHTML += `<div style="font-size:11px;color:var(--text-3);line-height:1.5">${preview}${more}</div>`;
     }
     loadReceipts();
     loadStats();
@@ -5214,40 +5363,23 @@ async function loadOcrConfig() {
   }
 }
 
-// Both on-device text-extraction backends use a separate text LLM to
-// structure the OCR'd text, so they share the structuring-model dropdown.
-function _usesTextModel(selValue) {
-  return selValue === "apple" || selValue === "paddle";
-}
-
 function _renderOcrPicker(cfg) {
   const sel = $("ocrModelSelect");
   if (!sel) return;
-  const models = cfg.models || [];
-  const vision = models.filter((m) => m.vision && !m.over_cap);
-  const opts = [
+  // OCR backend choice: Apple Vision (macOS) or PaddleOCR (cross-platform).
+  // The Ollama one-shot vision path scored 0% in the bake-off and was removed
+  // from the picker (still reachable via OCR_BACKEND in .env).
+  sel.innerHTML = [
     `<option value="apple"${cfg.backend === "apple_vision" ? " selected" : ""}>Apple Vision (on-device · macOS)</option>`,
     `<option value="paddle"${cfg.backend === "paddle_ocr" ? " selected" : ""}>PaddleOCR (on-device · cross-platform)${cfg.paddle_available === false ? " · not installed" : ""}</option>`,
-  ];
-  if (vision.length) {
-    opts.push('<optgroup label="Ollama vision (one-shot)">');
-    vision.forEach((m) => {
-      const seld =
-        cfg.backend === "ollama_vision" && cfg.vision_model === m.name
-          ? " selected"
-          : "";
-      const tag = m.ocr_only ? " · ⚠ OCR-only" : "";
-      opts.push(
-        `<option value="ollama:${_esc(m.name)}"${seld}>${_esc(m.name)} · ${m.size_gb} GB${tag}</option>`,
-      );
-    });
-    opts.push("</optgroup>");
-  }
-  sel.innerHTML = opts.join("");
+  ].join("");
 
-  // Structuring-model dropdown (only relevant for Apple Vision). Prefer
-  // non-vision (text) models, else show all installed.
+  // Structuring-model dropdown — both on-device OCR backends use a separate
+  // text model to structure the OCR output. Prefer non-vision (text) models,
+  // else show all installed.
   const tsel = $("ocrTextModelSelect");
+  if (!tsel) return;
+  const models = cfg.models || [];
   const textModels = models.filter((m) => !m.vision);
   const list = textModels.length ? textModels : models;
   tsel.innerHTML = list
@@ -5262,61 +5394,36 @@ function _renderOcrPicker(cfg) {
       `<option value="${_esc(cfg.text_model)}" selected>${_esc(cfg.text_model)} (not installed)</option>`,
     );
   }
-  $("ocrTextModelRow").style.display = _usesTextModel(sel.value) ? "" : "none";
   _renderOcrStatus(cfg);
 }
 
 function _renderOcrStatus(cfg) {
   const el = $("ocrModelStatus");
   if (!el) return;
-  if (!cfg.ollama_reachable) {
-    el.innerHTML =
-      '<span class="ocr-warn">Ollama not reachable — start it on :11434</span>';
-    return;
-  }
-  const hasVision = (cfg.models || []).some((m) => m.vision && !m.over_cap);
-  const activeOcrOnly =
-    cfg.backend === "ollama_vision" &&
-    (cfg.models || []).some((m) => m.name === cfg.vision_model && m.ocr_only);
-  const textModelMissing = !(cfg.models || []).some(
-    (m) => m.name === cfg.text_model,
-  );
-  if (cfg.backend === "ollama_vision" && !hasVision) {
-    el.innerHTML =
-      '<span class="ocr-warn">No vision model installed — run <code>ollama pull glm-ocr</code></span>';
-  } else if (activeOcrOnly) {
-    el.innerHTML = `<span class="ocr-warn">⚠ <code>${_esc(cfg.vision_model)}</code> is OCR-only — it loops on one-shot extraction and times out. Prefer <b>Apple Vision</b>, or a JSON-capable vision model (llava, minicpm-v).</span>`;
-  } else if (cfg.backend === "paddle_ocr" && cfg.paddle_available === false) {
+  // OCR runs on-device (Apple Vision or PaddleOCR); the local structuring path
+  // runs the text model in Ollama, so Ollama must be up unless you've set
+  // STRUCTURE_BACKEND=anthropic.
+  const textModelMissing = !(cfg.models || []).some((m) => m.name === cfg.text_model);
+  const label = cfg.backend === "paddle_ocr" ? "PaddleOCR" : "Apple Vision";
+  if (cfg.backend === "paddle_ocr" && cfg.paddle_available === false) {
     el.innerHTML =
       '<span class="ocr-warn">PaddleOCR not installed — run <code>pip install paddleocr paddlepaddle</code></span>';
-  } else if (cfg.backend === "paddle_ocr" && textModelMissing) {
-    el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed</span>`;
-  } else if (cfg.backend === "apple_vision" && textModelMissing) {
-    el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed</span>`;
+  } else if (!cfg.ollama_reachable) {
+    el.innerHTML =
+      '<span class="ocr-warn">Ollama not reachable — start it on :11434 (the structuring model runs there), or set STRUCTURE_BACKEND=anthropic</span>';
+  } else if (textModelMissing) {
+    el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed — <code>ollama pull ${_esc(cfg.text_model)}</code></span>`;
   } else {
-    el.innerHTML = '<span class="ocr-ok">Applies on next OCR.</span>';
+    el.innerHTML = `<span class="ocr-ok">${label} → <code>${_esc(cfg.text_model)}</code>. Applies on next OCR.</span>`;
   }
 }
 
 async function _saveOcrConfig() {
   const sel = $("ocrModelSelect");
-  let patch;
-  if (sel.value === "apple") {
-    patch = {
-      backend: "apple_vision",
-      text_model: $("ocrTextModelSelect").value,
-    };
-  } else if (sel.value === "paddle") {
-    patch = {
-      backend: "paddle_ocr",
-      text_model: $("ocrTextModelSelect").value,
-    };
-  } else {
-    patch = {
-      backend: "ollama_vision",
-      vision_model: sel.value.replace(/^ollama:/, ""),
-    };
-  }
+  const patch = {
+    backend: sel.value === "paddle" ? "paddle_ocr" : "apple_vision",
+    text_model: $("ocrTextModelSelect").value,
+  };
   try {
     _ocrCfg = await api("PUT", "/api/ocr/config", patch);
     // Re-fetch the model list so status reflects reality.
@@ -5329,11 +5436,7 @@ async function _saveOcrConfig() {
 
 (function _wireOcrPicker() {
   const sel = $("ocrModelSelect");
-  if (sel)
-    sel.addEventListener("change", () => {
-      $("ocrTextModelRow").style.display = _usesTextModel(sel.value) ? "" : "none";
-      _saveOcrConfig();
-    });
+  if (sel) sel.addEventListener("change", _saveOcrConfig);
   const tsel = $("ocrTextModelSelect");
   if (tsel) tsel.addEventListener("change", _saveOcrConfig);
 })();
@@ -5393,6 +5496,14 @@ loadReviewQueue().catch(() => {});
     });
   }
   _updateFilterBadge();
+
+  // New-row banner actions.
+  document
+    .getElementById("newReceiptsShowBtn")
+    ?.addEventListener("click", showNewReceipts);
+  document
+    .getElementById("newReceiptsSeenBtn")
+    ?.addEventListener("click", markReceiptsSeen);
 
   // Sortable column headers — click a <th data-sort="col">.
   // Same handler shape works for any sortable table; receipts is the only

@@ -79,8 +79,13 @@ Rules:
   change. total_amount is NEVER the subtotal; between Subtotal and Total pick
   Total (the larger).
 
-- date: return ONLY the transaction date physically printed on the receipt.
-  NEVER use today's date. NEVER fabricate. If unclear, return null.
+- date: return ONLY a transaction date CLEARLY PRINTED on the receipt.
+  NEVER use today's date, a placeholder, or a guess. Specifically: do NOT
+  output "01-01", the 1st of a month, or a year that doesn't appear on the
+  receipt when you can't read the real date — return null instead. A UI /
+  screenshot timestamp (e.g. "6/1/26, 4:18 PM") is NOT the receipt date.
+  A wrong/invented date is worse than null. If no transaction date is
+  clearly legible, return null.
 
 - vendor_name: the business name (e.g. "Trees Coffee Gastown",
   "Ciclo Espresso"). NOT a server name, table number, transaction id,

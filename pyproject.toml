@@ -23,6 +23,9 @@ dependencies = [
     "google-api-python-client>=2.117",
     "weasyprint>=60",
     "opencv-python-headless>=4.8",
+    "pyobjc-framework-vision==11.1 ; sys_platform == 'darwin'",
+    "pyobjc-framework-quartz==11.1 ; sys_platform == 'darwin'",
+    "pymupdf>=1.24.0",
 ]
 
 [project.optional-dependencies]

@@ -460,10 +460,12 @@ category). 404 if the statement is gone.
 Build + stream the **reimbursement** PDF — the same form built from
 `reimbursement`-type receipts (no statement, no matching). Query params,
 all optional: `user_id` (cardholder profile), `date_from`, `date_to`
-(YYYY-MM-DD), `currency` (scope to one currency). When `currency` is
-omitted and the receipts span several, the form prints **one TOTAL row
-per currency** (`TOTAL (BRL)`, `TOTAL (CAD)`, …) instead of summing
-them into a meaningless single number. 404 when no receipts match.
+(YYYY-MM-DD), `currency` (scope to one currency). Every receipt is
+**converted to BRL** at the latest FX rate and summed into **one
+`TOTAL`** — `currency` only scopes which receipts are included, never the
+output currency. A currency with no available rate falls back to its own
+`TOTAL (XYZ)` bucket. Already-`reimbursed` receipts (claimed by a
+completed report) are excluded. 404 when no receipts match.
 `application/pdf` attachment.
 
 ### `GET` / `PUT` `/api/report-profile`
@@ -502,10 +504,13 @@ Remove a cardholder. Returns 204. 404 if not found.
 
 List saved reports, newest first:
 `{reports: [{id, created_at, kind, title, cardholder, currency, period,
-size, file, download_name}]}`. `kind` is `statement` or
-`reimbursement`. Every statement / reimbursement PDF the app builds is
-recorded here automatically. History is capped at **100 records** —
-the oldest entry (and its PDF) is pruned when a new one lands.
+size, file, download_name, receipt_ids, completed, completed_at}]}`.
+`kind` is `statement` or `reimbursement`. `receipt_ids` (reimbursement
+reports) records which receipts went in; `completed` / `completed_at`
+track the Mark-completed state. Every statement / reimbursement PDF the
+app builds is recorded here automatically. History is capped at **100
+records** — the oldest entry (and its PDF) is pruned when a new one
+lands.
 
 ### `GET /api/report-history/{id}/download`
 
@@ -514,6 +519,16 @@ Re-download a saved report PDF. 404 if the record or its file is gone.
 ### `DELETE /api/report-history/{id}`
 
 Delete a saved report (index row + file). Returns 204. 404 if not found.
+
+### `POST /api/report-history/{id}/complete`
+
+Mark a reimbursement report **completed** (`{"completed": true}`, the
+default) or **reopen** it (`{"completed": false}`). Flips the report's
+linked `receipt_ids` via `match_status` — `reimbursed` when completing,
+back to `pending` when reopening. Returns
+`{success, completed, status, receipts_changed}`. 404 if the report is
+gone. (Reports generated before `receipt_ids` were recorded have nothing
+to flip.)
 
 ## FX rates
 
@@ -539,9 +554,30 @@ visit; tokens land in `data/gmail/token.json` after consent.
 
 ### `POST /api/gmail/sync`
 
-Pull Uber receipt emails. Query params: `business_only` (bool),
-`attach_only` (bool — if true, only attach PDFs to existing rows;
-don't create new rows from emails).
+Pull Uber receipt emails and turn them into receipts. Query params, all
+optional: `business_only` (narrow to `[Business]` rides), `after` /
+`before` (YYYY-MM-DD), `max_messages`, and `attach_only`.
+
+- **`attach_only=false` (default — "Add new rows" on):** create a new row
+  for each unmatched email. **Flood guard:** the UI pre-fills the **From**
+  date with 90 days ago, and if it's left blank the sync still clamps to
+  the last 90 days — a first sync with no date once pulled the entire
+  mailbox and created dozens of stale rows.
+- **`attach_only=true`:** the CSV is the source of truth — attach a
+  matching email's PDF to an existing row (by date + amount + currency);
+  never create rows. Unmatched emails come back in `unmatched` and stay
+  re-syncable.
+
+**Dedup.** Fast path is the receipt filename — `uber_<trip-id>.pdf`, or
+`uber_gm-<msg-id>.pdf` when the email carries no trip id. Uber emails the
+same ride more than once (trip receipt + tax/summary), so when an email
+has **no trip id** the sync also matches any existing Uber row on
+(date, amount, currency); this is gated on "no trip id" so two genuinely
+distinct same-day same-fare rides (which carry distinct trip ids) are
+never collapsed. Logic in `gmail_ingest.sync_new_receipts`.
+
+Returns `{success, imported, upgraded, skipped, scanned, errors,
+unmatched, business_only, attach_only}`.
 
 ### `POST /api/gmail/render-pdfs`
 
@@ -550,8 +586,12 @@ the Uber receipt parser changes.
 
 ### `POST /api/gmail/reset`
 
-Remove the `rt-processed` Gmail label from every thread so the next
-sync re-imports them. Power-user button — no UI control.
+Remove the `rt-processed` Gmail label so the next sync re-examines those
+threads. Query param `only_unimported` (default `true`) keeps the label
+on threads that did produce a row, clearing it only from un-imported
+ones — so a re-sync recovers genuinely-missed rides without re-touching
+what you already have. Returns `{success, cleared, kept_imported,
+scanned}`. Power-user button.
 
 ## Uber CSV
 
@@ -573,9 +613,11 @@ formats. Returns PDFs with `Content-Type: application/pdf`.
 ### `GET /api/stats`
 
 Topbar stats. Returns `{total_receipts, matched_receipts,
-unmatched_receipts, pending_receipts, corp_card_receipts,
-reimbursement_receipts, total_statements, total_matches,
-total_receipt_amount, amounts_by_currency}`.
+unmatched_receipts, pending_receipts, reimbursed_receipts,
+corp_card_receipts, reimbursement_receipts, total_statements,
+total_matches, total_receipt_amount, amounts_by_currency}`.
+`reimbursed_receipts` counts receipts settled by a completed
+reimbursement report (`match_status = 'reimbursed'`).
 
 `amounts_by_currency` is `{BRL: 29933.26, CAD: 3024.07, ...}` — one sum
 per currency (adding USD to BRL numerically meant nothing).

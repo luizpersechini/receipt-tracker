@@ -201,6 +201,9 @@ async def reimbursement_report_pdf(
             currency,
         )
         nome = await asyncio.to_thread(expense_report_pdf.cardholder_name, user_id, None)
+        receipt_ids = await asyncio.to_thread(
+            expense_report_pdf.reimbursement_receipt_ids, date_from, date_to, currency
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -217,6 +220,7 @@ async def reimbursement_report_pdf(
         currency=currency or "",
         period=period,
         download_name="reembolso_despesas.pdf",
+        receipt_ids=receipt_ids,
     )
     return Response(
         content=pdf_bytes,
@@ -260,6 +264,25 @@ async def delete_report_history(report_id: int):
     if not ok:
         raise HTTPException(status_code=404, detail="Report not found")
     return Response(status_code=204)
+
+
+@router.post("/report-history/{report_id}/complete")
+async def complete_report_history(report_id: int, body: dict = Body(default={})):
+    """Mark a reimbursement report completed (or reopen it) and flip its
+    receipts' status accordingly: `reimbursed` when completing, back to
+    `pending` when reopening. Body: `{"completed": true|false}` (default true).
+    """
+    completed = bool(body.get("completed", True)) if isinstance(body, dict) else True
+    rec = await asyncio.to_thread(report_history.set_completed, report_id, completed)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    status = "reimbursed" if completed else "pending"
+    changed = await asyncio.to_thread(
+        db.update_receipts_match_status, rec.get("receipt_ids") or [], status
+    )
+    return JSONResponse(
+        {"success": True, "completed": completed, "status": status, "receipts_changed": changed}
+    )
 
 
 @router.get("/report")

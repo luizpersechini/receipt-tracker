@@ -1858,6 +1858,48 @@ _INCLUSIVE_TOTAL_RE = re.compile(
 _CASH_WORDS_RE = re.compile(r"\b(cash|change|troco|dinheiro)\b", re.IGNORECASE)
 
 
+def _column_split_total(text: str) -> Optional[float]:
+    """Recover the total when Apple Vision read the receipt as columns — all
+    the labels first, then all the values in a block below — so no total
+    keyword has an inline amount (`_scan_total_in_text` returns None). Common
+    on Brazilian NFC-e:
+
+        Total bruto dos itens          3.884,94
+        Desconto R$            ──►       323,0
+        TOTAL R$                       3.561,94
+        Cartão de Crédito             3.561,94
+
+    Strategy: take the money tokens that appear AFTER the last total/payment
+    keyword line, and prefer the value printed at least twice — the TOTAL line
+    and the payment line carry the same amount, while the once-printed
+    "Total bruto" (gross, pre-discount) must not win. Falls back to the
+    largest tail value when nothing repeats (single-total receipts). The
+    caller only adopts the result as an UPWARD correction, so this can't lower
+    a total the model already got right.
+    """
+    if not text:
+        return None
+    lines = text.splitlines()
+    last_kw = -1
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if "exclu" in low or "excl." in low:
+            continue
+        if any(k in low for k in _TOTAL_FINAL_KEYWORDS) or any(
+            k in low for k in _TOTAL_HEADLINE_KEYWORDS
+        ):
+            last_kw = i
+    if last_kw < 0:
+        return None
+    tail_tokens = _money_tokens("\n".join(lines[last_kw + 1 :]))
+    if not tail_tokens:
+        return None
+    from collections import Counter
+
+    repeated = [v for v, c in Counter(tail_tokens).items() if c >= 2]
+    return max(repeated) if repeated else max(tail_tokens)
+
+
 def _post_process_with_ocr_text(data: dict, text: str) -> None:
     """In-place: fill gaps that the LLM left using the raw OCR text.
 
@@ -1895,11 +1937,11 @@ def _post_process_with_ocr_text(data: dict, text: str) -> None:
     #     model grabbed the tax-exclusive subtotal (model+tax is printed)
     #     or the cash tendered (cash − change = total is printed).
     scanned = _scan_total_in_text(text)
-    existing = data.get("total_amount")
-    try:
-        existing_f = float(existing) if existing not in (None, "") else None
-    except (TypeError, ValueError):
-        existing_f = None
+    # The model returns the total "exactly as printed", so in comma-decimal
+    # locales it's a string like "446,94" — float() would raise and leave
+    # existing_f None, silently disabling every repair below for BR/EU
+    # receipts. parse_money is locale-tolerant.
+    existing_f = parse_money(data.get("total_amount"))
     tokens = _money_tokens(text)
     tax = parse_money(data.get("tax_amount"))
 
@@ -1938,6 +1980,16 @@ def _post_process_with_ocr_text(data: dict, text: str) -> None:
                 if t_cand > d and _supported(d, tokens):
                     data["total_amount"] = t_cand
                     break
+        else:
+            # Column-split fallback (Brazilian NFC-e etc.): labels and their
+            # values landed in separate blocks, so no keyword line carried an
+            # inline amount and the incl/cash repairs above don't apply. Promote
+            # upward to the trailing value printed twice (TOTAL == payment),
+            # which beats a once-printed gross. Upward-only, so it can't lower a
+            # total the model already had right.
+            csplit = _column_split_total(text)
+            if csplit is not None and csplit > existing_f * 1.01:
+                data["total_amount"] = csplit
 
     # Category rescue: only when LLM defaulted to "other"
     if (data.get("category") or "").lower() == "other":

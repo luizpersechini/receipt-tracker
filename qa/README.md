@@ -5,6 +5,19 @@
 `data/`. It then drives the real flows end to end and reports every error with
 timing, so you can catch regressions before they reach live data.
 
+`bakeoff.py` is a sibling tool: a head-to-head **OCR config comparison** —
+runs a fixed sample of your own receipts through multiple configs (apple_vision
+
+- different text models, vs glm-ocr) and prints a **per-field** scorecard
+  (total / currency / date / vendor / category) + a verdict. Read-only on
+  `data/`. Used to retire glm-ocr (0% every field) and confirm apple_vision +
+  `llama3.1:8b` as the default. Re-run when models change:
+
+```bash
+.venv/bin/python qa/bakeoff.py --n 8           # 8 receipts, all fields
+.venv/bin/python qa/bakeoff.py --apple-models llama3.2:3b,llama3.1:8b --glm glm-ocr:latest
+```
+
 ## Run
 
 Use the **project venv interpreter** (Python 3.13) — the app needs 3.10+, and
@@ -33,25 +46,29 @@ fast gate; `--ocr real` additionally exercises the OCR/structuring pipeline.
 
 ## What it checks
 
-| Check                      | Covers                                                                                 |
-| -------------------------- | -------------------------------------------------------------------------------------- |
-| health: `GET /`            | index served                                                                           |
-| health: core GET endpoints | receipts, statements, stats, ocr/config, review-queue, watch-folder, matches all 200   |
-| ocr config                 | QA sandbox is on `apple_vision` (not the looping glm-ocr default)                      |
-| receipt single-flow        | `preview?single` → one box → `commit` (real OCR extracts vendor/total) → edit → delete |
-| receipt multi-segment      | 2-receipt image → segmenter returns ≥2 boxes → commit                                  |
-| statement                  | upload CSV → list → **complete (archive)** → reopen → delete                           |
-| matching                   | `POST /match` runs without error; `/stats` shape                                       |
-| review queue               | PDF preview queues pages → commit drains the item                                      |
-| report                     | expense report generates (warns, not fails, if FX/network is offline)                  |
-| corpus EN (SROIE)          | random real English receipts (SROIE), OCR'd + scored vs ground-truth totals            |
-| corpus PT (your own)       | random real BRL image receipts from your data/, re-OCR'd + scored vs the stored total  |
+| Check                      | Covers                                                                                                |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| health: `GET /`            | index served                                                                                          |
+| health: core GET endpoints | receipts, statements, stats, ocr/config, review-queue, watch-folder, matches all 200                  |
+| ocr config                 | QA sandbox is on `apple_vision` (not the looping glm-ocr default)                                     |
+| receipt single-flow        | `preview?single` → one box → `commit` (real OCR extracts vendor/total) → edit → delete                |
+| receipt multi-segment      | 2-receipt image → segmenter returns ≥2 boxes → commit                                                 |
+| statement                  | upload CSV → list → **complete (archive)** → reopen → delete                                          |
+| matching                   | `POST /match` runs without error; `/stats` shape                                                      |
+| review queue               | PDF preview queues pages → commit drains the item                                                     |
+| report                     | expense report generates (warns, not fails, if FX/network is offline)                                 |
+| corpus EN (SROIE)          | random real English receipts (SROIE), OCR'd + scored vs ground-truth totals                           |
+| corpus PT (your own)       | random real BRL image receipts from your data/, re-OCR'd + scored vs the stored total / vendor / date |
 
 ### Real-corpus accuracy steps (Portuguese + English)
 
-Focused on the receipts this app actually sees. Each run scores total-amount
-accuracy and appends to `qa/corpus_scoreboard.jsonl` (gitignored); the last 3
-runs per corpus print as a trend — the "test and improve" loop.
+Focused on the receipts this app actually sees. Each run scores accuracy and
+appends to `qa/corpus_scoreboard.jsonl` (gitignored); the last 3 runs per
+corpus print as a trend — the "test and improve" loop. SROIE scores the
+**total** only; the PT (your own) corpus scores **total + vendor + date**
+against the stored values, so vendor/date changes can be measured (vendor
+match is accent/case/truncation-tolerant; date is exact YYYY-MM-DD; both skip
+receipts with no stored ground truth).
 
 - **EN — SROIE** ([mp-02/sroie](https://huggingface.co/datasets/mp-02/sroie)):
   a fresh random sample of real English receipts; ground-truth total comes
@@ -68,9 +85,10 @@ runs per corpus print as a trend — the "test and improve" loop.
   (outputs are gitignored).
 - **PT — your own receipts:** a random sample of your real **BRL image**
   receipts (Uber rides and non-image files excluded), read-only from the live
-  DB, re-OCR'd and scored against the **stored** total. For receipts you've
-  corrected this is true ground truth; for the rest it's a regression signal
-  (a drop means a change broke something). HEIC (iPhone) receipts included.
+  DB, re-OCR'd and scored against the **stored** total, vendor, and date. For
+  receipts you've corrected this is true ground truth; for the rest it's a
+  regression signal (a drop means a change broke something). HEIC (iPhone)
+  receipts included.
 
 Both need real OCR (`--ocr real`); EN also needs `datasets` + network
 (`uv pip install --python .venv/bin/python datasets`). `--corpus N` sets the
@@ -98,8 +116,11 @@ Surfaced while building/running this harness:
    `ocr_only` in `/api/ocr/config` and the picker labels it "⚠ OCR-only" +
    warns when it's the active one-shot model.
 
-3. **No automated gate.** Nothing enforces green before push. Wire
-   `python qa/run_qa.py --ocr mock` + `pytest -q` into a pre-push hook or CI.
+3. ~~**No automated gate.**~~ **DONE.** `.github/workflows/ci.yml` runs
+   `pytest -q` + `qa/run_qa.py --ocr mock` on every push / PR — both fully
+   offline (no Ollama, no network). A pre-push hook isn't used because this
+   repo's global `core.hooksPath` (the gitleaks pre-commit) would shadow a
+   project-local hook.
 
 4. **Report needs live FX network.** `/reports/expense` calls `fetch_rates`,
    so reports fail offline — at odds with the app's "fully local/offline" goal.

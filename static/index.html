@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=34" />
+    <link rel="stylesheet" href="/static/css/app.css?v=36" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -183,6 +183,10 @@
             ><span class="tstat-val" id="hUnmatched">—</span>
           </div>
           <div class="tstat">
+            <span class="tstat-label">Reimbursed</span
+            ><span class="tstat-val" id="hReimbursed">—</span>
+          </div>
+          <div class="tstat">
             <span class="tstat-label">Total</span
             ><span class="tstat-val" id="hAmount">—</span>
           </div>
@@ -220,15 +224,13 @@
             </button>
           </div>
 
-          <!-- OCR / Vision model picker -->
+          <!-- OCR model picker (Apple Vision on-device + structuring LLM) -->
           <div class="card" id="ocrModelCard">
-            <div class="card-head">Vision / OCR model</div>
-            <select id="ocrModelSelect" class="fbar-select ocr-select"></select>
-            <div
-              id="ocrTextModelRow"
-              class="ocr-textmodel"
-              style="display: none"
-            >
+            <div class="card-head">OCR model</div>
+            <div class="ocr-fixed-backend">
+              Apple Vision <span>· on-device</span>
+            </div>
+            <div id="ocrTextModelRow" class="ocr-textmodel">
               <label>Structuring model</label>
               <select
                 id="ocrTextModelSelect"
@@ -508,7 +510,7 @@
                   Business rides only
                 </label>
                 <label class="opt-check">
-                  <input type="checkbox" id="gmailAddNewRows" />
+                  <input type="checkbox" id="gmailAddNewRows" checked />
                   Add new rows for unmatched
                 </label>
                 <div class="opt-dates">
@@ -683,6 +685,7 @@
                   <option value="pending">Pending</option>
                   <option value="unmatched">Unmatched</option>
                   <option value="matched">Archived (matched)</option>
+                  <option value="reimbursed">Reimbursed</option>
                   <option value="all">All</option>
                 </select>
                 <select id="rfCategory" class="fbar-select">
@@ -711,6 +714,21 @@
                   Clear
                 </button>
               </div>
+            </div>
+            <div
+              id="newReceiptsBanner"
+              class="new-banner"
+              style="display: none"
+            >
+              <span class="new-banner-dot"></span>
+              <span id="newReceiptsText"></span>
+              <span style="flex: 1"></span>
+              <button class="btn btn-primary btn-sm" id="newReceiptsShowBtn">
+                Show new
+              </button>
+              <button class="btn btn-ghost btn-sm" id="newReceiptsSeenBtn">
+                Mark all seen
+              </button>
             </div>
             <div class="card">
               <div class="table-wrap">
@@ -1894,6 +1912,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=61"></script>
+    <script src="/static/js/app.js?v=67"></script>
   </body>
 </html>

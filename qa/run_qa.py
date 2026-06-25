@@ -26,6 +26,7 @@ import csv
 import io
 import json
 import random
+import re
 import shutil
 import sys
 import tempfile
@@ -500,7 +501,7 @@ def _upscale(img, target=1500):
     return img.resize((max(1, int(w * scale)), max(1, int(h * scale))), _Im.LANCZOS)
 
 
-def _append_scoreboard(ctx, corpus, scored, correct, acc):
+def _append_scoreboard(ctx, corpus, scored, correct, acc, fields=None):
     from src.services import ocr_settings
     from src.config import settings
 
@@ -521,6 +522,12 @@ def _append_scoreboard(ctx, corpus, scored, correct, acc):
         "accuracy": round(acc, 3),
         "samples": [{"gt": r["gt"], "got": r["got"], "ok": r["ok"]} for r in scored],
     }
+    if fields:
+        # Per-field accuracy (own-pt scores total + vendor + date). Top-level
+        # accuracy stays = total, so the existing trend keeps working.
+        rec["fields"] = {
+            k: {"correct": c, "n": n, "accuracy": round(a, 3)} for k, (c, n, a) in fields.items()
+        }
     SCOREBOARD.parent.mkdir(parents=True, exist_ok=True)
     with open(SCOREBOARD, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
@@ -549,6 +556,82 @@ def _score_pairs(ctx, corpus, pairs):
     note = f"{correct}/{len(scored)} totals correct ({acc:.0%})"
     if miss:
         note += " · gt→got misses: " + ", ".join(miss)
+    return note
+
+
+def _norm_vendor(s):
+    """Lowercase, strip accents, collapse to alnum words — so 'Sorveteria
+    Parada Rápida' == 'SORVETERIA PARADA RAPIDA'."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def _vendor_ok(got, gt):
+    """None → no ground truth to score (gt blank / 'Unknown'). Else a fuzzy
+    match tolerant of case, accents, and truncation."""
+    t = _norm_vendor(gt)
+    if not t or t == "unknown":
+        return None
+    g = _norm_vendor(got)
+    if not g:
+        return False
+    if g in t or t in g:  # truncation either way
+        return True
+    import difflib
+
+    return difflib.SequenceMatcher(None, g, t).ratio() >= 0.82
+
+
+def _date_ok(got, gt):
+    """None → no ground-truth date. Else exact YYYY-MM-DD match."""
+    if not gt:
+        return None
+    return (got or "")[:10] == str(gt)[:10]
+
+
+def _score_own_pt(ctx, pairs):
+    """own-pt scorer: pairs are (PIL image, gt_total, gt_vendor, gt_date).
+    Scores total + vendor + date against the stored values so we can iterate
+    on vendor/date *with measurement*, not guesses. Appends a per-field
+    scoreboard row and returns a multi-field note."""
+    from src.services.llm_processor import ocr_crops
+
+    tot, ven, dat, tot_miss, ven_miss = [], [], [], [], []
+    for img, gt_total, gt_vendor, gt_date in pairs:
+        try:
+            meta = ocr_crops([img.convert("RGB")])[0]["metadata"]
+        except Exception:  # noqa: BLE001
+            meta = {}
+        got_t = _to_amount(meta.get("total_amount"))
+        if gt_total is not None:
+            ok = _amount_ok(got_t, gt_total)
+            tot.append(ok)
+            if not ok:
+                tot_miss.append(f"{_fmt_amt(gt_total)}→{_fmt_amt(got_t)}")
+        v = _vendor_ok(meta.get("vendor_name"), gt_vendor)
+        if v is not None:
+            ven.append(v)
+            if not v:
+                ven_miss.append(f"{str(gt_vendor)[:16]}→{str(meta.get('vendor_name'))[:16]}")
+        d = _date_ok(meta.get("date"), gt_date)
+        if d is not None:
+            dat.append(d)
+    if not tot:
+        raise Warn("no ground-truth totals in this sample")
+
+    def _acc(xs):
+        return (sum(xs), len(xs), (sum(xs) / len(xs)) if xs else 0.0)
+
+    fields = {"total": _acc(tot), "vendor": _acc(ven), "date": _acc(dat)}
+    tc, tn, ta = fields["total"]
+    _append_scoreboard(
+        ctx, "own-pt", [{"gt": None, "got": None, "ok": o} for o in tot], tc, ta, fields=fields
+    )
+    note = " · ".join(f"{k} {c}/{n} ({a:.0%})" for k, (c, n, a) in fields.items() if n)
+    if ven_miss:
+        note += " · vendor misses: " + ", ".join(ven_miss[:4])
     return note
 
 
@@ -623,7 +706,7 @@ def _c_own_pt(client, ctx):
         if p.name.lower().startswith("uber_") or p.suffix.lower() not in img_ext:
             continue
         if p.exists():
-            pool.append((fp, float(total)))
+            pool.append((fp, float(total), m.get("vendor_name"), m.get("date")))
     if not pool:
         raise Warn("no BRL image receipts with a total in your live data/")
 
@@ -638,14 +721,14 @@ def _c_own_pt(client, ctx):
 
     sample = random.Random(ctx["seed"]).sample(pool, min(ctx["corpus_n"], len(pool)))
     pairs = []
-    for fp, gt in sample:
+    for fp, gt, vendor, date in sample:
         try:
-            pairs.append((Image.open(fp), gt))
+            pairs.append((Image.open(fp), gt, vendor, date))
         except Exception:  # noqa: BLE001
             continue
     if not pairs:
         raise Warn("sampled receipts couldn't be opened (unsupported format?)")
-    return _score_pairs(ctx, "own-pt", pairs)
+    return _score_own_pt(ctx, pairs)
 
 
 def _print_scoreboard_trend():
@@ -662,14 +745,19 @@ def _print_scoreboard_trend():
         by_corpus.setdefault(r.get("corpus", "?"), []).append(r)
     if not by_corpus:
         return
-    print("\n  Total-accuracy trend (last 3 runs per corpus)")
+    print("\n  Field-accuracy trend (last 3 runs per corpus)")
     print("  " + "─" * 64)
     for corpus, rs in by_corpus.items():
         for r in rs[-3:]:
-            print(
+            line = (
                 f"    [{corpus:<8}] {r.get('ts', '?'):<20} {r.get('text_model', '?'):<13} "
-                f"{r.get('correct', 0)}/{r.get('n', 0)}  {r.get('accuracy', 0):.0%}"
+                f"total {r.get('correct', 0)}/{r.get('n', 0)} {r.get('accuracy', 0):.0%}"
             )
+            f = r.get("fields") or {}
+            for k in ("vendor", "date"):
+                if k in f and f[k].get("n"):
+                    line += f"  {k} {f[k]['correct']}/{f[k]['n']} {f[k]['accuracy']:.0%}"
+            print(line)
 
 
 # ─── runner ──────────────────────────────────────────────────────────────────
