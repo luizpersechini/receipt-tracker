@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # receipts. Use "en", "ch", "latin", "ml" etc. per
     # PaddleOCR's supported language list.
     paddle_use_gpu: bool = False  # CPU by default; GPU needs paddlepaddle-gpu+CUDA
+    # Override PaddleOCR's per-language default models (3.x). Blank = the
+    # default for PADDLE_LANG. Detection is language-agnostic, so a stronger
+    # detector is the safe accuracy lever when totals aren't being read:
+    #   PADDLE_TEXT_DET_MODEL=PP-OCRv5_server_det   (bigger detector)
+    # Recognition is language-specific — for pt-BR the default
+    # PP-OCRv6_medium_rec is multilingual; latin_PP-OCRv5_mobile_rec is a
+    # latin-specialized alternative. (First use downloads the chosen model.)
+    paddle_text_det_model: str = ""
+    paddle_text_rec_model: str = ""
 
     # Structuring backend — which LLM turns the OCR'd text into receipt JSON.
     # This is SEPARATE from the OCR backend: OCR always runs locally

@@ -92,7 +92,7 @@ def unavailability_reason() -> Optional[str]:
 
 _LOCK = threading.Lock()
 _INSTANCE = None
-_INSTANCE_LANG: Optional[str] = None
+_INSTANCE_KEY = None  # (lang, det_model, rec_model) the cached instance was built for
 
 
 def _build_instance(lang: str):
@@ -105,10 +105,21 @@ def _build_instance(lang: str):
     # 2.x takes use_gpu=True. CPU is the default if neither applies.
     gpu_3x = {"device": "gpu"} if use_gpu else {}
     gpu_2x = {"use_gpu": True} if use_gpu else {}
+    # Optional per-model overrides (3.x kwargs only). Blank → PaddleOCR's
+    # per-language default. Stronger detector (PP-OCRv5_server_det) is the safe
+    # accuracy lever; recognition override is language-sensitive.
+    models_3x = {}
+    det = (getattr(settings, "paddle_text_det_model", "") or "").strip()
+    rec = (getattr(settings, "paddle_text_rec_model", "") or "").strip()
+    if det:
+        models_3x["text_detection_model_name"] = det
+    if rec:
+        models_3x["text_recognition_model_name"] = rec
     # Ordered most-modern first. Unknown kwargs raise TypeError/ValueError,
-    # so we fall through to an older-style signature.
+    # so we fall through to an older-style signature. The model-name overrides
+    # only go on the 3.x variant (2.x uses a different selection mechanism).
     variants = [
-        {**base, **gpu_3x, "use_textline_orientation": True},  # 3.x (PP-OCRv5+)
+        {**base, **gpu_3x, **models_3x, "use_textline_orientation": True},  # 3.x (PP-OCRv5+)
         {**base, **gpu_2x, "use_angle_cls": True, "show_log": False},  # 2.x
         {**base, **gpu_2x, "use_angle_cls": True},  # 2.x without show_log
         base,  # bare minimum (CPU)
@@ -126,13 +137,19 @@ def _build_instance(lang: str):
 
 
 def _get_instance():
-    """Return the cached PaddleOCR, rebuilding if the configured language
-    changed. Caller must hold `_LOCK` (or accept the build race on first use)."""
-    global _INSTANCE, _INSTANCE_LANG
+    """Return the cached PaddleOCR, rebuilding if the configured language or
+    model override changed. Caller must hold `_LOCK` (or accept the build race
+    on first use)."""
+    global _INSTANCE, _INSTANCE_KEY
     lang = (settings.paddle_lang or "en").strip() or "en"
-    if _INSTANCE is None or _INSTANCE_LANG != lang:
+    key = (
+        lang,
+        (getattr(settings, "paddle_text_det_model", "") or "").strip(),
+        (getattr(settings, "paddle_text_rec_model", "") or "").strip(),
+    )
+    if _INSTANCE is None or _INSTANCE_KEY != key:
         _INSTANCE = _build_instance(lang)
-        _INSTANCE_LANG = lang
+        _INSTANCE_KEY = key
     return _INSTANCE
 
 
