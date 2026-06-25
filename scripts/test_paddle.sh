@@ -37,15 +37,36 @@ else
   PY=python3
 fi
 
-# ── 2. install paddle deps if missing ──────────────────────────────────────
+# ── 2a. Python version guard ───────────────────────────────────────────────
+# The project (and PaddleOCR) need Python 3.10+. A 3.9 venv can't run the app,
+# so stop early with an actionable message instead of failing deep in an import.
+if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+  warn "✗ This venv is $("$PY" --version 2>&1) — the project needs Python 3.10+."
+  warn "  Rebuild it (3.13 recommended), then re-run this script:"
+  warn "      rm -rf .venv && uv venv --python 3.13 && uv pip sync requirements.lock"
+  exit 1
+fi
+ok "✓ $("$PY" --version 2>&1)"
+
+# ── 2b. install paddle deps if missing ─────────────────────────────────────
 bold "→ checking PaddleOCR install"
 if ! "$PY" -c "import paddleocr" 2>/dev/null; then
   warn "  paddleocr not installed — installing paddleocr + paddlepaddle (CPU)…"
-  "$PY" -m pip install paddleocr paddlepaddle || {
+  # uv-managed venvs don't ship pip, so prefer `uv pip install` when uv exists;
+  # fall back to the venv's own pip (bootstrapping it via ensurepip if needed).
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install --python "$PY" paddleocr paddlepaddle
+  elif "$PY" -m pip --version >/dev/null 2>&1; then
+    "$PY" -m pip install paddleocr paddlepaddle
+  else
+    "$PY" -m ensurepip --upgrade >/dev/null 2>&1 && "$PY" -m pip install paddleocr paddlepaddle
+  fi
+  if ! "$PY" -c "import paddleocr" 2>/dev/null; then
     warn "  install failed. On Apple Silicon the paddlepaddle wheel can be picky —"
     warn "  paste the error and we'll pin a working version."
     exit 1
-  }
+  fi
+  ok "  ✓ installed"
 else
   ok "  ✓ paddleocr already installed"
 fi
