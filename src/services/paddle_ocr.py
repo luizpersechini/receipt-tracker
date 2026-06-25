@@ -259,61 +259,19 @@ def _ocr_items(image_path: str) -> List[tuple]:
 # ─── Public API (mirrors apple_vision_ocr) ─────────────────────────────────
 
 
-def _assemble_lines(rows: List[tuple]) -> List[str]:
-    """Group recognised boxes into VISUAL LINES (one printed receipt line per
-    output string), instead of emitting one line per detected box.
-
-    PaddleOCR detects each text span as its own box, so a printed line like
-    ``Total .......... R$ 70,00`` arrives as two separate boxes — and emitting
-    them on two lines breaks the label↔value adjacency the structuring LLM
-    relies on (it then can't tell which amount is the total). We cluster boxes
-    whose vertical extents overlap into a single line and order them
-    left-to-right, so the text reads the way a human sees the receipt.
-
-    `rows` is [(text, score, bbox|None), ...]; bbox is (x, y, w, h)."""
-    boxed = [(t, b) for (t, _s, b) in rows if b is not None]
-    unboxed = [t for (t, _s, b) in rows if b is None]
-
-    # Sort by vertical centre so we can sweep top-to-bottom.
-    boxed.sort(key=lambda it: it[1][1] + it[1][3] / 2.0)
-
-    lines: List[list] = []  # each: [items, y0, y1]; items = [(x, text), ...]
-    for text, (x, y, w, h) in boxed:
-        y0, y1 = y, y + h
-        if lines:
-            cur_items, cur_y0, cur_y1 = lines[-1]
-            overlap = min(cur_y1, y1) - max(cur_y0, y0)
-            # Same line if the vertical overlap is a meaningful fraction of the
-            # smaller box height (robust to differing font sizes on a row).
-            if overlap > 0.3 * min(h, cur_y1 - cur_y0):
-                cur_items.append((x, text))
-                lines[-1][1] = min(cur_y0, y0)
-                lines[-1][2] = max(cur_y1, y1)
-                continue
-        lines.append([[(x, text)], y0, y1])
-
-    out: List[str] = []
-    for items, _y0, _y1 in lines:
-        items.sort(key=lambda it: it[0])  # left-to-right within the line
-        out.append("  ".join(t for _x, t in items))
-    out.extend(unboxed)  # geometry-less fragments last
-    return out
-
-
 def extract_text_from_file(
     image_path: str,
     *,
     languages: Optional[List[str]] = None,
 ) -> str:
     """Run PaddleOCR on `image_path` and return a newline-joined blob, one
-    printed receipt LINE per row (boxes on the same visual line are merged),
-    in reading order. Returns "" if no text.
+    recognised line per row, in reading order. Returns "" if no text.
 
     `languages` is accepted for signature parity with `apple_vision_ocr`;
     PaddleOCR's language is fixed at model-build time (settings.paddle_lang),
     so the argument is ignored here."""
     rows = _ocr_items(image_path)
-    return "\n".join(_assemble_lines(rows))
+    return "\n".join(text for text, _score, _bbox in rows)
 
 
 def extract_text_from_pil(
