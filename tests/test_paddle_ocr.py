@@ -118,6 +118,40 @@ def test_extract_text_sorts_into_reading_order(_stub_engine, tmp_path):
     assert text.splitlines() == ["TREES COFFEE", "Latte 4.50", "TOTAL 9.64"]
 
 
+def test_extract_text_merges_boxes_on_same_visual_line(_stub_engine, tmp_path):
+    # A printed line "Total ... R$ 70,00" arrives as two separate boxes at the
+    # same y; they must merge into one line so the structurer sees the pairing.
+    raw = [
+        [
+            [[[0, 10], [60, 10], [60, 34], [0, 34]], ("VENDOR LTDA", 0.9)],
+            # same row (y~100): label far left + value far right
+            [[[0, 100], [80, 100], [80, 124], [0, 124]], ("Total", 0.9)],
+            [[[300, 102], [430, 102], [430, 126], [300, 126]], ("R$ 70,00", 0.9)],
+        ]
+    ]
+    _stub_engine(raw)
+    p = tmp_path / "r.png"
+    Image.new("RGB", (450, 160), "white").save(p)
+    lines = po.extract_text_from_file(str(p)).splitlines()
+    assert lines[0] == "VENDOR LTDA"
+    assert lines[1] == "Total  R$ 70,00"  # merged, left-to-right
+    assert len(lines) == 2
+
+
+def test_extract_text_keeps_separate_rows_apart(_stub_engine, tmp_path):
+    # Two boxes on clearly different rows must NOT merge.
+    raw = [
+        [
+            [[[0, 10], [80, 10], [80, 30], [0, 30]], ("Subtotal", 0.9)],
+            [[[0, 200], [80, 200], [80, 220], [0, 220]], ("Total", 0.9)],
+        ]
+    ]
+    _stub_engine(raw)
+    p = tmp_path / "r.png"
+    Image.new("RGB", (90, 240), "white").save(p)
+    assert po.extract_text_from_file(str(p)).splitlines() == ["Subtotal", "Total"]
+
+
 def test_extract_text_skips_blank_lines(_stub_engine, tmp_path):
     raw = [
         [
