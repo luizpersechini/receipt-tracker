@@ -53,6 +53,18 @@ def _write(records: list[dict]) -> None:
     write_json(_index_path(), records)
 
 
+def _norm(rec: Optional[dict]) -> Optional[dict]:
+    """Default the membership-editing fields for records written before this
+    feature: missing `version` → 1, missing `pdf_stale` → False, missing
+    `updated_at` → `created_at`. Non-destructive (applied on read)."""
+    if rec is None:
+        return None
+    rec.setdefault("version", 1)
+    rec.setdefault("pdf_stale", False)
+    rec.setdefault("updated_at", rec.get("created_at"))
+    return rec
+
+
 def _next_id(records: list[dict]) -> int:
     """Never reuse an id: consider both the index AND report_*.pdf files on
     disk, so deleting the newest record can't recycle its id (a stale client
@@ -91,9 +103,10 @@ def record(
     fname = f"report_{next_id}.pdf"
     (_dir() / fname).write_bytes(pdf_bytes)
 
+    ts = created_at or datetime.now().isoformat(timespec="seconds")
     rec = {
         "id": next_id,
-        "created_at": created_at or datetime.now().isoformat(timespec="seconds"),
+        "created_at": ts,
         "kind": kind,
         "title": title,
         "cardholder": cardholder or "",
@@ -105,6 +118,11 @@ def record(
         "receipt_ids": list(receipt_ids or []),
         "completed": False,
         "completed_at": None,
+        # Membership-editing fields (see the reimbursement report-editor feature):
+        # mutable receipt_ids, re-issue version stamp, and a stale flag set on edit.
+        "version": 1,
+        "pdf_stale": False,
+        "updated_at": ts,
     }
     records.insert(0, rec)  # newest first
     for old in records[MAX_HISTORY:]:
@@ -119,13 +137,13 @@ def record(
 
 
 def list_history() -> list[dict]:
-    return _read()
+    return [_norm(r) for r in _read()]
 
 
 def get_record(rid: int) -> Optional[dict]:
     for r in _read():
         if int(r.get("id", -1)) == int(rid):
-            return r
+            return _norm(r)
     return None
 
 
@@ -146,6 +164,60 @@ def set_completed(rid: int, completed: bool) -> Optional[dict]:
         return None
     _write(records)
     return updated
+
+
+@locked(_index_path)
+def update_membership(rid: int, add: list, remove: list) -> Optional[dict]:
+    """Mutate a report's `receipt_ids` membership set: remove `remove`, then
+    append any new `add` (order preserved, deduped). Marks the PDF stale and
+    stamps `updated_at`; does NOT bump `version` (that happens on re-issue) or
+    touch receipt statuses (the caller applies those per the truth-table).
+    Returns the updated record, or None if no such report.
+
+    Validation (single membership, reimbursement-type) is the caller's job —
+    this store only has the JSON index, not the receipts table."""
+    records = _read()
+    rec = None
+    for r in records:
+        if int(r.get("id", -1)) == int(rid):
+            rec = r
+            break
+    if rec is None:
+        return None
+    remove_set = {int(i) for i in (remove or [])}
+    ids = [int(i) for i in (rec.get("receipt_ids") or []) if int(i) not in remove_set]
+    for i in add or []:
+        if int(i) not in ids:
+            ids.append(int(i))
+    rec["receipt_ids"] = ids
+    rec["pdf_stale"] = True
+    rec["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    _write(records)
+    return _norm(rec)
+
+
+@locked(_index_path)
+def reissue(rid: int, pdf_bytes: bytes) -> Optional[dict]:
+    """Overwrite the report's PDF with freshly-rendered `pdf_bytes`, bump
+    `version`, clear `pdf_stale`, refresh `size`/`updated_at`. Returns the
+    updated record, or None if no such report. Caller guards against an empty
+    membership set."""
+    records = _read()
+    rec = None
+    for r in records:
+        if int(r.get("id", -1)) == int(rid):
+            rec = r
+            break
+    if rec is None:
+        return None
+    (_dir() / rec["file"]).write_bytes(pdf_bytes)
+    rec["version"] = int(rec.get("version") or 1) + 1
+    rec["pdf_stale"] = False
+    rec["size"] = len(pdf_bytes)
+    rec["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    _write(records)
+    logger.info("report history: re-issued #%d → v%d (%d bytes)", rid, rec["version"], len(pdf_bytes))
+    return _norm(rec)
 
 
 def read_pdf(rid: int) -> Optional[bytes]:
