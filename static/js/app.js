@@ -3133,8 +3133,9 @@ async function loadReportHistory() {
       // Reimbursement reports can be marked completed → their receipts flip to
       // "reimbursed". Show the control only when there are linked receipts.
       const nRcpt = (r.receipt_ids || []).length;
+      const isReimb = r.kind === "reimbursement";
       let completeCtl = "";
-      if (r.kind === "reimbursement") {
+      if (isReimb) {
         if (r.completed) {
           completeCtl =
             `<span class="badge badge-purple" title="${nRcpt} receipt(s) marked reimbursed">Completed ✓</span>` +
@@ -3143,12 +3144,22 @@ async function loadReportHistory() {
           completeCtl = `<button class="btn btn-outline btn-sm" onclick="completeReportHistory(${r.id}, true)" title="Set ${nRcpt} receipt(s) to Reimbursed">Mark completed</button>`;
         }
       }
+      // Reimbursement reports can have their receipt membership edited, then the
+      // PDF re-issued — a "PDF out of date" badge flags an edit since last issue.
+      const staleBadge =
+        isReimb && r.pdf_stale
+          ? `<span class="badge badge-amber" title="Membership changed — re-issue to refresh the PDF">PDF out of date · v${r.version || 1}</span>`
+          : "";
+      const manageCtl = isReimb
+        ? `<button class="btn btn-ghost btn-sm" onclick="openReportDetail(${r.id})" title="Add/remove receipts and re-issue">Manage</button>`
+        : "";
       return `<div class="rh-row">
         <span class="badge ${kindCls}">${kindLbl}</span>
         <div class="rh-main">
-          <div class="rh-title">${_esc(r.title || "Report")}</div>
+          <div class="rh-title">${_esc(r.title || "Report")} ${staleBadge}</div>
           <div class="rh-meta">${_esc(meta)} · ${when}</div>
         </div>
+        ${manageCtl}
         ${completeCtl}
         <a class="btn btn-outline btn-sm" href="/api/report-history/${r.id}/download">Download</a>
         <button class="btn btn-ghost btn-sm" onclick="deleteReportHistory(${r.id})">Del</button>
@@ -3196,6 +3207,144 @@ async function completeReportHistory(id, completed) {
     toast("Failed: " + e.message);
   }
 }
+
+// ── Reimbursement report detail: edit membership + re-issue PDF ──────────────
+let _reportDetail = { id: null, report: null, receipts: [], addable: [] };
+
+function _rdAmt(s) {
+  if (s == null) return 0;
+  let t = String(s).replace(/[^\d,.-]/g, "");
+  if (t.includes(",") && t.includes(".")) t = t.replace(/\./g, "").replace(",", ".");
+  else if (t.includes(",")) t = t.replace(",", ".");
+  const n = parseFloat(t);
+  return isFinite(n) ? n : 0;
+}
+
+function _rdReceiptRow(r, kind) {
+  const amt = r.amount != null ? `${_esc(r.currency || "")} ${_esc(String(r.amount))}` : "";
+  const when = (r.date || "").slice(0, 10);
+  const thumb = r.filename
+    ? `<img class="rd-thumb" src="/receipts/${escUrlSeg(r.filename)}" loading="lazy" alt="" onerror="this.style.display='none'">`
+    : '<span class="rd-thumb rd-thumb-none"></span>';
+  const btn =
+    kind === "member"
+      ? `<button class="btn btn-ghost btn-sm" onclick="removeReceiptFromReport(${r.id})" title="Remove from report">✕</button>`
+      : `<button class="btn btn-outline btn-sm" onclick="addReceiptToReport(${r.id})" title="Add to report">+ Add</button>`;
+  return `<div class="rd-item">
+    ${thumb}
+    <div class="rd-item-main">
+      <div class="rd-item-vendor">${_esc(r.vendor || "Receipt")}</div>
+      <div class="rd-item-meta">${_esc(when)}${amt ? " · " + amt : ""}</div>
+    </div>
+    ${btn}
+  </div>`;
+}
+
+function _renderReportDetail() {
+  const rep = _reportDetail.report || {};
+  const members = _reportDetail.receipts || [];
+  const addable = _reportDetail.addable || [];
+  const v = rep.version || 1;
+  $("reportDetailTitle").textContent = rep.title || "Reimbursement report";
+  $("reportDetailSub").textContent =
+    `v${v}` + (rep.pdf_stale ? " · PDF out of date" : "") + (rep.completed ? " · Completed ✓" : "");
+  $("reportDetailMemberCount").textContent = members.length ? `(${members.length})` : "";
+  $("reportDetailMembers").innerHTML = members.length
+    ? members.map((r) => _rdReceiptRow(r, "member")).join("")
+    : '<div class="rd-empty">No receipts on this report yet.</div>';
+  $("reportDetailAddable").innerHTML = addable.length
+    ? addable.map((r) => _rdReceiptRow(r, "add")).join("")
+    : '<div class="rd-empty">No reimbursement receipts available to add.</div>';
+
+  // Per-currency set total. The FX-accurate single BRL figure is computed
+  // server-side when the PDF is (re-)issued; here we show honest subtotals.
+  const byCur = {};
+  members.forEach((r) => {
+    const c = (r.currency || "BRL").toUpperCase();
+    byCur[c] = (byCur[c] || 0) + _rdAmt(r.amount);
+  });
+  const parts = Object.keys(byCur)
+    .sort()
+    .map(
+      (c) =>
+        `${c} ${byCur[c].toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    );
+  $("reportDetailTotal").textContent = parts.length ? `Total · ${parts.join(" · ")}` : "Total · —";
+
+  $("reportDetailDownload").href = `/api/report-history/${_reportDetail.id}/download`;
+  const reissue = $("reportDetailReissue");
+  reissue.disabled = members.length === 0;
+  reissue.classList.toggle("rd-pulse", !!rep.pdf_stale && members.length > 0);
+  reissue.textContent = rep.pdf_stale ? `Re-issue PDF · v${v + 1}` : "Re-issue PDF";
+}
+
+async function openReportDetail(id) {
+  try {
+    const data = await api("GET", `/api/report-history/${id}`);
+    _reportDetail = { id, ...data };
+    _renderReportDetail();
+    $("reportDetailModal").classList.add("open");
+  } catch (e) {
+    toast("Couldn't open report: " + e.message);
+  }
+}
+
+function closeReportDetail() {
+  $("reportDetailModal").classList.remove("open");
+  _reportDetail = { id: null, report: null, receipts: [], addable: [] };
+  // Membership / PDF / receipt statuses may have changed — refresh behind it.
+  loadReportHistory().catch(() => {});
+  loadReceipts().catch(() => {});
+  loadStats().catch(() => {});
+}
+
+async function _rdEdit(add, remove) {
+  try {
+    const data = await api("POST", `/api/report-history/${_reportDetail.id}/receipts`, {
+      add,
+      remove,
+    });
+    _reportDetail = { id: _reportDetail.id, ...data };
+    _renderReportDetail();
+    (data.rejected || []).forEach((x) => toast(`Skipped #${x.id}: ${x.reason}`));
+  } catch (e) {
+    toast("Edit failed: " + e.message);
+  }
+}
+
+function addReceiptToReport(id) {
+  _rdEdit([id], []);
+}
+
+function removeReceiptFromReport(id) {
+  _rdEdit([], [id]);
+}
+
+async function reissueReport() {
+  if (!(_reportDetail.receipts || []).length) {
+    toast("Add at least one receipt before re-issuing.");
+    return;
+  }
+  try {
+    const data = await api("POST", `/api/report-history/${_reportDetail.id}/reissue`);
+    _reportDetail.report = data.report;
+    _renderReportDetail();
+    toast(`Re-issued · v${data.report.version}`, "ok");
+  } catch (e) {
+    toast("Re-issue failed: " + e.message);
+  }
+}
+
+(function _wireReportDetailModal() {
+  const m = $("reportDetailModal");
+  if (!m) return;
+  m.addEventListener("click", (e) => {
+    if (e.target === m) closeReportDetail();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && m.classList.contains("open")) closeReportDetail();
+  });
+})();
 
 // ─── Expense type toggle ──────────────────────────────────────────────────────
 async function toggleExpenseType(id, current) {

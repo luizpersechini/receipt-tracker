@@ -312,6 +312,7 @@ def _receipt_brief(r: dict | None) -> dict | None:
         "amount": meta.get("total_amount"),
         "currency": (meta.get("currency") or "BRL"),
         "match_status": r.get("match_status"),
+        "filename": r.get("filename"),  # for the thumbnail (/receipts/<filename>)
     }
 
 

@@ -3593,3 +3593,100 @@ tr.stmt-archived:hover {
   padding: 0 4px;
   font-size: 10.5px;
 }
+
+/* ── Reimbursement report detail (edit membership + re-issue) ──────────────── */
+.rd-cols {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  min-height: 280px;
+}
+.rd-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.rd-col-head {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 4px 2px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.rd-count {
+  color: var(--text);
+  font-weight: 700;
+}
+.rd-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  opacity: 0.7;
+}
+.rd-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 46vh;
+  padding-top: 6px;
+}
+.rd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.rd-thumb {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, #f3f3f3);
+  flex: none;
+}
+.rd-thumb-none {
+  display: inline-block;
+}
+.rd-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.rd-item-vendor {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rd-item-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rd-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 18px 6px;
+  text-align: center;
+}
+.rd-foot-spacer {
+  flex: 1;
+}
+.rd-pulse {
+  box-shadow: 0 0 0 0 var(--amber, #d9881f);
+  animation: rd-pulse 1.6s ease-out infinite;
+}
+@keyframes rd-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(217, 136, 31, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(217, 136, 31, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(217, 136, 31, 0);
+  }
+}

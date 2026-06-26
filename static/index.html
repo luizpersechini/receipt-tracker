@@ -1529,6 +1529,45 @@
       </div>
     </div>
 
+    <!-- ── REIMBURSEMENT REPORT DETAIL (edit membership + re-issue) ──────────── -->
+    <div class="modal-overlay" id="reportDetailModal">
+      <div class="modal-box stmt-detail-box">
+        <div class="modal-title" id="reportDetailTitle">Reimbursement report</div>
+        <div class="modal-sub" id="reportDetailSub">—</div>
+
+        <div class="rd-cols">
+          <div class="rd-col">
+            <div class="rd-col-head">
+              On this report
+              <span class="rd-count" id="reportDetailMemberCount"></span>
+            </div>
+            <div class="rd-list" id="reportDetailMembers"></div>
+          </div>
+          <div class="rd-col">
+            <div class="rd-col-head">
+              Add receipts <span class="rd-hint">(reimbursement, on no report)</span>
+            </div>
+            <div class="rd-list" id="reportDetailAddable"></div>
+          </div>
+        </div>
+
+        <div class="stmt-detail-foot">
+          <span class="stmt-detail-sum" id="reportDetailTotal">—</span>
+          <span class="rd-foot-spacer"></span>
+          <a
+            class="btn btn-outline"
+            id="reportDetailDownload"
+            href="#"
+            >Download</a
+          >
+          <button class="btn btn-primary" id="reportDetailReissue" onclick="reissueReport()">
+            Re-issue PDF
+          </button>
+          <button class="btn btn-ghost" onclick="closeReportDetail()">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── FOLDER SCAN MODAL ──────────────────────────────────────────────────── -->
     <div class="modal-overlay" id="scanModal">
       <div class="modal-box">
