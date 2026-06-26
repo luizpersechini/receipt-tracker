@@ -260,9 +260,18 @@ async def download_report_history(report_id: int):
 
 @router.delete("/report-history/{report_id}", status_code=204)
 async def delete_report_history(report_id: int):
+    rec = await asyncio.to_thread(report_history.get_record, report_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Report not found")
     ok = await asyncio.to_thread(report_history.delete_record, report_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Report not found")
+    # Deleting a *completed* report would otherwise orphan its receipts as
+    # `reimbursed` with no report behind them — revert them to `pending`.
+    if rec.get("completed") and rec.get("receipt_ids"):
+        await asyncio.to_thread(
+            db.update_receipts_match_status, rec.get("receipt_ids"), "pending"
+        )
     return Response(status_code=204)
 
 
@@ -283,6 +292,139 @@ async def complete_report_history(report_id: int, body: dict = Body(default={}))
     return JSONResponse(
         {"success": True, "completed": completed, "status": status, "receipts_changed": changed}
     )
+
+
+# ─── Reimbursement report membership editing ────────────────────────────────
+# Add/remove reimbursement receipts on an issued report and re-issue the PDF.
+# Invariant: a receipt is `reimbursed` iff it is a member of a *completed*
+# report, and belongs to at most one report.
+
+
+def _receipt_brief(r: dict | None) -> dict | None:
+    """Compact receipt view for the report-detail UI (member rows + add pool)."""
+    if not r:
+        return None
+    meta = expense_report_pdf._receipt_meta(r)
+    return {
+        "id": r.get("id"),
+        "date": meta.get("date"),
+        "vendor": meta.get("vendor_name") or r.get("description") or "Receipt",
+        "amount": meta.get("total_amount"),
+        "currency": (meta.get("currency") or "BRL"),
+        "match_status": r.get("match_status"),
+        "filename": r.get("filename"),  # for the thumbnail (/receipts/<filename>)
+    }
+
+
+def _ids_on_reports(exclude_id: int | None = None) -> set[int]:
+    """Receipt ids that are a member of some report (single-membership guard).
+    `exclude_id` skips one report (the one being edited)."""
+    on: set[int] = set()
+    for rec in report_history.list_history():
+        if exclude_id is not None and int(rec.get("id", -1)) == int(exclude_id):
+            continue
+        for i in rec.get("receipt_ids") or []:
+            on.add(int(i))
+    return on
+
+
+def _addable_pool() -> list[dict]:
+    """Reimbursement-type receipts on no report — the 'add' picker's options."""
+    on = _ids_on_reports()
+    return [
+        _receipt_brief(r)
+        for r in db.get_receipts_by_type("reimbursement")
+        if int(r.get("id")) not in on
+    ]
+
+
+@router.get("/report-history/{report_id}")
+async def get_report_history_detail(report_id: int):
+    """The report record + its member receipts + the addable pool (reimbursement
+    receipts on no report), to drive the report-detail view."""
+    rec = await asyncio.to_thread(report_history.get_record, report_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    def _detail():
+        members = [_receipt_brief(db.get_receipt_by_id(int(i))) for i in rec.get("receipt_ids") or []]
+        return [m for m in members if m], _addable_pool()
+
+    members, addable = await asyncio.to_thread(_detail)
+    return JSONResponse({"report": rec, "receipts": members, "addable": addable})
+
+
+@router.post("/report-history/{report_id}/receipts")
+async def edit_report_membership(report_id: int, body: dict = Body(default={})):
+    """Edit a reimbursement report's membership set: body `{add: [ids],
+    remove: [ids]}`. Applies the status flips ONLY when the report is completed
+    (add → `reimbursed`, remove → `pending`), sets `pdf_stale`. Returns the
+    updated record + a `rejected` list (with reasons) + the refreshed view."""
+    rec = await asyncio.to_thread(report_history.get_record, report_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if rec.get("kind") != "reimbursement":
+        raise HTTPException(status_code=400, detail="Only reimbursement reports support editing")
+    add = [int(i) for i in (body.get("add") or [])]
+    remove = [int(i) for i in (body.get("remove") or [])]
+
+    def _apply():
+        on_other = _ids_on_reports(exclude_id=report_id)
+        current = {int(i) for i in rec.get("receipt_ids") or []}
+        valid_add: list[int] = []
+        rejected: list[dict] = []
+        for i in add:
+            if i in current:
+                continue  # already a member — no-op
+            r = db.get_receipt_by_id(i)
+            if not r:
+                rejected.append({"id": i, "reason": "receipt not found"})
+            elif (r.get("expense_type") or "") != "reimbursement":
+                rejected.append({"id": i, "reason": "not a reimbursement receipt"})
+            elif i in on_other:
+                rejected.append({"id": i, "reason": "already on another report"})
+            else:
+                valid_add.append(i)
+        valid_remove = [i for i in remove if i in current]
+
+        updated = report_history.update_membership(report_id, valid_add, valid_remove)
+        # Status flips apply only on a *completed* report (truth-table).
+        if updated.get("completed"):
+            if valid_add:
+                db.update_receipts_match_status(valid_add, "reimbursed")
+            if valid_remove:
+                db.update_receipts_match_status(valid_remove, "pending")
+
+        members = [_receipt_brief(db.get_receipt_by_id(int(i))) for i in updated.get("receipt_ids") or []]
+        return updated, rejected, [m for m in members if m], _addable_pool()
+
+    updated, rejected, members, addable = await asyncio.to_thread(_apply)
+    return JSONResponse(
+        {"report": updated, "rejected": rejected, "receipts": members, "addable": addable}
+    )
+
+
+@router.post("/report-history/{report_id}/reissue")
+async def reissue_report(report_id: int):
+    """Regenerate the PDF from the report's current `receipt_ids`, bump
+    `version`, clear `pdf_stale`. 400 if the membership set is empty."""
+    rec = await asyncio.to_thread(report_history.get_record, report_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Report not found")
+    ids = rec.get("receipt_ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="Cannot re-issue an empty report")
+    try:
+        pdf_bytes = await asyncio.to_thread(
+            expense_report_pdf.build_reimbursement_report_from_ids, ids, None
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("reissue_report failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    updated = await asyncio.to_thread(report_history.reissue, report_id, pdf_bytes)
+    return JSONResponse({"report": updated})
 
 
 @router.get("/report")

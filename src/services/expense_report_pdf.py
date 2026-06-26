@@ -1007,20 +1007,12 @@ def reimbursement_receipt_ids(
     return [r["id"] for r in _select_reimbursement_receipts(date_from, date_to, currency)]
 
 
-def build_reimbursement_report(
-    user_id: Optional[int] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    currency: Optional[str] = None,
-) -> bytes:
-    """Render a reimbursement report: the front-page form (Reembolso ticked)
-    over all `reimbursement`-type receipts in the optional date range +
-    currency, followed by their images. Raises ValueError if none match."""
+def _render_reimbursement(receipts: list, user_id: Optional[int] = None) -> bytes:
+    """Render a reimbursement PDF from a resolved list of receipts. Shared by
+    the query-based (`build_reimbursement_report`) and explicit-ids
+    (`build_reimbursement_report_from_ids`) paths so totals/formatting are
+    identical. Caller guarantees `receipts` is non-empty."""
     from weasyprint import HTML
-
-    receipts = _select_reimbursement_receipts(date_from, date_to, currency)
-    if not receipts:
-        raise ValueError("No reimbursement receipts match the selected filters")
 
     # Convert every receipt to BRL for one reimbursable total — the form is
     # paid in a single currency, so mixed-currency receipts are converted at
@@ -1047,11 +1039,39 @@ def build_reimbursement_report(
     )
     pdf_bytes = HTML(string=html).write_pdf()
     logger.info(
-        "Built reimbursement report (user=%s, cur=%s): %d rows, %d receipts, %d bytes",
+        "Built reimbursement report (user=%s): %d rows, %d receipts, %d bytes",
         profile.get("nome") or "—",
-        currency or "all",
         len(data["rows"]),
         len(data["receipts"]),
         len(pdf_bytes),
     )
     return pdf_bytes
+
+
+def build_reimbursement_report(
+    user_id: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    currency: Optional[str] = None,
+) -> bytes:
+    """Render a reimbursement report: the front-page form (Reembolso ticked)
+    over all `reimbursement`-type receipts in the optional date range +
+    currency, followed by their images. Raises ValueError if none match."""
+    receipts = _select_reimbursement_receipts(date_from, date_to, currency)
+    if not receipts:
+        raise ValueError("No reimbursement receipts match the selected filters")
+    return _render_reimbursement(receipts, user_id)
+
+
+def build_reimbursement_report_from_ids(ids: list, user_id: Optional[int] = None) -> bytes:
+    """Render a reimbursement report from an EXPLICIT receipt-id list (the
+    report-editor / re-issue path), rather than a date/currency query. Resolves
+    the ids, drops any that no longer exist, sorts chronologically, and reuses
+    the shared renderer so the output matches `build_reimbursement_report`.
+    Raises ValueError if no ids resolve to a receipt."""
+    receipts = [db.get_receipt_by_id(int(i)) for i in (ids or [])]
+    receipts = [r for r in receipts if r]
+    if not receipts:
+        raise ValueError("No receipts to render for this report")
+    receipts.sort(key=lambda r: _receipt_meta(r).get("date") or "")
+    return _render_reimbursement(receipts, user_id)
