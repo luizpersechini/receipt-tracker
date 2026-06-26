@@ -455,6 +455,115 @@ def _c_report(client, ctx):
     return "expense report ok"
 
 
+def _seed_receipt_qa(client, ctx, idx: int, vendor: str, *, reimbursement: bool) -> int:
+    """Upload+commit one receipt (mock/real OCR) and return its id; optionally
+    flip it to reimbursement type."""
+    img = ctx["tmp"] / f"edit_{idx}.png"
+    make_receipt_image(img, [vendor, "Rua QA", f"Total {10 + idx}0,00", f"2026-05-{(idx % 28) + 1:02d}"])
+    with open(img, "rb") as f:
+        prev = _post_file(
+            client, "/api/upload/receipt/preview", img.name, f.read(), "image/png", {"single": "true"}
+        ).json()
+    commit = client.post(
+        "/api/upload/receipt/commit",
+        json={"filename": prev["filename"], "bboxes": prev["bboxes"], "description": vendor},
+    ).json()
+    rid = commit["receipts"][0]["receipt_id"]
+    if reimbursement:
+        resp = client.patch(f"/api/receipts/{rid}/expense-type", json={"expense_type": "reimbursement"})
+        assert resp.status_code == 200, f"expense-type patch failed: {resp.status_code}"
+    return rid
+
+
+def _status_of(client, rid: int):
+    for r in client.get("/api/receipts").json()["receipts"]:
+        if r["id"] == rid:
+            return r.get("match_status")
+    return None
+
+
+@check("reimbursement editing: membership → truth-table → reissue/delete")
+def _c_reimb_editing(client, ctx):
+    """Drive the issued-report editing feature end-to-end: detail/addable pool,
+    add/remove with the completed-vs-not status truth-table, single-membership
+    + type rejection, re-issue (version bump / empty 400), and the
+    delete-reverts-a-completed-report fix."""
+    from src.services import report_history
+
+    has_wp = True
+    try:
+        import weasyprint  # noqa: F401
+    except Exception:  # noqa: BLE001
+        has_wp = False
+
+    r1 = _seed_receipt_qa(client, ctx, 1, "Padaria QA", reimbursement=True)
+    r2 = _seed_receipt_qa(client, ctx, 2, "Livraria QA", reimbursement=True)
+    r3 = _seed_receipt_qa(client, ctx, 3, "Cafe QA", reimbursement=True)
+    r4 = _seed_receipt_qa(client, ctx, 4, "Mercado QA", reimbursement=True)
+    corp = _seed_receipt_qa(client, ctx, 9, "CorpCard QA", reimbursement=False)
+
+    # Seed a report over r1,r2,r3 via the store (avoids a hard weasyprint dep
+    # for setup); r4 is left on no report → addable.
+    rep = report_history.record(b"%PDF-QA", kind="reimbursement", title="QA Reimb", receipt_ids=[r1, r2, r3])
+    rid = rep["id"]
+
+    # detail: members + addable pool, single-membership invariant
+    d = client.get(f"/api/report-history/{rid}").json()
+    assert {m["id"] for m in d["receipts"]} == {r1, r2, r3}, d
+    addable_ids = {m["id"] for m in d["addable"]}
+    assert r4 in addable_ids and not ({r1, r2, r3} & addable_ids), addable_ids
+
+    # add/remove on a NOT-completed report → no status flips
+    e = client.post(f"/api/report-history/{rid}/receipts", json={"add": [r4], "remove": [r1]}).json()
+    assert {m["id"] for m in e["receipts"]} == {r2, r3, r4}, e
+    assert e["report"]["pdf_stale"] is True, e["report"]
+    assert _status_of(client, r1) == "pending" and _status_of(client, r4) == "pending"
+
+    # single-membership + type rejection on a second report
+    rep2 = report_history.record(b"%PDF-QA2", kind="reimbursement", title="QA Reimb 2", receipt_ids=[])
+    rej = client.post(f"/api/report-history/{rep2['id']}/receipts", json={"add": [r2, corp]}).json()
+    reasons = {x["id"]: x["reason"] for x in rej["rejected"]}
+    assert "already on another report" in reasons.get(r2, ""), rej
+    assert "not a reimbursement receipt" in reasons.get(corp, ""), rej
+    assert rej["report"]["receipt_ids"] == [], rej
+
+    # complete → members flip to reimbursed
+    client.post(f"/api/report-history/{rid}/complete", json={"completed": True})
+    assert all(_status_of(client, i) == "reimbursed" for i in (r2, r3, r4)), "complete didn't flip"
+
+    # remove on a COMPLETED report → that receipt back to pending (truth-table)
+    client.post(f"/api/report-history/{rid}/receipts", json={"remove": [r4]})
+    assert _status_of(client, r4) == "pending", "removing from completed report didn't revert"
+    assert _status_of(client, r2) == "reimbursed", "untouched member should stay reimbursed"
+
+    # re-issue (renders → needs weasyprint): version bump + stale clear
+    note = "truth-table ok"
+    if has_wp:
+        ri = client.post(f"/api/report-history/{rid}/reissue")
+        assert ri.status_code == 200, ri.text[:160]
+        assert ri.json()["report"]["version"] == 2, ri.json()["report"]
+        assert ri.json()["report"]["pdf_stale"] is False
+        note = "truth-table + reissue v2 ok"
+    else:
+        note = "truth-table ok (reissue render skipped — no weasyprint)"
+
+    # empty report can't be re-issued (guard returns before rendering)
+    client.post(f"/api/report-history/{rid}/receipts", json={"remove": [r2, r3]})
+    assert client.post(f"/api/report-history/{rid}/reissue").status_code == 400, "empty reissue not blocked"
+
+    # delete a completed report reverts remaining members to pending
+    client.post(f"/api/report-history/{rid}/receipts", json={"add": [r2]})
+    assert _status_of(client, r2) == "reimbursed"
+    assert client.delete(f"/api/report-history/{rid}").status_code == 204
+    assert _status_of(client, r2) == "pending", "delete of completed report didn't revert"
+
+    # cleanup
+    client.delete(f"/api/report-history/{rep2['id']}")
+    for i in (r1, r2, r3, r4, corp):
+        client.delete(f"/api/receipts/{i}")
+    return note
+
+
 # ─── real-world corpora: Portuguese + English receipts, scored ───────────────
 # Focused on the receipts this app actually sees:
 #   • EN — random real English receipts from the SROIE dataset (mp-02/sroie,
