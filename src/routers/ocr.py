@@ -41,6 +41,16 @@ async def get_ocr_config():
     available = await asyncio.to_thread(_list_available_models)
     reachable = bool(available) or await asyncio.to_thread(_ollama_reachable)
     cap = settings.ocr_max_model_gb
+
+    def _paddle_available() -> bool:
+        try:
+            from ..services import paddle_ocr
+
+            return paddle_ocr.is_available()
+        except Exception:
+            return False
+
+    paddle_available = await asyncio.to_thread(_paddle_available)
     models = [
         {
             "name": name,
@@ -55,6 +65,7 @@ async def get_ocr_config():
         {
             **cfg,
             "ollama_reachable": reachable,
+            "paddle_available": paddle_available,
             "max_model_gb": cap,
             "models": models,
         }

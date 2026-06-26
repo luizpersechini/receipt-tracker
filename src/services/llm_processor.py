@@ -1019,8 +1019,28 @@ def warmup() -> Optional[str]:
     - backend=apple_vision  → warms the text-only structuring model
       (settings.ocr_text_model). Apple Vision itself has no warmup since
       it's a system framework, not an Ollama model.
+    - backend=paddle_ocr    → preloads the PaddleOCR model (one-time build +
+      model download) AND warms the text-only structuring model, so the first
+      upload pays neither cold-start.
     """
-    if ocr_settings.effective_backend() == "apple_vision":
+    backend = ocr_settings.effective_backend()
+    if backend == "paddle_ocr":
+        # Preload the OCR model in the background-safe singleton. Best-effort:
+        # a failure here just means the first upload pays the build cost.
+        try:
+            from . import paddle_ocr
+
+            if paddle_ocr.warmup():
+                logger.info("PaddleOCR model preloaded")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("PaddleOCR preload failed: %s", e)
+    structure_backend = (settings.structure_backend or "ollama").strip().lower()
+    if backend in ("apple_vision", "paddle_ocr"):
+        # When structuring runs on the hosted Claude API there's no local text
+        # model to warm (and Ollama may not even be running on this deployment).
+        if structure_backend == "anthropic":
+            logger.info("OCR warmup: structuring=anthropic — no Ollama text model to warm")
+            return None
         model = ocr_settings.effective_text_model()
     else:
         try:
@@ -1293,8 +1313,8 @@ def process_with_segments(image_path: str, *, skip_segmentation: bool = False) -
         )
 
         results: list = []
-        if backend == "apple_vision":
-            results = _process_via_apple_vision(segments, is_multi)
+        if backend in ("apple_vision", "paddle_ocr"):
+            results = _process_via_text_extraction(segments, is_multi, backend=backend)
         else:
             results = _process_via_ollama_vision(segments, is_multi)
 
@@ -1338,31 +1358,49 @@ def _process_via_ollama_vision(segments: list, is_multi: bool) -> list:
     return results
 
 
-def _process_via_apple_vision(segments: list, is_multi: bool) -> list:
-    """Apple Vision text extraction + small text-LLM structuring."""
-    from . import apple_vision_ocr
+# On-device text-extraction backends: backend name → (lazy importer, label).
+# Both feed the SAME text-LLM structuring step — only the OCR engine differs.
+# Apple Vision is macOS-only; PaddleOCR is the cross-platform equivalent.
+def _text_extraction_module(backend: str):
+    if backend == "apple_vision":
+        from . import apple_vision_ocr as mod
+
+        return mod, "Apple Vision"
+    if backend == "paddle_ocr":
+        from . import paddle_ocr as mod
+
+        return mod, "PaddleOCR"
+    raise ValueError(f"not a text-extraction backend: {backend}")
+
+
+def _process_via_text_extraction(segments: list, is_multi: bool, *, backend: str) -> list:
+    """On-device text extraction (Apple Vision or PaddleOCR) + small text-LLM
+    structuring. The two backends share this path; only the OCR engine — which
+    image→text step runs — differs. Everything downstream is identical."""
     from .text_to_receipt import structure_text_as_receipt
+
+    ocr_mod, label = _text_extraction_module(backend)
 
     def _fail(msg: str) -> list:
         empty = _empty_receipt()
         empty["error"] = msg
         return [{"metadata": empty, "crop": None}]
 
-    if not apple_vision_ocr.is_available():
-        return _fail(f"Apple Vision OCR not available: {apple_vision_ocr.unavailability_reason()}")
+    if not ocr_mod.is_available():
+        return _fail(f"{label} OCR not available: {ocr_mod.unavailability_reason()}")
 
     results: list = []
     for i, img in enumerate(segments, 1):
         try:
-            text = apple_vision_ocr.extract_text_from_pil(img)
+            text = ocr_mod.extract_text_from_pil(img)
         except Exception as e:
-            logger.warning("Apple Vision OCR failed on segment %d: %s", i, e)
+            logger.warning("%s OCR failed on segment %d: %s", label, i, e)
             empty = _empty_receipt()
-            empty["error"] = f"Apple Vision OCR failed: {e}"
+            empty["error"] = f"{label} OCR failed: {e}"
             results.append({"metadata": empty, "crop": img if is_multi else None})
             continue
 
-        logger.info("OCR (apple_vision): segment %d/%d text_chars=%d", i, len(segments), len(text))
+        logger.info("OCR (%s): segment %d/%d text_chars=%d", backend, i, len(segments), len(text))
         if not text.strip():
             empty = _empty_receipt()
             empty["error"] = "No text detected"
@@ -1994,8 +2032,8 @@ def ocr_crops(crops: list) -> list:
 
     backend = ocr_settings.effective_backend()
     logger.info("OCR (user-crops): backend=%s crops=%d", backend, len(crops))
-    if backend == "apple_vision":
-        results = _process_via_apple_vision(crops, is_multi=True)
+    if backend in ("apple_vision", "paddle_ocr"):
+        results = _process_via_text_extraction(crops, is_multi=True, backend=backend)
     else:
         results = _process_via_ollama_vision(crops, is_multi=True)
     return results or [{"metadata": _empty_receipt(), "crop": crops[0]}]

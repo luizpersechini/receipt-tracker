@@ -53,7 +53,14 @@ if str(ROOT) not in sys.path:
 # ─── disposable app ──────────────────────────────────────────────────────────
 
 
-def build_client(tmp: Path, ocr_mode: str, text_model: str = "llama3.2:3b"):
+def build_client(
+    tmp: Path,
+    ocr_mode: str,
+    text_model: str = "llama3.2:3b",
+    backend: str = "apple_vision",
+    structure: str = "ollama",
+    anthropic_model: str = None,
+):
     """Repoint ALL storage to a throwaway dir, init a fresh DB, return a
     TestClient. Asserts nothing points at the live data/ before continuing."""
     from src.config import ensure_dirs, settings
@@ -67,10 +74,18 @@ def build_client(tmp: Path, ocr_mode: str, text_model: str = "llama3.2:3b"):
     settings.watch_log_path = data / "watch_log.jsonl"
     settings.watch_folder = ""  # never start the watcher
     settings.ocr_warmup = False  # don't preload a model
-    # Real OCR runs the working on-device path (Apple Vision + small text LLM),
-    # NOT the default ollama_vision/glm-ocr one-shot (which loops on the prompt).
-    settings.ocr_backend = "apple_vision"
+    # Real OCR runs a working on-device text-extraction path (Apple Vision on
+    # macOS, PaddleOCR elsewhere) + small text LLM — NOT the ollama_vision/
+    # glm-ocr one-shot (which loops on the prompt). The backend is selectable
+    # via --backend so the corpus can A/B Apple Vision vs PaddleOCR.
+    settings.ocr_backend = backend
     settings.ocr_text_model = text_model
+    # Structuring backend (separate from OCR): "ollama" (local) or "anthropic"
+    # (hosted Claude API — needs ANTHROPIC_API_KEY in the env). Lets the corpus
+    # A/B a strong remote structurer against the local text model.
+    settings.structure_backend = structure
+    if anthropic_model:
+        settings.anthropic_model = anthropic_model
 
     # Safety net: refuse to run if any path escaped the temp sandbox.
     for p in (
@@ -250,10 +265,11 @@ def _c_endpoints(client, ctx):
     assert not bad, "; ".join(bad)
 
 
-@check("ocr config: QA env on apple_vision")
+@check("ocr config: QA env on selected text-extraction backend")
 def _c_ocrcfg(client, ctx):
     cfg = client.get("/api/ocr/config").json()
-    assert cfg["backend"] == "apple_vision", cfg.get("backend")
+    expected = ctx.get("backend", "apple_vision")
+    assert cfg["backend"] == expected, f"{cfg.get('backend')} != {expected}"
 
 
 @check("receipt: single-flow preview→commit→edit→delete")
@@ -487,12 +503,20 @@ def _upscale(img, target=1500):
 
 def _append_scoreboard(ctx, corpus, scored, correct, acc, fields=None):
     from src.services import ocr_settings
+    from src.config import settings
+
+    # Label the row with whatever actually structured the text, so an
+    # anthropic run isn't mislabeled with the unused local Ollama model.
+    if (settings.structure_backend or "ollama").strip().lower() == "anthropic":
+        structurer = f"anthropic:{settings.anthropic_model}"
+    else:
+        structurer = ocr_settings.effective_text_model()
 
     rec = {
         "ts": ctx["ts"],
         "corpus": corpus,
         "backend": ocr_settings.effective_backend(),
-        "text_model": ocr_settings.effective_text_model(),
+        "text_model": structurer,
         "n": len(scored),
         "correct": correct,
         "accuracy": round(acc, 3),
@@ -785,6 +809,27 @@ def print_report(results, run_idx, total_runs):
 def main():
     ap = argparse.ArgumentParser(description="Receipt Tracker disposable QA harness")
     ap.add_argument("--ocr", choices=["real", "mock"], default="real")
+    ap.add_argument(
+        "--backend",
+        choices=["apple_vision", "paddle_ocr", "ollama_vision"],
+        default=None,
+        help="text-extraction backend for real OCR (default: platform — "
+        "apple_vision on macOS, paddle_ocr elsewhere)",
+    )
+    ap.add_argument(
+        "--structure",
+        choices=["ollama", "anthropic"],
+        default="ollama",
+        help="structuring backend: ollama (local) or anthropic (hosted Claude "
+        "API — needs ANTHROPIC_API_KEY). Default ollama.",
+    )
+    ap.add_argument(
+        "--anthropic-model",
+        type=str,
+        default=None,
+        help="Claude model for --structure anthropic (default: ANTHROPIC_MODEL "
+        "/ claude-opus-4-8). e.g. claude-haiku-4-5 for the cheap A/B.",
+    )
     ap.add_argument("--loops", type=int, default=1)
     ap.add_argument(
         "--until-clean", action="store_true", help="loop until a fully green run (cap 5)"
@@ -835,15 +880,39 @@ def main():
     except Exception:  # noqa: BLE001
         text_model = text_model or "llama3.2:3b"
 
+    # Default the text-extraction backend to the platform's working one.
+    backend = args.backend
+    if backend is None:
+        try:
+            from src.config import _default_ocr_backend
+
+            backend = _default_ocr_backend()
+        except Exception:  # noqa: BLE001
+            backend = "apple_vision"
+
+    # When structuring on the hosted API, surface which Claude model is scored.
+    structure_label = args.structure
+    if args.structure == "anthropic":
+        from src.config import settings as _s
+
+        structure_label = f"anthropic:{args.anthropic_model or _s.anthropic_model}"
+
     tmp = Path(tempfile.mkdtemp(prefix="rt_qa_"))
-    print(f"QA harness · ocr={args.ocr} · text_model={text_model} · sandbox={tmp}")
+    print(
+        f"QA harness · ocr={args.ocr} · backend={backend} · "
+        f"structure={structure_label} · text_model={text_model} · sandbox={tmp}"
+    )
     all_results = []
     fails = warns = []
     try:
-        client = build_client(tmp, args.ocr, text_model)
+        client = build_client(
+            tmp, args.ocr, text_model, backend, args.structure, args.anthropic_model
+        )
         ctx = {
             "tmp": tmp,
             "ocr": args.ocr,
+            "backend": backend,
+            "structure": args.structure,
             "corpus_n": 0 if args.no_corpus else args.corpus,
             "seed": args.corpus_seed
             if args.corpus_seed is not None

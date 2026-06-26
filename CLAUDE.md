@@ -53,19 +53,32 @@ $(date -v-7d +%Y-%m-%d)`.
 
 ## Notes
 
-- Ollama must be running locally before starting the app (the structuring
-  text model runs there, even on the apple_vision backend)
-- OCR backend is `apple_vision` (Apple on-device OCR + an Ollama text model,
-  e.g. `llama3.1:8b`, that structures the text into JSON). This is the only
-  backend offered in the UI — the `ollama_vision` one-shot vision path
-  (glm-ocr/llava) scored 0% in the bake-off and was removed from the picker
-  (still reachable via `OCR_BACKEND` in `.env` if you must). The structuring
-  model is picked in the sidebar "OCR model" card; pick it well — accuracy is
-  strongly model-bound (8b ≫ 3b on totals). Ollama calls run at temperature 0.
+- Ollama must be running locally before starting the app when
+  `STRUCTURE_BACKEND=ollama` (the structuring text model runs there); not
+  needed when `STRUCTURE_BACKEND=anthropic`.
+- OCR backend is platform-adaptive (blank `OCR_BACKEND` resolves per-OS):
+  `apple_vision` on macOS, `paddle_ocr` (PaddleOCR, cross-platform) on
+  Windows/Linux. Both do on-device text extraction + a structuring step — only
+  the OCR engine differs, so the rest of the pipeline is identical. The
+  `ollama_vision` one-shot vision path (glm-ocr/llava) scored 0% in the bake-off
+  and was removed from the picker (still reachable via `OCR_BACKEND` in `.env`).
+  Ollama calls run at temperature 0.
+- Windows/Linux setup for `paddle_ocr`: `pip install paddleocr paddlepaddle`
+  (CPU; first OCR run auto-downloads the small PP-OCR models). The Mac-only
+  Apple Vision pyobjc deps are a no-op off Darwin. See `docs/WINDOWS_SETUP.md`.
+- Structuring backend (`STRUCTURE_BACKEND`, separate from the OCR backend):
+  `ollama` (default, fully local) structures OCR'd text into JSON with a local
+  text model picked in the sidebar "OCR model" card — accuracy is strongly
+  model-bound (8b ≫ 3b on totals); `anthropic` sends only the receipt *text*
+  (never the image) to the hosted Claude API — opt-in, needs `ANTHROPIC_API_KEY`,
+  lets a low-powered machine use a much stronger model (`claude-haiku-4-5` is the
+  cheap default). OCR always stays local either way.
 - Statement estornos/refunds are captured as negative `credit` rows; the
   PDF parser is Itaú-targeted (column-aware, year-boundary rollback)
-- No external API calls — fully local/offline (FX rates + Gmail optional)
+- Local/offline by default — no external API calls unless you opt into
+  `STRUCTURE_BACKEND=anthropic` (FX rates + Gmail also optional)
 - QA: `qa/run_qa.py --ocr mock` is the fast gate; `--corpus N --corpus-seed S`
   scores total accuracy on Portuguese (your own receipts) + English (SROIE)
-  corpora; `qa/bakeoff.py` compares OCR configs per-field (total/currency/
-  date/vendor/category). Always run with `.venv/bin/python` (needs 3.10+).
+  corpora; `--backend` / `--structure` A/B the OCR and structuring backends;
+  `qa/bakeoff.py` compares OCR configs per-field (total/currency/date/vendor/
+  category). Always run with `.venv/bin/python` (needs 3.10+).

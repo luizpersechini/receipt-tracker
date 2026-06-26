@@ -6,10 +6,13 @@ runtime — persisted to data/ocr_config.json — so you can switch the
 vision/OCR model without editing .env or restarting. The OCR code reads the
 effective values through this module.
 
-  backend       — "ollama_vision" (one vision model reads + structures) or
-                  "apple_vision" (on-device text extraction + a text model).
+  backend       — "ollama_vision" (one vision model reads + structures),
+                  "apple_vision" (macOS on-device text extraction + a text
+                  model), or "paddle_ocr" (cross-platform PaddleOCR text
+                  extraction + a text model).
   vision_model  — the Ollama vision model used by the ollama_vision backend.
-  text_model    — the Ollama text model used by apple_vision to structure.
+  text_model    — the Ollama text model used by apple_vision/paddle_ocr to
+                  structure the extracted text.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from .json_store import locked, write_json
 
 logger = logging.getLogger(__name__)
 
-VALID_BACKENDS = {"ollama_vision", "apple_vision"}
+VALID_BACKENDS = {"ollama_vision", "apple_vision", "paddle_ocr"}
 
 
 def _path() -> Path:

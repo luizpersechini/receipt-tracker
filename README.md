@@ -73,6 +73,10 @@ ollama pull glm-ocr   # or llama3.2:3b if using apple_vision backend
 `weasyprint` (PDF report) needs the system libs `pango`, `cairo`,
 `gdk-pixbuf` — `brew install pango` on macOS covers them.
 
+**On Windows?** See [`docs/WINDOWS_SETUP.md`](docs/WINDOWS_SETUP.md) — runs OCR
+locally via PaddleOCR with the Claude API for structuring, so no Ollama or local
+LLM is needed.
+
 Optional: macOS double-clickable launcher app —
 
 ```bash

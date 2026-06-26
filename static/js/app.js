@@ -5364,10 +5364,19 @@ async function loadOcrConfig() {
 }
 
 function _renderOcrPicker(cfg) {
-  // Apple Vision is the only backend (the Ollama one-shot vision models —
-  // glm-ocr et al. — scored 0% and were removed). The only choice is the
-  // text model that structures Apple Vision's OCR output. Prefer non-vision
-  // (text) models, else show all installed.
+  const sel = $("ocrModelSelect");
+  if (!sel) return;
+  // OCR backend choice: Apple Vision (macOS) or PaddleOCR (cross-platform).
+  // The Ollama one-shot vision path scored 0% in the bake-off and was removed
+  // from the picker (still reachable via OCR_BACKEND in .env).
+  sel.innerHTML = [
+    `<option value="apple"${cfg.backend === "apple_vision" ? " selected" : ""}>Apple Vision (on-device · macOS)</option>`,
+    `<option value="paddle"${cfg.backend === "paddle_ocr" ? " selected" : ""}>PaddleOCR (on-device · cross-platform)${cfg.paddle_available === false ? " · not installed" : ""}</option>`,
+  ].join("");
+
+  // Structuring-model dropdown — both on-device OCR backends use a separate
+  // text model to structure the OCR output. Prefer non-vision (text) models,
+  // else show all installed.
   const tsel = $("ocrTextModelSelect");
   if (!tsel) return;
   const models = cfg.models || [];
@@ -5391,21 +5400,28 @@ function _renderOcrPicker(cfg) {
 function _renderOcrStatus(cfg) {
   const el = $("ocrModelStatus");
   if (!el) return;
-  // Apple Vision does the OCR on-device; the text (structuring) model runs
-  // in Ollama, so Ollama still needs to be up.
-  if (!cfg.ollama_reachable) {
+  // OCR runs on-device (Apple Vision or PaddleOCR); the local structuring path
+  // runs the text model in Ollama, so Ollama must be up unless you've set
+  // STRUCTURE_BACKEND=anthropic.
+  const textModelMissing = !(cfg.models || []).some((m) => m.name === cfg.text_model);
+  const label = cfg.backend === "paddle_ocr" ? "PaddleOCR" : "Apple Vision";
+  if (cfg.backend === "paddle_ocr" && cfg.paddle_available === false) {
     el.innerHTML =
-      '<span class="ocr-warn">Ollama not reachable — start it on :11434 (the structuring model runs there)</span>';
-  } else if (!(cfg.models || []).some((m) => m.name === cfg.text_model)) {
+      '<span class="ocr-warn">PaddleOCR not installed — run <code>pip install paddleocr paddlepaddle</code></span>';
+  } else if (!cfg.ollama_reachable) {
+    el.innerHTML =
+      '<span class="ocr-warn">Ollama not reachable — start it on :11434 (the structuring model runs there), or set STRUCTURE_BACKEND=anthropic</span>';
+  } else if (textModelMissing) {
     el.innerHTML = `<span class="ocr-warn">Structuring model <code>${_esc(cfg.text_model)}</code> not installed — <code>ollama pull ${_esc(cfg.text_model)}</code></span>`;
   } else {
-    el.innerHTML = `<span class="ocr-ok">Apple Vision → <code>${_esc(cfg.text_model)}</code>. Applies on next OCR.</span>`;
+    el.innerHTML = `<span class="ocr-ok">${label} → <code>${_esc(cfg.text_model)}</code>. Applies on next OCR.</span>`;
   }
 }
 
 async function _saveOcrConfig() {
+  const sel = $("ocrModelSelect");
   const patch = {
-    backend: "apple_vision",
+    backend: sel.value === "paddle" ? "paddle_ocr" : "apple_vision",
     text_model: $("ocrTextModelSelect").value,
   };
   try {
@@ -5419,6 +5435,8 @@ async function _saveOcrConfig() {
 }
 
 (function _wireOcrPicker() {
+  const sel = $("ocrModelSelect");
+  if (sel) sel.addEventListener("change", _saveOcrConfig);
   const tsel = $("ocrTextModelSelect");
   if (tsel) tsel.addEventListener("change", _saveOcrConfig);
 })();
