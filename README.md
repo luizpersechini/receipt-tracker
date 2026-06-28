@@ -8,9 +8,11 @@ optional add-ons.
 
 ## Highlights
 
-- **Photo / PDF / HEIC receipt OCR** via Apple Vision or Ollama vision
-  models (configurable backend). Multi-receipt scans on a single image
-  get auto-segmented and split into one row per receipt.
+- **Photo / PDF / HEIC receipt OCR** via Apple Vision (on-device,
+  macOS) or PaddleOCR (on-device, cross-platform), with the OCR'd text
+  structured by a local Ollama text model or, opt-in, the Claude API —
+  all backends configurable. Multi-receipt scans on a single image get
+  auto-segmented and split into one row per receipt.
 - **Monthly statement parsing** — CSV (any layout pandas can read) or
   Itaú-style PT-BR PDF. The PDF parser handles two-column layouts,
   preserves native-currency amounts on international transactions,
@@ -153,14 +155,19 @@ docs/                      this folder
   formats and the Itaú PDF parser
 - [`docs/reports.md`](docs/reports.md) — the combined expense-report PDF
   and the cardholder roster / name auto-detect
+- [`docs/WINDOWS_SETUP.md`](docs/WINDOWS_SETUP.md) — Windows install
+  (PaddleOCR + Claude API structuring, no local LLM needed)
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — empty-app /
+  lost-history / port-in-use fixes and the macOS launcher rebuild
 
 ## Configuration
 
 All settings live in `.env`. See [`.env.example`](.env.example) for the
 full annotated list. The defaults assume:
 
-- Ollama on `localhost:11434` with `glm-ocr` for the `ollama_vision`
-  backend (or `llama3.2:3b` if you switch to `apple_vision` on macOS)
+- OCR backend resolved per-platform (`apple_vision` on macOS,
+  `paddle_ocr` on Windows/Linux); structuring via local Ollama
+  (`llama3.2:3b`) unless `STRUCTURE_BACKEND=anthropic` is set
 - SQLite at `data/receipt_tracker.db`
 - Inbox folder at `data/inbox/` (auto-created)
 
