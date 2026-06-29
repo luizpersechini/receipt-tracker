@@ -90,6 +90,7 @@ def record(
     download_name: Optional[str] = None,
     created_at: Optional[str] = None,
     receipt_ids: Optional[list] = None,
+    user_id: Optional[int] = None,
 ) -> dict:
     """Save a generated PDF + append an index record. Returns the record.
 
@@ -110,6 +111,7 @@ def record(
         "kind": kind,
         "title": title,
         "cardholder": cardholder or "",
+        "user_id": user_id,
         "currency": currency or "",
         "period": period or "",
         "size": len(pdf_bytes),
@@ -216,7 +218,9 @@ def reissue(rid: int, pdf_bytes: bytes) -> Optional[dict]:
     rec["size"] = len(pdf_bytes)
     rec["updated_at"] = datetime.now().isoformat(timespec="seconds")
     _write(records)
-    logger.info("report history: re-issued #%d → v%d (%d bytes)", rid, rec["version"], len(pdf_bytes))
+    logger.info(
+        "report history: re-issued #%d → v%d (%d bytes)", rid, rec["version"], len(pdf_bytes)
+    )
     return _norm(rec)
 
 
