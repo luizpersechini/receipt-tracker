@@ -221,6 +221,7 @@ async def reimbursement_report_pdf(
         period=period,
         download_name="reembolso_despesas.pdf",
         receipt_ids=receipt_ids,
+        user_id=user_id,
     )
     return Response(
         content=pdf_bytes,
@@ -269,9 +270,7 @@ async def delete_report_history(report_id: int):
     # Deleting a *completed* report would otherwise orphan its receipts as
     # `reimbursed` with no report behind them — revert them to `pending`.
     if rec.get("completed") and rec.get("receipt_ids"):
-        await asyncio.to_thread(
-            db.update_receipts_match_status, rec.get("receipt_ids"), "pending"
-        )
+        await asyncio.to_thread(db.update_receipts_match_status, rec.get("receipt_ids"), "pending")
     return Response(status_code=204)
 
 
@@ -347,7 +346,9 @@ async def get_report_history_detail(report_id: int):
         raise HTTPException(status_code=404, detail="Report not found")
 
     def _detail():
-        members = [_receipt_brief(db.get_receipt_by_id(int(i))) for i in rec.get("receipt_ids") or []]
+        members = [
+            _receipt_brief(db.get_receipt_by_id(int(i))) for i in rec.get("receipt_ids") or []
+        ]
         return [m for m in members if m], _addable_pool()
 
     members, addable = await asyncio.to_thread(_detail)
@@ -395,7 +396,9 @@ async def edit_report_membership(report_id: int, body: dict = Body(default={})):
             if valid_remove:
                 db.update_receipts_match_status(valid_remove, "pending")
 
-        members = [_receipt_brief(db.get_receipt_by_id(int(i))) for i in updated.get("receipt_ids") or []]
+        members = [
+            _receipt_brief(db.get_receipt_by_id(int(i))) for i in updated.get("receipt_ids") or []
+        ]
         return updated, rejected, [m for m in members if m], _addable_pool()
 
     updated, rejected, members, addable = await asyncio.to_thread(_apply)
@@ -414,9 +417,24 @@ async def reissue_report(report_id: int):
     ids = rec.get("receipt_ids") or []
     if not ids:
         raise HTTPException(status_code=400, detail="Cannot re-issue an empty report")
+    # Preserve the report's cardholder on re-issue. Newer records store user_id;
+    # older ones only stored the cardholder name, so recover the roster user by
+    # name — otherwise re-issue renders with the global-default profile instead
+    # of the original cardholder.
+    uid = rec.get("user_id")
+    if uid is None and rec.get("cardholder"):
+        name = rec["cardholder"].strip().lower()
+        uid = next(
+            (
+                u["id"]
+                for u in report_users.list_users()
+                if (u.get("nome") or "").strip().lower() == name
+            ),
+            None,
+        )
     try:
         pdf_bytes = await asyncio.to_thread(
-            expense_report_pdf.build_reimbursement_report_from_ids, ids, None
+            expense_report_pdf.build_reimbursement_report_from_ids, ids, uid
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
