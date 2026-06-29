@@ -42,6 +42,14 @@ from . import (
     statement_labels,
     statement_notes,
 )
+
+# WeasyPrint can't find Homebrew's libgobject/pango/cairo on macOS without the
+# find_library shim that receipt_pdf installs at import time. Statement AND
+# reimbursement PDFs render via weasyprint from THIS module, so importing
+# receipt_pdf here guarantees the shim is in place before our lazy
+# `from weasyprint import HTML` runs — otherwise rendering only works when the
+# server happens to be launched with DYLD_FALLBACK_LIBRARY_PATH set.
+from . import receipt_pdf  # noqa: F401  (imported for the shim side-effect)
 from .fx_fetcher import convert, fetch_rates
 
 logger = logging.getLogger(__name__)
