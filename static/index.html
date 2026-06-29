@@ -224,12 +224,10 @@
             </button>
           </div>
 
-          <!-- OCR model picker (Apple Vision on-device + structuring LLM) -->
+          <!-- OCR model picker (Apple Vision / PaddleOCR backend + structuring LLM) -->
           <div class="card" id="ocrModelCard">
-            <div class="card-head">OCR model</div>
-            <div class="ocr-fixed-backend">
-              Apple Vision <span>· on-device</span>
-            </div>
+            <div class="card-head">Vision / OCR model</div>
+            <select id="ocrModelSelect" class="fbar-select ocr-select"></select>
             <div id="ocrTextModelRow" class="ocr-textmodel">
               <label>Structuring model</label>
               <select
@@ -1532,7 +1530,9 @@
     <!-- ── REIMBURSEMENT REPORT DETAIL (edit membership + re-issue) ──────────── -->
     <div class="modal-overlay" id="reportDetailModal">
       <div class="modal-box stmt-detail-box">
-        <div class="modal-title" id="reportDetailTitle">Reimbursement report</div>
+        <div class="modal-title" id="reportDetailTitle">
+          Reimbursement report
+        </div>
         <div class="modal-sub" id="reportDetailSub">—</div>
 
         <div class="rd-cols">
@@ -1545,7 +1545,8 @@
           </div>
           <div class="rd-col">
             <div class="rd-col-head">
-              Add receipts <span class="rd-hint">(reimbursement, on no report)</span>
+              Add receipts
+              <span class="rd-hint">(reimbursement, on no report)</span>
             </div>
             <div class="rd-list" id="reportDetailAddable"></div>
           </div>
@@ -1554,16 +1555,19 @@
         <div class="stmt-detail-foot">
           <span class="stmt-detail-sum" id="reportDetailTotal">—</span>
           <span class="rd-foot-spacer"></span>
-          <a
-            class="btn btn-outline"
-            id="reportDetailDownload"
-            href="#"
+          <a class="btn btn-outline" id="reportDetailDownload" href="#"
             >Download</a
           >
-          <button class="btn btn-primary" id="reportDetailReissue" onclick="reissueReport()">
+          <button
+            class="btn btn-primary"
+            id="reportDetailReissue"
+            onclick="reissueReport()"
+          >
             Re-issue PDF
           </button>
-          <button class="btn btn-ghost" onclick="closeReportDetail()">Close</button>
+          <button class="btn btn-ghost" onclick="closeReportDetail()">
+            Close
+          </button>
         </div>
       </div>
     </div>
