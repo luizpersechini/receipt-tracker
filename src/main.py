@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -68,6 +69,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# CORS alone doesn't stop DNS rebinding: a malicious page can point its own
+# hostname at 127.0.0.1 and reach this unauthenticated API with simple
+# requests. Rejecting unknown Host headers closes that hole. "testserver" is
+# what fastapi.testclient.TestClient sends.
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "127.0.0.1", "testserver"],
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

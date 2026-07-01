@@ -31,8 +31,12 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib uv run uvicorn src.main:app --reloa
 - `qa/` — disposable end-to-end QA harness (`run_qa.py`); boots the app on a
   throwaway db/data dir and drives the real flows. See `qa/README.md`.
 - `data/` — SQLite DB, uploads, generated reports (auto-created, gitignored)
-- `pyproject.toml` + `uv.lock` — Python deps (uv; `requirements.txt` is a
-  secondary pip fallback, regenerate with `uv export` if you need it in sync)
+- `pyproject.toml` + `uv.lock` — Python deps (uv). Two derived files exist:
+  `requirements.txt` (hand-maintained loose floors, pip fallback) and
+  `requirements.lock` (exact pins consumed by `uv pip sync` in
+  `scripts/build_mac_app.sh` / `test_paddle.sh`). After any `uv lock` change,
+  regenerate the lock file so it can't drift:
+  `uv export --format requirements-txt --no-hashes --no-emit-project -o requirements.lock`
 - `.env.example` — copy to `.env` and edit
 
 ## Setup (first time)
@@ -69,7 +73,7 @@ $(date -v-7d +%Y-%m-%d)`.
 - Structuring backend (`STRUCTURE_BACKEND`, separate from the OCR backend):
   `ollama` (default, fully local) structures OCR'd text into JSON with a local
   text model picked in the sidebar "OCR model" card — accuracy is strongly
-  model-bound (8b ≫ 3b on totals); `anthropic` sends only the receipt *text*
+  model-bound (8b ≫ 3b on totals); `anthropic` sends only the receipt _text_
   (never the image) to the hosted Claude API — opt-in, needs `ANTHROPIC_API_KEY`,
   lets a low-powered machine use a much stronger model (`claude-haiku-4-5` is the
   cheap default). OCR always stays local either way.

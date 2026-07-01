@@ -2,7 +2,7 @@
 name = "receipt-tracker"
 version = "1.0.0"
 description = "FastAPI receipt OCR tracker using local Ollama LLM"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.104,<1.0",
     "uvicorn[standard]>=0.24,<1.0",
@@ -14,7 +14,7 @@ dependencies = [
     "requests>=2.31",
     "python-dotenv>=1.0",
     "pydantic>=2.5",
-    "pydantic-settings>=2.1",
+    "pydantic-settings>=2.14.2",  # GHSA-4xgf-cpjx-pc3j floor
     "ollama>=0.1.6",
     "watchdog>=3.0",
     "beautifulsoup4>=4.12",
