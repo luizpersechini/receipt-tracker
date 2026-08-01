@@ -68,7 +68,7 @@ h11==0.16.0
     #   uvicorn
 httpcore==1.0.9
     # via httpx
-httplib2==0.31.2
+httplib2==0.32.0
     # via
     #   google-api-python-client
     #   google-auth-httplib2
@@ -101,7 +101,7 @@ pandas==2.3.3 ; python_full_version < '3.11'
     # via receipt-tracker
 pandas==3.0.3 ; python_full_version >= '3.11'
     # via receipt-tracker
-pillow==12.2.0
+pillow==12.3.0
     # via
     #   pillow-heif
     #   receipt-tracker
@@ -115,7 +115,7 @@ protobuf==7.35.1
     #   google-api-core
     #   googleapis-common-protos
     #   proto-plus
-pyasn1==0.6.3
+pyasn1==0.6.4
     # via pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth

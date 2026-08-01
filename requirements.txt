@@ -6,7 +6,9 @@ fastapi>=0.115
 starlette>=1.0.1
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
-pillow>=12.2.0   # CVE-2026-42308/09/10/11 buffer overflow (receipt images are untrusted input)
+pillow>=12.3.0   # CVE-2026-42308/09/10/11 buffer overflow, plus the 12.3.0 batch
+                 # (heap OOB write in ImageCms/RankFilter/paste, decompression-bomb
+                 # DoS via PdfParser) — receipt images are untrusted input
 pillow-heif>=1.0.0   # ≥1.0 needed for Python 3.13 wheels
 pandas>=2.2.3   # ≥2.2 has py3.13 wheels
 openpyxl>=3.1.5
