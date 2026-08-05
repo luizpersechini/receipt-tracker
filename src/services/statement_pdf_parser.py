@@ -182,6 +182,35 @@ def parse_statement_pdf(filepath: str) -> list[dict]:
     return txns
 
 
+def zero_parse_warning(filepath: str) -> str:
+    """Explain a zero-transaction parse to the user.
+
+    Scanned statements (image-only pages, no text layer) are the common
+    cause and used to fail silently — the parser reads embedded text, so a
+    scan yields an empty list without any error. A PDF that does have text
+    but still parsed to nothing is more likely a non-Itaú layout.
+    """
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(filepath)
+    try:
+        chars = sum(len(page.get_text().strip()) for page in doc)
+    finally:
+        doc.close()
+    # A native statement carries thousands of chars; tolerate stray
+    # watermark/footer text before calling it a scan.
+    if chars < 50:
+        return (
+            "this PDF has no text layer — it looks like a scan. The parser "
+            "reads native digital statements; download the original PDF from "
+            "the bank and re-upload."
+        )
+    return (
+        "no transactions were recognized — the file has text but doesn't "
+        "match the expected Itaú corporate-card layout."
+    )
+
+
 # ─── State-machine walk over flattened text ────────────────────────────────
 
 

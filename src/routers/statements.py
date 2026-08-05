@@ -34,14 +34,20 @@ async def upload_statement(file: UploadFile = File(...)):
             transactions,
         )
 
-        return JSONResponse(
-            {
-                "success": True,
-                "statement_id": statement_id,
-                "filename": filename,
-                "transaction_count": len(transactions),
-            }
-        )
+        payload = {
+            "success": True,
+            "statement_id": statement_id,
+            "filename": filename,
+            "transaction_count": len(transactions),
+        }
+        # A 0-transaction PDF used to be indistinguishable from a good upload
+        # in the UI. Diagnose why (scan vs unrecognized layout) and say so.
+        if not transactions and filepath.suffix.lower() == ".pdf":
+            from ..services.statement_pdf_parser import zero_parse_warning
+
+            payload["warning"] = await asyncio.to_thread(zero_parse_warning, str(filepath))
+
+        return JSONResponse(payload)
     except HTTPException:
         raise  # e.g. 413 from save_upload — don't flatten to 500
     except Exception as e:

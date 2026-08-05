@@ -520,6 +520,9 @@ textarea.desc:focus {
 .status-msg.err {
   color: var(--red);
 }
+.status-msg.warn {
+  color: var(--amber);
+}
 .status-msg.load {
   color: var(--text-3);
 }
@@ -1258,6 +1261,9 @@ tr.data-row:hover td {
 .bbox-canvas-inner {
   position: relative;
   width: 100%;
+  /* Zoomed out (<100% width) the canvas stays centered instead of hugging
+     the left edge; no effect at 100%+. */
+  margin-inline: auto;
 }
 .bbox-canvas-wrap img {
   display: block;
