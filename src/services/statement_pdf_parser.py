@@ -139,6 +139,22 @@ def _column_ordered_lines(page) -> Optional[list[str]]:
 # ─── Public entry point ────────────────────────────────────────────────────
 
 
+def _unlock(doc) -> bool:
+    """True when `doc` is readable: not encrypted, or the configured
+    STATEMENT_PDF_PASSWORD opened it. The password is tried as typed and
+    digits-only — banks quote it formatted ("74.127.010") but usually
+    expect bare digits."""
+    if not doc.needs_pass:
+        return True
+    from ..config import settings
+
+    pw = (settings.statement_pdf_password or "").strip()
+    for cand in dict.fromkeys([pw, re.sub(r"\D", "", pw)]):
+        if cand and doc.authenticate(cand):
+            return True
+    return False
+
+
 def parse_statement_pdf(filepath: str) -> list[dict]:
     """Parse an Itaú PDF statement into a list of transaction dicts."""
     try:
@@ -147,6 +163,13 @@ def parse_statement_pdf(filepath: str) -> list[dict]:
         raise RuntimeError("PyMuPDF (fitz) is required to parse PDF statements") from e
 
     doc = fitz.open(filepath)
+    if not _unlock(doc):
+        doc.close()
+        raise ValueError(
+            "This statement PDF is password-protected and couldn't be "
+            "unlocked — set STATEMENT_PDF_PASSWORD in .env to the bank's "
+            "PDF password (e.g. the CNPJ prefix Itaú uses)."
+        )
     try:
         year: Optional[int] = None
         post_md: Optional[tuple] = None  # (month, day) of the Postagem date
@@ -194,6 +217,13 @@ def zero_parse_warning(filepath: str) -> str:
 
     doc = fitz.open(filepath)
     try:
+        # Defensive — parse_statement_pdf raises on locked docs before this
+        # helper is ever reached, but keep it safe standalone.
+        if not _unlock(doc):
+            return (
+                "this PDF is password-protected — set STATEMENT_PDF_PASSWORD "
+                "in .env so statements can be unlocked automatically."
+            )
         chars = sum(len(page.get_text().strip()) for page in doc)
     finally:
         doc.close()

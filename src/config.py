@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     # Upload limit (currently advisory; FastAPI doesn't enforce by default)
     max_upload_mb: int = 25
 
+    # Password for bank-issued protected statement PDFs (Itaú locks them to
+    # a CNPJ prefix). Tried as-is and digits-only; empty = no unlock attempt.
+    statement_pdf_password: str = ""
+
     @model_validator(mode="after")
     def _apply_backend_default(self) -> "Settings":
         # Resolve a blank OCR_BACKEND to the platform-appropriate on-device
