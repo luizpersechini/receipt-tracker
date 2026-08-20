@@ -208,3 +208,33 @@ def test_pdf_preview_queues_every_page(client, monkeypatch):
     # Queue now holds 3 pages; no receipts saved yet.
     assert c.get("/api/review-queue").json()["count"] == 3
     assert env["db"].get_all_receipts() == []
+
+
+def test_pdf_preview_single_queues_one_fullpage_box_per_page(client, monkeypatch):
+    """The "Single receipt — don't split" toggle must reach the PDF path:
+    each page queued with exactly one full-page box, segmenter never run
+    (it used to be silently ignored for PDFs)."""
+    c, _env = client
+    from src.routers import receipts as receipts_router
+
+    monkeypatch.setattr(
+        receipts_router,
+        "segment_with_boxes",
+        lambda _p: pytest.fail("segmenter must not run when single=true"),
+    )
+
+    r = c.post(
+        "/api/upload/receipt/preview",
+        data={"single": "true"},
+        files={"file": ("Recibo.pdf", _pdf_bytes(pages=2), "application/pdf")},
+    )
+    assert r.status_code == 200
+    assert r.json()["review_queued"] == 2
+
+    items = c.get("/api/review-queue").json()["items"]
+    assert len(items) == 2
+    for it in items:
+        assert len(it["bboxes"]) == 1
+        box, size = it["bboxes"][0], it["image_size"]
+        assert (box["x"], box["y"]) == (0, 0)
+        assert (box["w"], box["h"]) == (size["w"], size["h"])

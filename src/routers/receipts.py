@@ -44,9 +44,10 @@ async def upload_receipt_preview(
     /commit, which performs the actual OCR.
 
     `single=True` (the "single receipt — don't split" toggle) skips
-    segmentation for an image and returns one full-image box, so a single
-    receipt on a large background isn't fragmented into many boxes. Ignored
-    for PDFs (those already go page-by-page through the review queue).
+    segmentation and uses one full-image box, so a single receipt on a
+    large background isn't fragmented into many boxes. For PDFs it
+    composes with the review queue: every page is queued with one
+    full-page box instead of segmenter output (one receipt per page).
 
     `queue=True` (multi-file uploads) adds the image to the box-review queue
     instead of returning boxes for the inline editor, so each file is
@@ -80,7 +81,13 @@ async def upload_receipt_preview(
                 await asyncio.to_thread(
                     lambda p=page, pp=page_path: p.save(str(pp), "PNG", optimize=True)
                 )
-                boxes, (w, h) = await asyncio.to_thread(segment_with_boxes, str(page_path))
+                if single:
+                    # "Don't split" applies per page: one full-page box, no
+                    # segmenter — a page IS a receipt in this mode.
+                    w, h = page.size
+                    boxes = [{"x": 0, "y": 0, "w": w, "h": h}]
+                else:
+                    boxes, (w, h) = await asyncio.to_thread(segment_with_boxes, str(page_path))
                 item = await asyncio.to_thread(
                     review_queue.add,
                     filename=page_name,
