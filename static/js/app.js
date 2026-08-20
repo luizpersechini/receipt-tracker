@@ -883,6 +883,26 @@ async function loadStatements() {
         : !s.archived,
   );
 
+  // Order by the statement's period (latest transaction date), newest first —
+  // upload order ≠ chronology when older faturas are uploaded late, and
+  // filenames don't sort meaningfully at all. Fallback: upload timestamp.
+  const periodEnd = (s) => {
+    let t = s.transactions || [];
+    if (typeof t === "string") {
+      try {
+        t = JSON.parse(t);
+      } catch {
+        t = [];
+      }
+    }
+    let max = "";
+    t.forEach((x) => {
+      if (x.date && x.date > max) max = x.date;
+    });
+    return max || s.uploaded_at || "";
+  };
+  visible.sort((a, b) => periodEnd(b).localeCompare(periodEnd(a)));
+
   const tbody = $("statementsTbody");
   if (!visible.length) {
     const hasArchived = statements.some((s) => s.archived);
@@ -957,7 +977,7 @@ async function loadStatements() {
     <td style="color:var(--text-2);font-size:12px;white-space:nowrap">${period}</td>
     <td>${matchedChip}</td>
     <td style="color:var(--text-2);font-size:12px">${(s.uploaded_at || "").slice(0, 16).replace("T", " ")}</td>
-    <td style="white-space:nowrap">${completeBtn}<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteStatement(${s.id})">Del</button></td>
+    <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openReportModalFor(${s.id})">Report</button>${completeBtn}<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteStatement(${s.id})">Del</button></td>
   </tr>`;
     })
     .join("");
@@ -1015,7 +1035,22 @@ let _stmtDetailAll = []; // full transactions array — search filters against t
 
 let _stmtDetailSeq = 0;
 
+// Statement id + note-editing state for the detail modal's inline editors.
+let _stmtDetailSid = null;
+let _stmtDetailEditingNote = null;
+const _STMT_CAT_OPTIONS = [
+  ["meals", "Meals"],
+  ["transportation", "Transport"],
+  ["fuel", "Fuel / Parking"],
+  ["travel", "Travel"],
+  ["lodging", "Lodging"],
+  ["office_supplies", "Office"],
+  ["other", "Other"],
+];
+
 async function openStatementDetail(id) {
+  _stmtDetailSid = id;
+  _stmtDetailEditingNote = null;
   $("stmtDetailModal").classList.add("open");
   $("stmtDetailTitle").textContent = "Statement";
   $("stmtDetailSub").textContent = "Loading…";
@@ -1044,7 +1079,7 @@ async function openStatementDetail(id) {
 function _renderStmtDetail() {
   const tbody = $("stmtDetailTbody");
   if (!_stmtDetailRows.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="stmt-detail-empty">No transactions match your search.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="stmt-detail-empty">No transactions match your search.</td></tr>`;
     $("stmtDetailSum").textContent = "—";
     return;
   }
@@ -1088,16 +1123,73 @@ function _renderStmtDetail() {
              <div class="col-amount-sub">${fmt.currency(t.amount, "BRL")}</div>
            </div>`
         : `<div class="col-amount">${fmt.currency(t.amount, t.currency || "BRL")}</div>`;
+      // Category: same rules as reconcile — locked to the receipt's category
+      // once matched, a live override select otherwise (same endpoint).
+      let catCell;
+      if (matched || t.category_locked) {
+        catCell = t.category
+          ? `<span class="badge badge-gray" title="From the matched receipt">${_esc(t.category)}</span>`
+          : '<span style="color:var(--text-3)">—</span>';
+      } else {
+        const cur = (t.category || "other").toLowerCase();
+        const opts = _STMT_CAT_OPTIONS
+          .map(
+            ([v, l]) =>
+              `<option value="${v}"${v === cur ? " selected" : ""}>${l}</option>`,
+          )
+          .join("");
+        catCell = `<select class="recon-cat-select stmt-cat-select" data-idx="${t.index}" title="Report category">${opts}</select>`;
+      }
+      // Comment / justification: click-to-edit, persisted via the same
+      // note endpoint the reconcile tab and the report use.
+      const noteCell =
+        _stmtDetailEditingNote === t.index
+          ? `<div class="recon-note-edit">
+               <textarea class="recon-note-input stmt-note-input" rows="2"
+                 placeholder="Comment / why is there no receipt?">${_esc(t.note || "")}</textarea>
+               <div class="recon-note-actions">
+                 <button class="btn btn-ghost btn-sm stmt-note-cancel">Cancel</button>
+                 <button class="btn btn-primary btn-sm stmt-note-save" data-idx="${t.index}">Save</button>
+               </div>
+             </div>`
+          : t.note
+            ? `<span class="stmt-note-trigger" data-idx="${t.index}" style="cursor:pointer" title="Click to edit">${_esc(t.note)}</span>`
+            : `<span class="stmt-note-trigger" data-idx="${t.index}" style="cursor:pointer;color:var(--text-3)">+ comment</span>`;
       return `<tr>
         <td class="col-date">${fmt.date(t.date)}</td>
         <td class="col-desc" title="${_esc(t.description)}">${_esc(t.description)}</td>
         <td>${amountCell}</td>
-        <td>${t.category ? `<span class="badge badge-gray">${_esc(t.category)}</span>` : '<span style="color:var(--text-3)">—</span>'}</td>
+        <td>${catCell}</td>
         <td class="col-city">${t.city ? _esc(t.city) : "—"}</td>
         <td>${matchLabel}</td>
+        <td class="col-note" style="max-width:180px;font-size:12px">${noteCell}</td>
       </tr>`;
     })
     .join("");
+
+  // Inline editors — rebind after every render (innerHTML wipes them).
+  tbody.querySelectorAll(".stmt-note-trigger").forEach((el) => {
+    el.addEventListener("click", () => {
+      _stmtDetailEditingNote = +el.dataset.idx;
+      _renderStmtDetail();
+      const ta = $("stmtDetailTbody").querySelector(".stmt-note-input");
+      if (ta) ta.focus();
+    });
+  });
+  tbody.querySelectorAll(".stmt-note-cancel").forEach((el) => {
+    el.addEventListener("click", () => {
+      _stmtDetailEditingNote = null;
+      _renderStmtDetail();
+    });
+  });
+  tbody.querySelectorAll(".stmt-note-save").forEach((el) => {
+    el.addEventListener("click", () => _stmtSaveNote(+el.dataset.idx));
+  });
+  tbody.querySelectorAll(".stmt-cat-select").forEach((sel) => {
+    sel.addEventListener("change", () =>
+      _stmtSaveCategory(+sel.dataset.idx, sel.value),
+    );
+  });
 
   // Sum line: BRL bill total (that's what the user owes) + foreign-currency
   // totals derived from `original_*` so the user sees "R$ 22,250 · CAD
@@ -1124,10 +1216,43 @@ function _renderStmtDetail() {
     `${_stmtDetailRows.length} shown · ${parts.join(" · ")}`;
 }
 
+async function _stmtSaveNote(idx) {
+  const ta = $("stmtDetailTbody").querySelector(".stmt-note-input");
+  const text = ta ? ta.value.trim() : "";
+  const t = _stmtDetailAll.find((x) => x.index === idx);
+  if (t) t.note = text; // optimistic
+  _stmtDetailEditingNote = null;
+  _renderStmtDetail();
+  try {
+    await api(
+      "PUT",
+      `/api/statements/${_stmtDetailSid}/transactions/${idx}/note`,
+      { note: text },
+    );
+  } catch (e) {
+    toast("Couldn't save comment: " + e.message);
+  }
+}
+
+async function _stmtSaveCategory(idx, category) {
+  const t = _stmtDetailAll.find((x) => x.index === idx);
+  if (t) t.category = category; // optimistic
+  try {
+    await api(
+      "PUT",
+      `/api/statements/${_stmtDetailSid}/transactions/${idx}/category`,
+      { category },
+    );
+  } catch (e) {
+    toast("Couldn't save category: " + e.message);
+  }
+}
+
 function closeStatementDetail() {
   $("stmtDetailModal").classList.remove("open");
   _stmtDetailAll = [];
   _stmtDetailRows = [];
+  _stmtDetailEditingNote = null;
 }
 
 // Alias of the global escHtml (kept for the call sites in this module).
@@ -1734,6 +1859,7 @@ const Reconcile = (() => {
           <textarea class="recon-note-input" rows="2"
             placeholder="Why is there no receipt? (lost receipt, unidentified charge…)">${_esc(t.note || "")}</textarea>
           <div class="recon-note-actions">
+            ${t.note ? `<button class="btn btn-ghost btn-sm recon-note-clear" data-index="${t.index}" title="Remove this justification">Clear</button>` : ""}
             <button class="btn btn-ghost btn-sm recon-note-cancel">Cancel</button>
             <button class="btn btn-primary btn-sm recon-note-save" data-index="${t.index}">Save</button>
           </div>
@@ -2077,6 +2203,10 @@ const Reconcile = (() => {
     document.querySelectorAll(".recon-note-save").forEach((el) => {
       el.addEventListener("click", () => _saveNote(+el.dataset.index));
     });
+    document.querySelectorAll(".recon-note-clear").forEach((el) => {
+      // Forced-blank save = delete (the endpoint clears on empty note).
+      el.addEventListener("click", () => _saveNote(+el.dataset.index, ""));
+    });
     // Save on Cmd/Ctrl+Enter; cancel on Escape.
     document.querySelectorAll(".recon-note-input").forEach((ta) => {
       ta.addEventListener("keydown", (e) => {
@@ -2154,9 +2284,9 @@ const Reconcile = (() => {
     }
   }
 
-  async function _saveNote(txnIndex) {
+  async function _saveNote(txnIndex, forced) {
     const ta = document.querySelector(".recon-note-input");
-    const text = ta ? ta.value.trim() : "";
+    const text = forced !== undefined ? forced : ta ? ta.value.trim() : "";
     const txn = reconState.txns.find((t) => t.index === txnIndex);
     if (txn) txn.note = text; // optimistic
     reconState.editingNote = null;
@@ -2599,15 +2729,14 @@ async function deleteUser(uid) {
 })();
 
 // ─── Expense report (PDF) ──────────────────────────────────────────────────
-// "Generate report" on the reconcile header → pick the cardholder (auto-
-// guessed from the statement) → download the Prestação de Contas PDF.
+// "Report" on a Statements-tab row → pick the cardholder (auto-guessed from
+// the statement) → download the Prestação de Contas PDF.
 
-async function openReportModal() {
-  const sid = Reconcile.state && Reconcile.state.statementId;
-  if (sid == null) {
-    alert("Pick a statement on the Reconcile tab first.");
-    return;
-  }
+let _reportSid = null; // statement the report modal is generating for
+
+async function openReportModalFor(sid) {
+  if (sid == null) return;
+  _reportSid = sid;
   $("reportModal").classList.add("open");
   $("reportStatus").textContent = "";
   $("reportGuessHint").textContent = "";
@@ -2687,7 +2816,7 @@ async function _downloadReport(sid, uid, venc, fmt = "pdf") {
 }
 
 async function _generateReport(fmt = "pdf") {
-  const sid = Reconcile.state && Reconcile.state.statementId;
+  const sid = _reportSid;
   if (sid == null) return;
   const xlsx = fmt === "xlsx";
   const btn = $(xlsx ? "reportXlsxBtn" : "reportGenBtn");
@@ -2717,8 +2846,6 @@ async function _generateReport(fmt = "pdf") {
 }
 
 (function _wireReportModal() {
-  const open = $("reconReportBtn");
-  if (open) open.addEventListener("click", openReportModal);
   const xlsx = $("reportXlsxBtn");
   if (xlsx) xlsx.addEventListener("click", () => _generateReport("xlsx"));
   const gen = $("reportGenBtn");
