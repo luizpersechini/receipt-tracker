@@ -329,3 +329,49 @@ def test_second_payments_block_is_also_skipped(tmp_path):
     txns = parse_statement_pdf(str(pdf))
     amounts = sorted(t["amount"] for t in txns)
     assert amounts == [17.81, 30.00]
+
+
+def test_intl_city_dropped_when_merchant_echo(tmp_path):
+    """Newer templates print a shortened merchant echo in the city slot for
+    online purchases ("METALPRICEAPI.COM" -> "METALPRICEAPI"); a real city
+    (TORONTO) must survive."""
+    pdf = tmp_path / "echo.pdf"
+    _write_pdf(
+        pdf,
+        [
+            "Postagem: 05/08/2026",
+            "Lançamentos internacionais",
+            "DATA",
+            "ESTABELECIMENTO",
+            "VALOR EM US$",
+            "17/07",
+            "METALPRICEAPI.COM",
+            "64,99",
+            "METALPRICEAPI",
+            "11,99",
+            "USD",
+            "11,99",
+            "Dólar de Conversão R$ 5,42",
+            "08/07",
+            "ANTHROPIC*CLAUDESUB",
+            "587,26",
+            "ANTHROPIC.COM",
+            "107,36",
+            "USD",
+            "107,36",
+            "Dólar de Conversão R$ 5,47",
+            "06/03",
+            "UBER CANADA/UBERTRIP",
+            "90,31",
+            "TORONTO",
+            "21,88",
+            "CAD",
+            "16,07",
+            "Dólar de Conversão R$ 5,62",
+        ],
+    )
+    txns = parse_statement_pdf(str(pdf))
+    assert len(txns) == 3
+    assert txns[0]["raw_data"]["city"] is None  # exact-prefix echo
+    assert txns[1]["raw_data"]["city"] is None  # shared >=8-char prefix echo
+    assert txns[2]["raw_data"]["city"] == "TORONTO"  # real city untouched

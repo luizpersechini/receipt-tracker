@@ -343,6 +343,11 @@ def _try_international(lines: list[str], i: int, year: int, post_md: Optional[tu
     native_amount = _parse_brl(native_m.group(0))
     fx_rate = _parse_brl(fx_m.group(1))
     city = lines[i + 3].strip()
+    # Newer templates print a shortened merchant echo in the city slot for
+    # online purchases ("METALPRICEAPI.COM" → "METALPRICEAPI"). A city that's
+    # just the merchant again is noise — drop it rather than surface it.
+    if city and _is_merchant_echo(city, merchant):
+        city = None
 
     raw_data: dict = {
         "section": "international",
@@ -363,6 +368,31 @@ def _try_international(lines: list[str], i: int, year: int, post_md: Optional[tu
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
+
+
+def _is_merchant_echo(city: str, merchant: str) -> bool:
+    """True when the "city" line is really the merchant name again.
+
+    Compares alphanumeric-only, case-insensitive forms. Echo if either is a
+    prefix of the other ("METALPRICEAPI" ~ "METALPRICEAPI.COM") or they share
+    a ≥8-char prefix ("ANTHROPIC.COM" ~ "ANTHROPIC*CLAUDESUB"). Min 6 chars
+    so a real short city sharing a few letters can't be swallowed.
+    """
+
+    def norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", s.lower())
+
+    c, m = norm(city), norm(merchant)
+    if len(c) < 6 or not m:
+        return False
+    if c.startswith(m) or m.startswith(c):
+        return True
+    common = 0
+    for a, b in zip(c, m):
+        if a != b:
+            break
+        common += 1
+    return common >= 8
 
 
 def _parse_brl(s: str) -> Optional[float]:
