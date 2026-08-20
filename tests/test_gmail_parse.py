@@ -45,6 +45,7 @@ SAMPLE_BRL = """\
 
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
+
 def test_parses_amount_and_currency_from_canadian_business_receipt():
     p = parse_uber_email(
         msg_id="m1",
@@ -111,8 +112,10 @@ def test_parses_brazilian_real_with_comma_decimal():
 def test_synthetic_filename_uses_trip_uuid_when_available():
     p = parse_uber_email(
         msg_id="m1",
-        subject="Your trip", date_header=None,
-        html=SAMPLE_BUSINESS, plain=None,
+        subject="Your trip",
+        date_header=None,
+        html=SAMPLE_BUSINESS,
+        plain=None,
     )
     assert p.synthetic_filename() == "uber_abcd-1234-5678.eml"
 
@@ -133,7 +136,8 @@ def test_synthetic_filename_falls_back_to_msg_id_when_trip_uuid_missing():
         msg_id="19e18926c93e7f27",
         subject="[Business] Your Friday afternoon trip with Uber",
         date_header="Mon, 11 May 2026 19:45:09 +0000",
-        html=html_no_uuid, plain=None,
+        html=html_no_uuid,
+        plain=None,
     )
     assert p.trip_id is None
     assert p.synthetic_filename() == "uber_gm-19e18926c93e7f27.eml"
@@ -152,7 +156,8 @@ def test_prefers_body_date_over_email_header():
         msg_id="m1",
         subject="[Business] Your trip with Uber",
         date_header="Mon, 11 May 2026 19:45:09 +0000",
-        html=html, plain=None,
+        html=html,
+        plain=None,
     )
     assert p.date == "2026-04-17"
 
@@ -162,7 +167,9 @@ def test_extracts_portuguese_body_date():
     p = parse_uber_email(
         msg_id="m2",
         subject="Sua viagem com a Uber",
-        date_header=None, html=html, plain=None,
+        date_header=None,
+        html=html,
+        plain=None,
     )
     assert p.date == "2026-04-17"
 
@@ -171,7 +178,9 @@ def test_business_detected_from_bracketed_subject_prefix():
     p = parse_uber_email(
         msg_id="m1",
         subject="[Business] Your Friday afternoon trip with Uber",
-        date_header=None, html="<p>Total R$10</p>", plain=None,
+        date_header=None,
+        html="<p>Total R$10</p>",
+        plain=None,
     )
     assert p.is_business is True
 
@@ -186,8 +195,16 @@ def test_metadata_shape_matches_ocr_output():
     )
     md = p.to_metadata()
     # Same field names as OCR / CSV path — downstream code is generic
-    for field_ in ("date", "vendor_name", "total_amount", "currency",
-                   "category", "vendor_address", "payment_method", "items"):
+    for field_ in (
+        "date",
+        "vendor_name",
+        "total_amount",
+        "currency",
+        "category",
+        "vendor_address",
+        "payment_method",
+        "items",
+    ):
         assert field_ in md
     assert md["vendor_name"] == "Uber"
     assert md["category"] == "transportation"
@@ -226,7 +243,8 @@ def test_build_query_before_is_made_inclusive():
 def test_build_query_combines_label_and_date_range():
     q = build_query(
         "from:noreply@uber.com",
-        after="2024-06-01", before="2024-06-30",
+        after="2024-06-01",
+        before="2024-06-30",
         exclude_label="rt-processed",
     )
     assert q == "from:noreply@uber.com -label:rt-processed after:2024/06/01 before:2024/07/01"
@@ -240,8 +258,10 @@ def test_build_query_ignores_malformed_dates():
 
 # ─── Gmail error categoriser ───────────────────────────────────────────────
 
+
 def test_categorise_project_deleted_error():
     from src.services.gmail_ingest import _categorise_gmail_error
+
     err = Exception("Project #418165347312 has been deleted.")
     out = _categorise_gmail_error(err)
     assert out["success"] is False
@@ -251,37 +271,46 @@ def test_categorise_project_deleted_error():
 
 def test_categorise_invalid_client():
     from src.services.gmail_ingest import _categorise_gmail_error
+
     out = _categorise_gmail_error(Exception("oauth2 invalid_client"))
     assert out["error_kind"] == "invalid_client"
 
 
 def test_categorise_token_expired():
     from src.services.gmail_ingest import _categorise_gmail_error
+
     out = _categorise_gmail_error(Exception("invalid_grant: Token has been expired or revoked."))
     assert out["error_kind"] == "token_expired"
 
 
 def test_categorise_api_disabled():
     from src.services.gmail_ingest import _categorise_gmail_error
-    out = _categorise_gmail_error(Exception("Gmail API has not been used in project 123 before or it is disabled"))
+
+    out = _categorise_gmail_error(
+        Exception("Gmail API has not been used in project 123 before or it is disabled")
+    )
     assert out["error_kind"] == "api_disabled"
 
 
 def test_categorise_unknown_falls_back():
     from src.services.gmail_ingest import _categorise_gmail_error
+
     out = _categorise_gmail_error(Exception("something else entirely"))
     assert out["error_kind"] == "unknown"
 
 
 # ─── /api/gmail/credentials upload endpoint ────────────────────────────────
 
+
 def _client_for_credentials_upload(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from src.config import settings
+
     monkeypatch.setattr(settings, "gmail_credentials_path", tmp_path / "credentials.json")
     monkeypatch.setattr(settings, "gmail_token_path", tmp_path / "token.json")
     # Import main lazily so the patched settings are in effect at app build time
     from src.main import app
+
     return TestClient(app)
 
 
@@ -302,12 +331,14 @@ def test_credentials_upload_accepts_valid_desktop_client(tmp_path, monkeypatch):
     assert data["success"] is True
     assert data["client_id"] == "new-cid"
     from src.config import settings
+
     assert settings.gmail_credentials_path.exists()
 
 
 def test_credentials_upload_drops_stale_token(tmp_path, monkeypatch):
     client = _client_for_credentials_upload(tmp_path, monkeypatch)
     from src.config import settings
+
     # Pre-existing token from the old (now-defunct) client
     settings.gmail_token_path.parent.mkdir(parents=True, exist_ok=True)
     settings.gmail_token_path.write_text("stale-token")
@@ -373,3 +404,18 @@ def test_extract_total_skips_refund_lines():
     # ...but a normal total after a refund mention on ANOTHER line still wins.
     amt2, _ = _extract_total("Your refund was processed\nTotal R$ 30,00")
     assert amt2 == 30.00
+
+
+def test_extract_trip_id_from_map_img_when_no_trips_url():
+    """2026 template: no trips/<uuid> link, uuid only in the map <img> id.
+    Losing the trip id here collapses two same-day same-fare rides into one
+    (the resend dedup guard), so the map-id fallback must recover it."""
+    from src.services.gmail_ingest import _extract_trip_id
+
+    html = '<img id="map_f910a333-89e8-49be-89d2-14a35b8f3b0f_wide" width="100%">'
+    assert _extract_trip_id(html, "") == "f910a333-89e8-49be-89d2-14a35b8f3b0f"
+    # trips/ URL still wins when both are present
+    both = html + '<a href="https://riders.uber.com/trips/abcd-1234-5678">r</a>'
+    assert _extract_trip_id(both, "") == "abcd-1234-5678"
+    # id must be a full uuid — random map_ tokens don't match
+    assert _extract_trip_id('<img id="map_widget_wide">', "") is None

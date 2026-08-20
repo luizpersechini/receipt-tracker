@@ -382,6 +382,13 @@ def _extract_total(text: str) -> tuple[Optional[float], Optional[str]]:
 
 
 _TRIP_URL = re.compile(r"trips/([0-9a-fA-F-]{8,})")
+# 2026 template dropped the trips/<uuid> link but still embeds the trip uuid
+# in the route-map <img> id: id="map_<uuid>" / "map_<uuid>_wide". Without a
+# trip id, two same-day same-fare rides collapse into one via the resend
+# dedup guard — so this fallback is load-bearing, not cosmetic.
+_MAP_ID = re.compile(
+    r"map_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
 
 
 def _extract_trip_id(html: str, text: str) -> Optional[str]:
@@ -390,6 +397,12 @@ def _extract_trip_id(html: str, text: str) -> Optional[str]:
         if not blob:
             continue
         m = _TRIP_URL.search(blob)
+        if m:
+            return m.group(1)
+    for blob in (html, text):
+        if not blob:
+            continue
+        m = _MAP_ID.search(blob)
         if m:
             return m.group(1)
     return None
