@@ -1524,27 +1524,45 @@ const Reconcile = (() => {
         api("GET", "/api/statements"),
         api("GET", "/api/receipts"),
       ]);
-      reconState.statements = (stmts.statements || []).map((s) => {
-        // The /statements API returns `transactions` already parsed into
-        // a JS array (the backend deserialises before sending). Support
-        // either shape just in case, and only fall back to 0 when the
-        // payload is truly empty.
-        let n = s.transaction_count;
-        if (n == null) {
+      // Completed (archived) statements are done — their items must not be
+      // reconcilable, so they don't appear here at all. Reopen a statement
+      // on the Statements tab to bring it back.
+      reconState.statements = (stmts.statements || [])
+        .filter((s) => !s.archived)
+        .map((s) => {
+          // The /statements API returns `transactions` already parsed into
+          // a JS array (the backend deserialises before sending). Support
+          // either shape just in case, and only fall back to 0 when the
+          // payload is truly empty.
+          let txarr = [];
           if (Array.isArray(s.transactions)) {
-            n = s.transactions.length;
+            txarr = s.transactions;
           } else if (typeof s.transactions === "string") {
             try {
-              n = JSON.parse(s.transactions || "[]").length;
+              txarr = JSON.parse(s.transactions || "[]");
             } catch {
-              n = 0;
+              txarr = [];
             }
-          } else {
-            n = 0;
           }
-        }
-        return { id: s.id, filename: s.filename, transaction_count: n };
-      });
+          const n =
+            s.transaction_count != null ? s.transaction_count : txarr.length;
+          // Statement period (min→max transaction date) — used as the
+          // dropdown label and to prefilter the receipts pane.
+          let from = "";
+          let to = "";
+          txarr.forEach((t) => {
+            if (!t.date) return;
+            if (!from || t.date < from) from = t.date;
+            if (!to || t.date > to) to = t.date;
+          });
+          return {
+            id: s.id,
+            filename: s.filename,
+            transaction_count: n,
+            period_from: from,
+            period_to: to,
+          };
+        });
       // Normalise receipts for board use: pull amount/date/vendor out of metadata.
       reconState.receipts = (rcpts.receipts || []).map((r) => {
         const m = (() => {
@@ -1575,7 +1593,14 @@ const Reconcile = (() => {
       return;
     }
     _renderStatementSelect();
-    // Default to the most recent statement if none picked yet.
+    // Default to the most recent statement if none picked yet — and drop a
+    // stale selection (e.g. the statement was completed since last visit).
+    if (
+      reconState.statementId != null &&
+      !reconState.statements.some((s) => s.id === reconState.statementId)
+    ) {
+      reconState.statementId = null;
+    }
     if (reconState.statementId == null && reconState.statements.length) {
       reconState.statementId = reconState.statements[0].id;
     }
@@ -1590,16 +1615,20 @@ const Reconcile = (() => {
   function _renderStatementSelect() {
     const sel = $("reconStatement");
     if (!reconState.statements.length) {
-      sel.innerHTML = `<option value="">No statements uploaded yet</option>`;
+      sel.innerHTML = `<option value="">No open statements — reopen one on the Statements tab</option>`;
       sel.disabled = true;
       return;
     }
     sel.disabled = false;
+    // Label by the period the statement covers — that's how the user thinks
+    // of a fatura; filenames are noise. Filename survives in the tooltip.
     sel.innerHTML = reconState.statements
-      .map(
-        (s) =>
-          `<option value="${s.id}">${_esc(s.filename)} · ${s.transaction_count} txns</option>`,
-      )
+      .map((s) => {
+        const label = s.period_from
+          ? `${_fmt.date(s.period_from)} → ${_fmt.date(s.period_to)}`
+          : s.filename;
+        return `<option value="${s.id}" title="${_esc(s.filename)}">${_esc(label)} · ${s.transaction_count} txns</option>`;
+      })
       .join("");
     if (reconState.statementId != null) sel.value = reconState.statementId;
   }
@@ -1622,7 +1651,26 @@ const Reconcile = (() => {
       _flash("err", `Failed to load transactions: ${e.message}`);
       reconState.txns = [];
     }
+    _applyStatementDateWindow(id);
     _render();
+  }
+
+  // Prefilter the receipts pane to the selected statement's period (with a
+  // few days of lead — a receipt is dated when you paid, the statement line
+  // when it posted). Just a default: the inputs stay fully editable, and the
+  // next statement switch re-applies its own window.
+  function _applyStatementDateWindow(id) {
+    const s = reconState.statements.find((x) => x.id === id);
+    if (!s || !s.period_from) return;
+    const lead = new Date(s.period_from + "T12:00:00");
+    lead.setDate(lead.getDate() - 5);
+    reconState.rcptFilter.dateFrom = lead.toISOString().slice(0, 10);
+    reconState.rcptFilter.dateTo = s.period_to;
+    _saveFilter("rt.recon.receiptFilter", reconState.rcptFilter);
+    const fromEl = $("reconRcptFrom");
+    const toEl = $("reconRcptTo");
+    if (fromEl) fromEl.value = reconState.rcptFilter.dateFrom;
+    if (toEl) toEl.value = reconState.rcptFilter.dateTo;
   }
 
   function _render() {
