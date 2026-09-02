@@ -447,7 +447,30 @@ function populateCurrencyFilter(receipts) {
 }
 
 // ─── Progress strip ───────────────────────────────────────────────────────────
+// Topbar scope: "global" (receipts across the month picker) or "statement"
+// (the statement selected on the Reconcile tab). In statement scope the
+// Reconcile module owns the tiles + progress strip; loadStats/updateProgress
+// defer to it, so the many post-action loadStats() calls can't clobber the
+// scoped numbers with all-time ones.
+let topbarScope = "global";
+const _TOPBAR_GLOBAL_LABELS = {
+  hPendingLabel: "Pending",
+  hMatchedLabel: "Matched",
+  hUnmatchedLabel: "Unmatched",
+  hReimbursedLabel: "Reimbursed",
+};
+function _setTopbarLabels(map) {
+  Object.entries(map).forEach(([id, txt]) => {
+    const el = $(id);
+    if (el) el.textContent = txt;
+  });
+}
+
 function updateProgress(receipts) {
+  if (topbarScope === "statement") {
+    Reconcile.renderTopbar();
+    return;
+  }
   // Progress chip reflects whatever's currently visible — month + filters.
   // Keeping these in sync avoids confusion when the user narrows to e.g.
   // "category=meals" and the chip would otherwise show all-category counts.
@@ -485,6 +508,10 @@ function updateProgress(receipts) {
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
 async function loadStats() {
+  if (topbarScope === "statement") {
+    Reconcile.renderTopbar();
+    return;
+  }
   try {
     const s = await api("GET", "/api/stats");
     $("hPending").textContent = s.pending_receipts ?? 0;
@@ -1689,6 +1716,85 @@ const Reconcile = (() => {
     $("reconPairedNum").textContent = matched;
     $("reconPairedTotal").textContent = total;
     $("reconPairedLeft").textContent = Math.max(0, total - matched);
+    renderTopbar();
+  }
+
+  // Topbar tiles + progress strip scoped to the selected statement (the
+  // all-time receipt numbers mean nothing while reconciling one fatura).
+  // Tiles become Lines / Matched / Unmatched / Justified / Total; Total is
+  // the bill in BRL plus native sums for international rows.
+  function renderTopbar() {
+    if (typeof topbarScope !== "undefined" && topbarScope !== "statement")
+      return;
+    _setTopbarLabels({
+      hPendingLabel: "Lines",
+      hMatchedLabel: "Matched",
+      hUnmatchedLabel: "Unmatched",
+      hReimbursedLabel: "Justified",
+    });
+    const strip = $("progressStrip");
+    const s = reconState.statements.find(
+      (x) => x.id === reconState.statementId,
+    );
+    if (!s) {
+      ["hPending", "hMatched", "hUnmatched", "hReimbursed", "hAmount"].forEach(
+        (id) => ($(id).textContent = "—"),
+      );
+      strip.classList.add("visible");
+      $("progressMonth").textContent = "no open statement";
+      $("progressFill").style.width = "0%";
+      $("progressText").textContent = "—";
+      $("progressChips").innerHTML = "";
+      return;
+    }
+    const countable = reconState.txns.filter((t) => !t.credit);
+    const matched = countable.filter((t) => _txnMatches(t).length).length;
+    const justified = countable.filter(
+      (t) => !_txnMatches(t).length && t.note,
+    ).length;
+    const unmatched = countable.length - matched - justified;
+
+    let brl = 0;
+    const foreign = {};
+    reconState.txns.forEach((t) => {
+      brl += parseFloat(t.amount) || 0;
+      const c = t.original_currency;
+      if (c && c !== "BRL" && t.original_amount != null) {
+        foreign[c] = (foreign[c] || 0) + (parseFloat(t.original_amount) || 0);
+      }
+    });
+
+    $("hPending").textContent = countable.length;
+    $("hMatched").textContent = matched;
+    $("hUnmatched").textContent = unmatched;
+    $("hReimbursed").textContent = justified;
+    const amt = $("hAmount");
+    amt.textContent = [
+      fmt.currency(brl, "BRL"),
+      ...Object.entries(foreign).map(([c, v]) => `${c} ${v.toFixed(2)}`),
+    ].join(" · ");
+    amt.title = "Statement total · international rows in native currency";
+
+    const pct = countable.length
+      ? Math.round((matched / countable.length) * 100)
+      : 0;
+    strip.classList.add("visible");
+    $("progressMonth").textContent = s.period_from
+      ? `${_fmt.date(s.period_from)} → ${_fmt.date(s.period_to)}`
+      : s.filename;
+    $("progressFill").style.width = pct + "%";
+    $("progressText").textContent = `${matched} / ${countable.length} matched`;
+    $("progressChips").innerHTML = [
+      matched
+        ? `<span class="pchip pchip-green">${matched} matched</span>`
+        : "",
+      unmatched
+        ? `<span class="pchip pchip-red">${unmatched} unmatched</span>`
+        : "",
+      justified
+        ? `<span class="pchip pchip-gray">${justified} justified</span>`
+        : "",
+    ].join("");
   }
 
   // Effective currency for filter purposes: an int'l txn carries the
@@ -2590,7 +2696,7 @@ const Reconcile = (() => {
       await _selectStatement(reconState.statementId);
   }
 
-  return { init, reload, state: reconState };
+  return { init, reload, renderTopbar, state: reconState };
 })();
 
 // ─── Users (cardholder roster) ─────────────────────────────────────────────
@@ -3201,8 +3307,15 @@ async function openReimbModal() {
       )
       .join("");
 
-  $("reimbFrom").value = "";
-  $("reimbTo").value = "";
+  // Prefill the date range with the oldest → newest receipt in scope, so
+  // the form shows exactly what a blank range would include and the user
+  // only edits it to narrow. Blank stays blank when there's nothing pending.
+  const dates = _reimbReceipts
+    .map((r) => r.date)
+    .filter(Boolean)
+    .sort();
+  $("reimbFrom").value = dates.length ? dates[0] : "";
+  $("reimbTo").value = dates.length ? dates[dates.length - 1] : "";
   _refreshReimbCount();
 }
 
@@ -4843,6 +4956,19 @@ document.querySelectorAll(".nav-item[data-tab]").forEach((btn) => {
     const sp = $("sidePanelEl");
     if (sp) sp.classList.toggle("tab-hidden", name !== "receipts");
     $("topbarTitle").textContent = tabTitles[name];
+    // Topbar scope follows the tab: Reconcile shows the selected statement's
+    // numbers (month picker hidden); every other tab shows the global ones.
+    const mp = $("monthPick");
+    if (name === "reconcile") {
+      topbarScope = "statement";
+      if (mp) mp.style.display = "none";
+    } else if (topbarScope !== "global") {
+      topbarScope = "global";
+      if (mp) mp.style.display = "";
+      _setTopbarLabels(_TOPBAR_GLOBAL_LABELS);
+      loadStats();
+      updateProgress(allReceipts);
+    }
     if (name === "receipts") loadReceipts();
     if (name === "statements") loadStatements();
     if (name === "reconcile") Reconcile.init();
