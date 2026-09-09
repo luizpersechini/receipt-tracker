@@ -1055,6 +1055,12 @@ def warmup() -> Optional[str]:
         "prompt": "",  # empty prompt = pure model load, no generation
         "stream": False,
         "keep_alive": "10m",
+        # Same context cap as the real calls. Without it Ollama loads the
+        # model at its full default window (llama3.1: 131072 → ~23GB of KV
+        # cache), which on a 24GB Mac swaps the whole machine at app start.
+        # Matching num_ctx also means the real calls reuse this runner
+        # instead of reloading.
+        "options": {"num_ctx": settings.ocr_num_ctx},
     }
     try:
         # Short timeout for the warmup call itself — if Ollama isn't reachable
