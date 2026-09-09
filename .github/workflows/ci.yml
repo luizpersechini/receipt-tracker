@@ -22,12 +22,15 @@ jobs:
       # (pytest.importorskip) instead of running.
       - name: Install WeasyPrint system libraries
         run: |
-          # Drop the runner's preinstalled third-party apt repos (Google
-          # Chrome, etc.) before updating — our deps come only from Ubuntu's
-          # own repos, and a hash-sum mismatch in an unrelated repo was
-          # failing the whole job.
-          sudo rm -f /etc/apt/sources.list.d/*.list
-          sudo apt-get update
+          # Drop the runner's preinstalled Google Chrome apt repo before
+          # updating — our deps come only from Ubuntu's own repos, and a
+          # hash-sum mismatch in Chrome's index was failing the whole job.
+          # Match both .list and deb822 .sources formats; leave ubuntu.sources
+          # intact. `|| true` on update so any other unrelated third-party
+          # index can't fail the build either — our packages are in the
+          # Ubuntu index, which updates fine.
+          sudo rm -f /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome*
+          sudo apt-get update || true
           sudo apt-get install -y --no-install-recommends \
             libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 \
             libcairo2 libffi-dev
