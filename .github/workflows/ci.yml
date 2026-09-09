@@ -22,6 +22,11 @@ jobs:
       # (pytest.importorskip) instead of running.
       - name: Install WeasyPrint system libraries
         run: |
+          # Drop the runner's preinstalled third-party apt repos (Google
+          # Chrome, etc.) before updating — our deps come only from Ubuntu's
+          # own repos, and a hash-sum mismatch in an unrelated repo was
+          # failing the whole job.
+          sudo rm -f /etc/apt/sources.list.d/*.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 \
