@@ -5328,7 +5328,15 @@ $("uploadStatementBtn").addEventListener("click", async () => {
 
   try {
     const res = await api("POST", "/api/upload/statement", fd);
-    if (res.warning) {
+    if (res.split) {
+      // Corporate PDF with several cardholders → one statement each.
+      const names = res.statements
+        .map((s) => `${s.cardholder} (${s.transaction_count})`)
+        .join(", ");
+      $("statementStatus").textContent =
+        `Split into ${res.statements.length} cardholder statements: ${names}`;
+      $("statementStatus").className = "status-msg ok";
+    } else if (res.warning) {
       $("statementStatus").textContent =
         `Saved, but 0 transactions: ${res.warning}`;
       $("statementStatus").className = "status-msg warn";

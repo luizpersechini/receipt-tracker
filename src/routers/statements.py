@@ -16,6 +16,19 @@ router = APIRouter(prefix="/api", tags=["statements"])
 logger = logging.getLogger(__name__)
 
 
+def _group_by_cardholder(transactions: list) -> dict:
+    """Group parsed transactions by their `cardholder` tag, preserving first-
+    seen order. Returns {} for an empty list and a single-entry dict when
+    there's one (or no) cardholder — callers split only when len > 1."""
+    groups: dict = {}
+    for t in transactions:
+        holder = t.get("cardholder")
+        groups.setdefault(holder, []).append(t)
+    # A file with no cardholder headers yields {None: [...]} — one group, so
+    # callers treat it as a normal single statement.
+    return groups
+
+
 @router.post("/upload/statement")
 async def upload_statement(file: UploadFile = File(...)):
     filepath = None
@@ -27,6 +40,36 @@ async def upload_statement(file: UploadFile = File(...)):
 
         # Dispatcher picks PDF vs CSV based on extension; same return shape.
         transactions = await asyncio.to_thread(parse_statement, str(filepath))
+
+        # Corporate PDFs bundle several cardholders in one file. Each card is
+        # its own fatura to reconcile/report, so split into one statement per
+        # cardholder. A statement with 0 or 1 distinct cardholder stays a
+        # single statement (unchanged behaviour).
+        groups = _group_by_cardholder(transactions)
+        if len(groups) > 1:
+            created = []
+            for holder, txns in groups.items():
+                sub_name = f"{filename} · {holder}"
+                sid = await asyncio.to_thread(db.save_statement, sub_name, str(filepath), txns)
+                created.append(
+                    {
+                        "statement_id": sid,
+                        "filename": sub_name,
+                        "cardholder": holder,
+                        "transaction_count": len(txns),
+                    }
+                )
+            return JSONResponse(
+                {
+                    "success": True,
+                    "split": True,
+                    "statements": created,
+                    "statement_id": created[0]["statement_id"],
+                    "filename": filename,
+                    "transaction_count": len(transactions),
+                }
+            )
+
         statement_id = await asyncio.to_thread(
             db.save_statement,
             filename,
@@ -118,6 +161,13 @@ async def reparse_statement(statement_id: int):
     try:
         old_txns = statement.get("transactions") or []
         transactions = await asyncio.to_thread(parse_statement, filepath)
+        # Split (per-cardholder) statements share the multi-cardholder PDF, so
+        # a plain reparse returns everyone. Re-filter to this statement's own
+        # cardholder(s) — derived from its currently-stored rows — so reparse
+        # doesn't pull the other cardholders' charges into this fatura.
+        own_holders = {t.get("cardholder") for t in old_txns if t.get("cardholder")}
+        if own_holders:
+            transactions = [t for t in transactions if t.get("cardholder") in own_holders]
         await asyncio.to_thread(db.replace_statement_transactions, statement_id, transactions)
 
         mapping = build_index_mapping(old_txns, transactions)

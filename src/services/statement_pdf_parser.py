@@ -244,13 +244,40 @@ def zero_parse_warning(filepath: str) -> str:
 # ─── State-machine walk over flattened text ────────────────────────────────
 
 
+# Cardholder section header: "LUIZ PERSECHINI (final 2928)". Corporate
+# statements group each card's lançamentos under one. The card's own
+# "Lançamentos no cartão (final NNNN)" subtotal line uses the same "(final
+# NNNN)" tail, so require a NAME (letters/spaces, no digits) before it to
+# tell the header apart from that subtotal.
+_CARDHOLDER_HEADER_RE = re.compile(r"^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.\s]{4,50}?)\s*\(final\s*(\d{4})\)\s*$")
+
+
 def _walk_lines(lines: list[str], year: int, post_md: Optional[tuple] = None) -> list[dict]:
-    """Walk the line list, emitting one dict per detected transaction."""
+    """Walk the line list, emitting one dict per detected transaction. Each
+    txn is tagged with the cardholder whose section it falls under (corporate
+    statements bundle several cards; single-card statements leave it None)."""
     txns: list[dict] = []
+    cardholder: Optional[str] = None
+    card_last4: Optional[str] = None
     i = 0
     n = len(lines)
+
+    def _tag(txn: dict) -> dict:
+        if cardholder:
+            txn["cardholder"] = cardholder
+            txn.setdefault("raw_data", {})["card_last4"] = card_last4
+        return txn
+
     while i < n:
         line = lines[i].strip()
+
+        # Cardholder section header — switch the active cardholder.
+        hm = _CARDHOLDER_HEADER_RE.match(line)
+        if hm:
+            cardholder = " ".join(hm.group(1).split())
+            card_last4 = hm.group(2)
+            i += 1
+            continue
 
         # The payments section lists the previous-bill payment (money in,
         # not a purchase OR a refund). Skip EVERY such block — multi-
@@ -265,14 +292,14 @@ def _walk_lines(lines: list[str], year: int, post_md: Optional[tuple] = None) ->
         # Try the strict international pattern first (8 lines, ends on FX).
         txn, used = _try_international(lines, i, year, post_md)
         if txn:
-            txns.append(txn)
+            txns.append(_tag(txn))
             i += used
             continue
 
         # Then the simpler domestic 3-line pattern.
         txn, used = _try_domestic(lines, i, year, post_md)
         if txn:
-            txns.append(txn)
+            txns.append(_tag(txn))
             i += used
             continue
 

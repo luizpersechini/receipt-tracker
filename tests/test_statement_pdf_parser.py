@@ -375,3 +375,65 @@ def test_intl_city_dropped_when_merchant_echo(tmp_path):
     assert txns[0]["raw_data"]["city"] is None  # exact-prefix echo
     assert txns[1]["raw_data"]["city"] is None  # shared >=8-char prefix echo
     assert txns[2]["raw_data"]["city"] == "TORONTO"  # real city untouched
+
+
+def test_tags_transactions_by_cardholder(tmp_path):
+    """Corporate statements group each card under a "NAME (final NNNN)"
+    header; every transaction must be tagged with the active cardholder,
+    and the card's own subtotal line must not be mistaken for a header."""
+    pdf = tmp_path / "corp.pdf"
+    _write_pdf(
+        pdf,
+        [
+            "Postagem: 05/09/2026",
+            "Lançamentos: compras e saques",
+            "TONY LIMA (final 9218)",
+            "DATA",
+            "ESTABELECIMENTO",
+            "VALOR EM R$",
+            "26/08",
+            "CURB PHL TAXI",
+            "223,67",
+            "Lançamentos no cartão (final 9218)",  # subtotal — NOT a header
+            "223,67",
+            "LUIZ PERSECHINI (final 2928)",
+            "DATA",
+            "ESTABELECIMENTO",
+            "VALOR EM R$",
+            "13/08",
+            "RIO DESIGN HOTEL",
+            "1.664,80",
+            "31/08",
+            "SAMSUNG DIAMOND MALL",
+            "549,00",
+        ],
+    )
+    txns = parse_statement_pdf(str(pdf))
+    by_holder = {}
+    for t in txns:
+        by_holder.setdefault(t.get("cardholder"), []).append(t)
+
+    assert set(by_holder) == {"TONY LIMA", "LUIZ PERSECHINI"}
+    assert len(by_holder["TONY LIMA"]) == 1
+    assert by_holder["TONY LIMA"][0]["raw_data"]["card_last4"] == "9218"
+    assert len(by_holder["LUIZ PERSECHINI"]) == 2
+    assert by_holder["LUIZ PERSECHINI"][0]["raw_data"]["card_last4"] == "2928"
+
+
+def test_single_cardholder_statement_leaves_tag_absent(tmp_path):
+    """A statement with no cardholder header must not invent a cardholder —
+    keeps single-card uploads a single statement (no split)."""
+    pdf = tmp_path / "solo.pdf"
+    _write_pdf(
+        pdf,
+        [
+            "Postagem: 05/09/2026",
+            "Lançamentos: compras e saques",
+            "13/08",
+            "RIO DESIGN HOTEL",
+            "1.664,80",
+        ],
+    )
+    txns = parse_statement_pdf(str(pdf))
+    assert len(txns) == 1
+    assert txns[0].get("cardholder") is None
