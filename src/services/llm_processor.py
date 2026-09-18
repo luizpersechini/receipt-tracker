@@ -771,6 +771,7 @@ def _refine_currency(currency: Optional[str], country: Optional[str]) -> Optiona
 
 _CATEGORY_KEYWORDS = {
     "meals": [
+        "ifood",
         "restaurant",
         "gastronomia",
         "bar",

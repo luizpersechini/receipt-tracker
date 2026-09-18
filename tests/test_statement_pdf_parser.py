@@ -437,3 +437,13 @@ def test_single_cardholder_statement_leaves_tag_absent(tmp_path):
     txns = parse_statement_pdf(str(pdf))
     assert len(txns) == 1
     assert txns[0].get("cardholder") is None
+
+
+def test_ifood_statement_descriptors_are_meals():
+    """Itaú prints iFood as "IFD*<restaurant>"; the prefix must map to meals
+    (both hard-truth misses in the category comparison were this gap)."""
+    from src.services.statement_pdf_parser import _guess_category
+
+    assert _guess_category("IFD*iFood") == "meals"
+    assert _guess_category("IFD*VARANDA1389DELIV") == "meals"
+    assert _guess_category("IFD*FRUTAFAST BAR E LA") == "meals"

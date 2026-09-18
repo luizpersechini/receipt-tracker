@@ -524,6 +524,10 @@ _CATEGORY_KEYWORDS = {
         "swiss",
     ),
     "meals": (
+        # Itaú prints iFood charges as "IFD*<restaurant>" — the prefix, not
+        # the restaurant name, is the reliable signal.
+        "ifd*",
+        "ifood",
         "restaurant",
         "ristorante",
         "starbucks",
