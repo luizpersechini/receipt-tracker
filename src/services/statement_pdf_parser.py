@@ -202,7 +202,39 @@ def parse_statement_pdf(filepath: str) -> list[dict]:
 
     txns = _walk_lines(all_lines, year, post_md)
     logger.info("PDF statement: parsed %d transaction(s)", len(txns))
+    _apply_typesafe_categories(txns)
     return txns
+
+
+def _apply_typesafe_categories(txns: list[dict]) -> None:
+    """Opt-in (`category_backend=typesafe`): re-categorize the whole parsed
+    statement in ONE batched TypeSafe call, keeping the keyword guess
+    wherever TypeSafe's confidence is below the configured floor. Any API
+    failure is logged and leaves the keyword categories untouched — parsing
+    never depends on the network."""
+    from . import typesafe_categorizer as ts
+
+    if not txns or not ts.is_enabled():
+        return
+    items = [
+        {
+            "id": i,
+            "merchant_or_vendor": t.get("description", ""),
+            "amount": t.get("amount"),
+            "currency": (t.get("raw_data") or {}).get("original_currency", "BRL"),
+            "date": t.get("date", ""),
+        }
+        for i, t in enumerate(txns)
+    ]
+    try:
+        results = ts.categorize(items)
+    except ts.TypeSafeError as e:
+        logger.warning("typesafe categorization skipped, keeping keywords: %s", e)
+        return
+    for t, r in zip(txns, results):
+        t["category"] = ts.pick_or_fallback(
+            r, t.get("category", "other"), label=t.get("description", "")
+        )
 
 
 def zero_parse_warning(filepath: str) -> str:

@@ -96,6 +96,20 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-opus-4-8"  # structuring is simple+high-volume —
     # claude-haiku-4-5 is far cheaper and ample here; override via ANTHROPIC_MODEL.
 
+    # Category backend — how a receipt / statement line gets its expense
+    # category (meals, transportation, …):
+    #   "keyword"  — local keyword heuristics (default; fully offline).
+    #   "typesafe" — TypeSafe's Jev (System One) API: one batched `choice`
+    #                question per item, returns a category with calibrated
+    #                probabilities + confidence. Sends merchant/amount/date
+    #                (and receipt line items when present) to the API. Needs
+    #                TYPESAFE_API_KEY. Opt-in only, like `structure_backend`.
+    # Below `typesafe_min_confidence` the keyword heuristic is used instead.
+    category_backend: str = "keyword"
+    typesafe_api_key: Optional[str] = None  # falls back to the TYPESAFE_API_KEY env var
+    typesafe_model: str = "jev-latest"
+    typesafe_min_confidence: float = 0.7
+
     # Gmail ingestion (Phase B of the Uber integration)
     # Set up: see scripts/gmail_auth.py for the one-time OAuth dance.
     gmail_credentials_path: Path = Path("data/gmail/credentials.json")

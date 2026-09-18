@@ -847,6 +847,35 @@ _CATEGORY_KEYWORDS = {
 }
 
 
+def _category_with_typesafe(data: dict, keyword_guess: str) -> str:
+    """Opt-in (`category_backend=typesafe`): ask TypeSafe for this receipt's
+    category, using the keyword guess as the below-confidence fallback. Any
+    API failure logs and returns the keyword guess — OCR never depends on
+    the network. One call per receipt: this is the per-upload fallback path,
+    so there's nothing to batch."""
+    from . import typesafe_categorizer as ts
+
+    if not ts.is_enabled():
+        return keyword_guess
+    try:
+        res = ts.categorize(
+            [
+                {
+                    "id": "receipt",
+                    "merchant_or_vendor": data.get("vendor_name") or "",
+                    "amount": data.get("total_amount"),
+                    "currency": data.get("currency") or "",
+                    "date": data.get("date") or "",
+                    "items": data.get("items") or [],
+                }
+            ]
+        )[0]
+    except ts.TypeSafeError as e:
+        logger.warning("typesafe categorization skipped, keeping keyword guess: %s", e)
+        return keyword_guess
+    return ts.pick_or_fallback(res, keyword_guess, label=data.get("vendor_name") or "")
+
+
 def _infer_category(vendor: str, items: list) -> str:
     """Pick the first category whose keyword list hits the vendor/items text.
 
@@ -1189,7 +1218,9 @@ def _normalize_one_receipt(data: dict) -> dict:
         "office_supplies",
         "other",
     ):
-        data["category"] = _infer_category(data.get("vendor_name", ""), data.get("items", []))
+        data["category"] = _category_with_typesafe(
+            data, _infer_category(data.get("vendor_name", ""), data.get("items", []))
+        )
 
     vendor = data.get("vendor_name") or ""
     vendor = re.sub(
@@ -2005,6 +2036,9 @@ def _post_process_with_ocr_text(data: dict, text: str) -> None:
         # cafe receipt where the items list is empty after cleaning.
         if inferred == "other":
             inferred = _infer_category(text, [])
+        # Opt-in TypeSafe pass on the same "we're guessing" moment; keyword
+        # result stays the fallback below the confidence floor.
+        inferred = _category_with_typesafe(data, inferred)
         if inferred and inferred != "other":
             data["category"] = inferred
 
