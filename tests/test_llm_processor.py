@@ -1011,3 +1011,44 @@ def test_post_process_tax_rate_rescues_unsupported_total():
     text = "Total Incl of GST\n@ 6%\n0.70\n8.40\n3.40\n0.00\n7.92\n048 /\n"
     llm._post_process_with_ocr_text(data, text)
     assert data["total_amount"] == 8.40
+
+
+# ─── Garbage in the date field must not block the OCR-text rescue ────────────
+
+
+def test_looks_like_date_shapes():
+    assert llm._looks_like_date("10/03/2026")
+    assert llm._looks_like_date("17,03,26")
+    assert llm._looks_like_date("2026-03-10")
+    assert llm._looks_like_date("01/abr")
+    assert llm._looks_like_date("10-Mar-2026")
+    # address / CEP / CNPJ lines the model sometimes puts in `date`
+    assert not llm._looks_like_date("45654070 - ILHEUS - BA")
+    assert not llm._looks_like_date("RUA CASTRO ALVES, 64-45585-000")
+    assert not llm._looks_like_date("CNPJ: 34.251.637/0001-72")
+    assert not llm._looks_like_date(None)
+
+
+def test_normalize_drops_non_date_string_so_rescue_can_run():
+    data = llm._normalize_one_receipt(
+        {
+            "vendor_name": "PARADA EXPRESS",
+            "date": "45654070 - ILHEUS - BA",
+            "currency": "BRL",
+            "country": "BR",
+            "language": "pt",
+            "category": "meals",
+            "total_amount": "62,00",
+            "items": [],
+        }
+    )
+    assert data["date"] is None
+    llm._post_process_with_ocr_text(data, "Valor Pago 62,00\nEmissao: 21/09/2026 15:32:42")
+    assert data["date"] == "21/09/2026"
+
+
+def test_normalize_keeps_unparsed_but_date_shaped_string():
+    data = llm._normalize_one_receipt(
+        {"vendor_name": "X", "date": "31/31/2026", "currency": "BRL", "category": "meals"}
+    )
+    assert data["date"] == "31/31/2026"

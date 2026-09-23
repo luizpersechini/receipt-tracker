@@ -1198,12 +1198,14 @@ def _normalize_one_receipt(data: dict) -> dict:
     # want the calendar date downstream.
     _date_clean = _strip_time_from_date(data.get("date"))
     # Then normalise to ISO YYYY-MM-DD using the receipt's language/country
-    # to disambiguate D/M vs M/D. Falls back to the cleaned-but-not-ISO
-    # string if parsing fails, so we never silently drop the printed date.
-    data["date"] = (
-        _normalize_date(_date_clean, language=data.get("language"), country=data.get("country"))
-        or _date_clean
+    # to disambiguate D/M vs M/D. If parsing fails, keep the cleaned string
+    # only when it still looks like a date — a hallucinated address/CEP line
+    # ("45654070 - ILHEUS - BA") must become None so the OCR-text date
+    # rescue in `_post_process_with_ocr_text` gets a chance to run.
+    _date_norm = _normalize_date(
+        _date_clean, language=data.get("language"), country=data.get("country")
     )
+    data["date"] = _date_norm or (_date_clean if _looks_like_date(_date_clean) else None)
 
     for field in ("total_amount", "tax_amount", "tip_amount", "service_charge"):
         data[field] = _parse_amount(data.get(field), comma_dec)
@@ -1695,6 +1697,25 @@ def _strip_time_from_date(date_str) -> Optional[str]:
     # is removed → also trim it.
     s = re.sub(r"\s+at\s*$", "", s, flags=re.IGNORECASE)
     return s.strip(" ,;-") or None
+
+
+_EN_MONTH_TOKENS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+# Three numeric groups with /, -, . or , between them: 10/03/2026, 17,03,26, 2026-03-10.
+_DATE_SHAPE_RE = re.compile(r"\d{1,4}\s*[/.,\-]\s*\d{1,2}\s*[/.,\-]\s*\d{1,4}")
+
+
+def _looks_like_date(date_str) -> bool:
+    """Cheap shape check for a date string `_normalize_date` couldn't parse.
+    True when it has three numeric groups with separators or names a month
+    (EN/PT/ES); False for the address, CEP and CNPJ lines the structuring
+    model sometimes drops into the date field."""
+    if not date_str:
+        return False
+    s = str(date_str).lower()
+    if _DATE_SHAPE_RE.search(s):
+        return True
+    months = set(_EN_MONTH_TOKENS) | set(_PT_TO_EN_MONTH) | set(_ES_TO_EN_MONTH)
+    return any(re.search(rf"\b{re.escape(m)}\b", s) for m in months)
 
 
 # Keywords that signal a *final-charged* amount line. Matched case-insensitively
