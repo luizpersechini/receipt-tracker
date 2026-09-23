@@ -133,7 +133,10 @@ probabilities` back by position; chunk at 50; single `_post` seam.
 Files to copy from this repo as templates:
 `src/services/typesafe_categorizer.py`, `tests/test_typesafe_categorizer.py`,
 `scripts/compare_categories.py`, and the `category_backend` block in
-`src/config.py`. The skill for the API itself: `claude plugin install
+`src/config.py`. For a pairwise/structural decision instead of a label,
+copy `src/services/typesafe_segmenter.py` (constraint-resolved merges),
+`tests/test_typesafe_segmenter.py`, and `scripts/blind_segments.py` for the
+blind A/B page. The skill for the API itself: `claude plugin install
 typesafe@typesafe-ai`; live docs at https://docs.typesafe.ai/primitives.
 
 ## Second use: receipt segmentation (blind test, 2026-09-23)

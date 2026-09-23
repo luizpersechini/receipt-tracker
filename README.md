@@ -13,6 +13,14 @@ optional add-ons.
   structured by a local Ollama text model or, opt-in, the Claude API —
   all backends configurable. Multi-receipt scans on a single image get
   auto-segmented and split into one row per receipt.
+- **Optional TypeSafe (Jev) assists** — two opt-in flags, both off by
+  default and both fail-safe to the local result: `CATEGORY_BACKEND=typesafe`
+  categorises receipts and statement lines with calibrated confidence
+  (keyword heuristic kept below the floor); `SEGMENT_BACKEND=typesafe`
+  decides which text blocks on a multi-receipt photo belong together, so
+  fiscal footers stay with their receipt and touching slips get split. One
+  batched call per statement / per photo. Measured on real data in
+  [`docs/typesafe-categorization-diagnostics.md`](docs/typesafe-categorization-diagnostics.md).
 - **Monthly statement parsing** — CSV (any layout pandas can read) or
   Itaú-style PT-BR PDF. The PDF parser handles two-column layouts,
   preserves native-currency amounts on international transactions,
@@ -106,6 +114,8 @@ src/
     text_to_receipt.py     text-model structuring (apple_vision backend)
     apple_vision_ocr.py    macOS Vision framework backend
     receipt_segmenter.py   multi-receipt detection on a page (EXIF-aware)
+    typesafe_categorizer.py  opt-in Jev categorisation (batched, confidence floor)
+    typesafe_segmenter.py    opt-in Jev same/different-receipt merge judgments
     ocr_settings.py        runtime OCR backend/model picker (JSON)
     statement_pdf_parser.py  Itaú PT-BR PDF parser (column-aware, credits)
     statement_parser.py    CSV ⇄ PDF dispatcher + reparse index remap
@@ -159,6 +169,9 @@ docs/                      this folder
   (PaddleOCR + Claude API structuring, no local LLM needed)
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — empty-app /
   lost-history / port-in-use fixes and the macOS launcher rebuild
+- [`docs/typesafe-categorization-diagnostics.md`](docs/typesafe-categorization-diagnostics.md)
+  — what the TypeSafe (Jev) categorisation and segmentation assists
+  measurably changed, the design decisions, and a recipe for other projects
 
 ## Configuration
 
@@ -168,6 +181,12 @@ full annotated list. The defaults assume:
 - OCR backend resolved per-platform (`apple_vision` on macOS,
   `paddle_ocr` on Windows/Linux); structuring via local Ollama
   (`llama3.2:3b`) unless `STRUCTURE_BACKEND=anthropic` is set
+- Categories from keyword heuristics and segmentation from the gap rule
+  unless `CATEGORY_BACKEND=typesafe` / `SEGMENT_BACKEND=typesafe` are set
+  (both need `TYPESAFE_API_KEY`, env var only; `TYPESAFE_MIN_CONFIDENCE`
+  defaults to 0.7). Read-only evaluation scripts before flipping either:
+  `scripts/compare_categories.py`, `scripts/compare_segments.py`,
+  `scripts/blind_segments.py` (side-by-side blind vote page)
 - SQLite at `data/receipt_tracker.db`
 - Inbox folder at `data/inbox/` (auto-created)
 
@@ -175,7 +194,7 @@ full annotated list. The defaults assume:
 
 ```bash
 .venv/bin/python -m pytest
-# 373 passing in ~8s
+# 453 passing in ~20s
 ```
 
 The PDF statement parser, OCR normalisation helpers, money parsing,

@@ -19,6 +19,11 @@ page-by-page and **every page is queued for box review** (no OCR yet) —
 the frontend opens the review flow so the user confirms/adjusts the
 receipt boxes per page before OCR. See the box-review queue below.
 
+The suggested boxes come from the local text-cluster segmenter; with
+`SEGMENT_BACKEND=typesafe` the cluster merges are decided by Jev (one call
+per image, falls back to the local rule on any error), which changes the
+boxes but not the response shape.
+
 **Body:** multipart `file`, plus optional form fields `single` and `queue`
 (bool). When `single=true` (the "Single receipt — don't split" toggle),
 segmentation is skipped for an image and the response is one full-image box

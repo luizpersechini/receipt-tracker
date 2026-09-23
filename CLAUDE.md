@@ -30,6 +30,9 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib uv run uvicorn src.main:app --reloa
 - `tests/` — pytest unit tests for pure-logic services
 - `qa/` — disposable end-to-end QA harness (`run_qa.py`); boots the app on a
   throwaway db/data dir and drives the real flows. See `qa/README.md`.
+- `scripts/` — one-off tooling; `compare_categories.py`,
+  `compare_segments.py`, `blind_segments.py` are READ-ONLY evaluations of
+  the TypeSafe assists against live data (run before flipping a flag)
 - `data/` — SQLite DB, uploads, generated reports (auto-created, gitignored)
 - `pyproject.toml` + `uv.lock` — Python deps (uv). Two derived files exist:
   `requirements.txt` (hand-maintained loose floors, pip fallback) and
@@ -79,8 +82,20 @@ $(date -v-7d +%Y-%m-%d)`.
   cheap default). OCR always stays local either way.
 - Statement estornos/refunds are captured as negative `credit` rows; the
   PDF parser is Itaú-targeted (column-aware, year-boundary rollback)
+- TypeSafe (Jev) assists, both opt-in and default off: `CATEGORY_BACKEND=typesafe`
+  (`services/typesafe_categorizer.py`, batched post-pass over statement lines +
+  the OCR invalid/"other" rescue) and `SEGMENT_BACKEND=typesafe`
+  (`services/typesafe_segmenter.py`, same/different-receipt verdict per nearby
+  text-cluster pair, replaces the fixed merge-gap rule only above
+  `TYPESAFE_MIN_CONFIDENCE`). Key via `TYPESAFE_API_KEY` env only. Every
+  failure keeps the local result; tests stub the single `_post` seam and
+  assert the default backends never call out. Evidence + recipe in
+  `docs/typesafe-categorization-diagnostics.md`.
 - Local/offline by default — no external API calls unless you opt into
-  `STRUCTURE_BACKEND=anthropic` (FX rates + Gmail also optional)
+  `STRUCTURE_BACKEND=anthropic`, `CATEGORY_BACKEND=typesafe` or
+  `SEGMENT_BACKEND=typesafe` (FX rates + Gmail also optional)
+- The dev server on :8000 may be a hand-started uvicorn without `--reload`
+  (check `ps`); code and `.env` changes need a restart to take effect there.
 - QA: `qa/run_qa.py --ocr mock` is the fast gate; `--corpus N --corpus-seed S`
   scores total accuracy on Portuguese (your own receipts) + English (SROIE)
   corpora; `--backend` / `--structure` A/B the OCR and structuring backends;

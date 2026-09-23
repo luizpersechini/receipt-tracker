@@ -136,3 +136,22 @@ curl -s http://localhost:8000/api/ocr/config
 - Structuring backend is set by `STRUCTURE_BACKEND` in `.env` (`ollama`
   for local, `anthropic` for the Claude API — the latter needs
   `ANTHROPIC_API_KEY`). OCR always runs locally either way.
+
+## TypeSafe (Jev) assist seems to do nothing
+
+`CATEGORY_BACKEND=typesafe` / `SEGMENT_BACKEND=typesafe` are fail-safe: on
+any problem the local result is used silently except for a log line.
+
+1. Key present? `TYPESAFE_API_KEY` must be in `.env` or the environment
+   (never printed, never committed). A missing key logs
+   `TYPESAFE_API_KEY is not set` and falls back.
+2. Is the running server actually the code/config you think? A hand-started
+   `uvicorn` without `--reload` never picks up `.env` or code changes —
+   check `ps -o command -p $(lsof -tnP -iTCP:8000 -sTCP:LISTEN)` and restart.
+3. Confidence floor: rows below `TYPESAFE_MIN_CONFIDENCE` (0.7) keep the
+   local answer and log `keeping keyword` / `keeping geometric`. Run
+   `scripts/compare_categories.py` or `scripts/compare_segments.py` (both
+   read-only) to see Jev's answer and confidence per row / pair.
+4. Segmentation: the log line `segmenter: typesafe judged N pair(s) → M
+   region(s)` confirms the call happened; `M < 2` means the text path fell
+   through to the image-only methods, exactly as the local path would.

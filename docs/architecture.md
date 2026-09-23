@@ -111,6 +111,24 @@ splits into >1 receipt. The user confirms/adjusts the auto-detected
 receipt boxes before OCR runs, so a page with several receipts becomes
 several correctly-cropped rows instead of one garbled extraction.
 
+`segment_with_boxes` tries three strategies in order: text-cluster
+(on-device OCR boxes + spatial union-find, then a fixed merge-gap rule),
+projection profile, contours. With `SEGMENT_BACKEND=typesafe` the merge
+step is replaced by `services/typesafe_segmenter.judged_cluster_rects`:
+one Jev request per photo asks, for every nearby cluster pair, "same
+receipt or different receipts?" from the clusters' text; verdicts at or
+above `TYPESAFE_MIN_CONFIDENCE` override the gap rule, a confident
+"different" walls off transitive merges, and errors / low confidence /
+fewer than 2 regions fall back to exactly the local behaviour.
+
+**TypeSafe (Jev) category assist.** With `CATEGORY_BACKEND=typesafe`,
+`statement_pdf_parser._apply_typesafe_categories` runs one batched call per
+parsed statement (chunks of 50) and `llm_processor._category_with_typesafe`
+rescues invalid / "other" receipt categories; both keep the keyword guess
+below the confidence floor and on any `TypeSafeError`. The client
+(`services/typesafe_categorizer.py`) is pure: it returns category,
+confidence and probabilities, and the policy lives in the callers.
+
 `llm_processor` dispatches on `OCR_BACKEND` (both the segment path and
 the bbox/review-queue `ocr_crops` path honour it):
 
@@ -262,7 +280,8 @@ text against user names. Full detail in [reports.md](reports.md).
 | Symptom                                            | Start here                                                                     |
 | -------------------------------------------------- | ------------------------------------------------------------------------------ |
 | OCR returns "OCR failed" or garbled fields         | `src/services/llm_processor.py` + `data/app_launcher.log`                      |
-| Multi-receipt page split wrong                     | `src/services/receipt_segmenter.py`                                            |
+| Multi-receipt page split wrong                     | `src/services/receipt_segmenter.py`; with `SEGMENT_BACKEND=typesafe`, log line "typesafe judged N pair(s)" + `scripts/compare_segments.py` |
+| Category wrong although TypeSafe is on             | log "keeping keyword" = below `TYPESAFE_MIN_CONFIDENCE`; `scripts/compare_categories.py` shows Jev's answer + confidence per row |
 | Statement PDF parses zero rows or wrong currencies | `src/services/statement_pdf_parser.py` (column split, regexes)                 |
 | Auto-match misses obvious pairs                    | `src/services/matching_engine.py` `_score()` weights                           |
 | Reconcile board shows fewer matches than DB has    | match rows missing `transaction_index` — see migration notes in commit history |

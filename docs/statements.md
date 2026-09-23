@@ -133,7 +133,10 @@ Otherwise, at every position, try:
    Used when the int'l pattern doesn't match. The category line that
    sometimes follows is intentionally ignored — categories come from
    `_guess_category(merchant)` instead, which keeps the buckets
-   aligned with the receipt-side category inference.
+   aligned with the receipt-side category inference. With
+   `CATEGORY_BACKEND=typesafe`, `_apply_typesafe_categories` then runs one
+   batched Jev call over the parsed lines and replaces the keyword guess
+   only where Jev's confidence clears `TYPESAFE_MIN_CONFIDENCE`.
 
 Negative amounts inside the purchases sections (`- 123,45`) are
 **captured as credit rows** — estornos/refunds net the report and are
