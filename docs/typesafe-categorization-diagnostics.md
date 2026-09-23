@@ -135,3 +135,53 @@ Files to copy from this repo as templates:
 `scripts/compare_categories.py`, and the `category_backend` block in
 `src/config.py`. The skill for the API itself: `claude plugin install
 typesafe@typesafe-ai`; live docs at https://docs.typesafe.ai/primitives.
+
+## Second use: receipt segmentation (blind test, 2026-09-23)
+
+Same pattern, different decision. The segmenter clusters on-device text
+boxes and merges clusters whose gap is under a fixed 5% threshold. Jev was
+asked one `choice` question per nearby cluster pair — same receipt or
+different receipts — from the text of both clusters. Geometry stays local;
+Jev only overrides the gap rule at confidence ≥ 0.7, and a confident
+"different" is a hard wall no merge may cross (otherwise a footer Jev ties
+to both neighbours glues the two receipts together through it).
+
+Run on the original photos only, no human edits involved. 28 distinct
+originals; 13 produced identical boxes either way, 15 differed and went
+into a blind side-by-side page (`scripts/blind_segments.py`, sides shuffled).
+
+| Blind vote (n=15 differing cases) | count |
+| --------------------------------- | ----- |
+| Jev better                        | 10    |
+| local better                      | 1     |
+| same / can't tell                 | 4     |
+
+What Jev fixed: fiscal footers ("Tributos totais/IBPT", "Informação dos
+Tributos", "Consulte pela chave de acesso") absorbed into their receipt
+instead of becoming a separate receipt row; touching documents split
+(card-machine slip off the fiscal receipt at gap 4.4%, "REDE GETNET" slip
+off a hotel invoice at gap 0, one taxi recibo off another). The one local
+win (IMG_1766) is a sparse-text photo where the text path finds too little
+and production falls through to the pixel-based methods; the integration
+keeps that fallthrough.
+
+Against the stored crops (what the user accepted in the editor, 159
+regions over 45 uploads) the same run scored 57 → 71 hits at IoU ≥ 0.5 and
+mean IoU 0.42 → 0.49, but that ground truth includes auto boxes accepted
+as-is, so the blind vote is the better evidence.
+
+Cost: one call per photo, ~0.8 s, ~3.2k input tokens per photo (218 pairs
+in 40 calls, 129k input tokens, 33 s total).
+
+Lessons specific to this use:
+
+- Pairwise questions need a constraint solver, not plain union-find. Sort
+  confident merges strongest-first and refuse any merge that would join
+  groups holding a confident "different" pair.
+- Send head + tail lines of each cluster, not the middle. The header and
+  the totals/footer decide the question.
+- Include singleton clusters (currently dropped as noise) in the pair set so
+  a lone footer can be absorbed; still drop groups that stay tiny.
+- Blind A/B on the originals beat "agreement with stored data" as ground
+  truth: the stored crops encode the old segmenter's mistakes whenever the
+  user accepted them.

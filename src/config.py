@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     typesafe_api_key: Optional[str] = None  # falls back to the TYPESAFE_API_KEY env var
     typesafe_model: str = "jev-latest"
     typesafe_min_confidence: float = 0.7
+    # Receipt segmentation: "local" (default) merges text clusters by a fixed
+    # gap rule; "typesafe" asks Jev "same receipt or different receipts?" per
+    # nearby cluster pair from their text (one call per photo) and only
+    # overrides the gap rule above `typesafe_min_confidence`. Same key/model
+    # as above; any failure keeps the local result.
+    segment_backend: str = "local"
 
     # Gmail ingestion (Phase B of the Uber integration)
     # Set up: see scripts/gmail_auth.py for the one-time OAuth dance.

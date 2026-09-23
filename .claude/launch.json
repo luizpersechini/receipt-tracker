@@ -17,14 +17,40 @@
     {
       "name": "api-preview",
       "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "uvicorn", "src.main:app", "--port", "8010"],
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "src.main:app",
+        "--port",
+        "8010"
+      ],
       "port": 8010
     },
     {
       "name": "docs",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8766", "--directory", "docs"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8766",
+        "--directory",
+        "docs"
+      ],
       "port": 8766
+    },
+    {
+      "name": "blind-segments",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8765",
+        "-d",
+        "qa/blind_out",
+        "--bind",
+        "127.0.0.1"
+      ],
+      "port": 8765
     }
   ]
 }

@@ -418,6 +418,27 @@ def _text_cluster_boxes(image_path: str, image_size: tuple) -> list:
     if len(text_items) < 2:
         return []
 
+    # Opt-in (`segment_backend=typesafe`): Jev decides which text clusters
+    # belong to the same receipt from what they say, instead of the fixed
+    # merge-gap rule below. Any failure falls back to the gap rule; fewer
+    # than 2 regions still falls through to the image-only methods.
+    from . import typesafe_segmenter
+
+    if typesafe_segmenter.is_enabled():
+        try:
+            judged = typesafe_segmenter.judged_cluster_rects(text_items, W, H)
+            rects = judged["rects"]
+            logger.info(
+                "segmenter: typesafe judged %d pair(s) → %d region(s)",
+                len(judged["decisions"]),
+                len(rects),
+            )
+            if len(rects) < 2:
+                return []
+            return [{"x": x, "y": y, "w": w, "h": h} for (x, y, w, h) in rects]
+        except Exception as e:  # noqa: BLE001 — network/config: keep local behaviour
+            logger.warning("typesafe segmenter failed (%s) — using the gap rule", e)
+
     text_bboxes = [it["bbox"] for it in text_items]
     eps = max(W, H) * CLUSTER_EPS_FRAC
     clusters = _union_find_cluster(text_bboxes, eps)
