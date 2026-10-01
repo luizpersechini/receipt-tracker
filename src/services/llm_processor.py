@@ -47,6 +47,9 @@ KNOWN_VISION_MODELS = {
     "minicpm-v",
     "qwen2-vl",
     "qwen2.5-vl",
+    "qwen2.5vl",  # Ollama library spelling (no hyphen)
+    "qwen3-vl",
+    "qwen3vl",
     "llama3.2-vision",
     "gemma3",  # Gemma 3 multimodal variants
     "gemma4",  # explicitly opt-in (still subject to size cap)

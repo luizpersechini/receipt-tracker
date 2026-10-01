@@ -7,6 +7,7 @@ those are the units under test.
 
 import json
 
+from src.config import settings
 from src.services import text_to_receipt as t2r
 
 # effective_text_model() is pinned to the settings default globally by the
@@ -158,3 +159,43 @@ def test_uses_custom_model_when_passed(monkeypatch):
 
     t2r.structure_text_as_receipt("foo", model="qwen2.5:3b")
     assert captured["model"] == "qwen2.5:3b"
+
+
+# ─── Long receipts: scaled timeout + capped item list ───────────────────────
+
+
+def test_structuring_timeout_scales_with_text(monkeypatch):
+    monkeypatch.setattr(settings, "ocr_timeout_seconds", 120.0)
+    assert t2r._structuring_timeout(500) == 120.0
+    assert t2r._structuring_timeout(2000) == 120.0
+    assert t2r._structuring_timeout(2001) == 180.0
+    assert t2r._structuring_timeout(6590) == 120.0 + 60.0 * 4  # the hotel-buffet case
+
+
+def test_long_receipt_prompt_caps_items_and_scales_timeout(monkeypatch):
+    seen = {}
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": '{"vendor_name": "X"}'}}
+
+    def fake_post(url, json=None, timeout=None):
+        seen["prompt"] = json["messages"][0]["content"]
+        seen["timeout"] = timeout
+        return R()
+
+    monkeypatch.setattr(t2r.requests, "post", fake_post)
+    monkeypatch.setattr(settings, "ocr_timeout_seconds", 120.0)
+
+    short = "LOJA X\nCAFE 4,00\nTOTAL 4,00"
+    assert t2r.structure_text_as_receipt(short, model="m")["vendor_name"] == "X"
+    assert "at most" not in seen["prompt"] and seen["timeout"] == 120.0
+
+    long = "\n".join(["HOTEL"] + [f"{i} Self Service 0.5 KG x R$ 105.00  R$ 52,50" for i in range(70)])
+    t2r.structure_text_as_receipt(long, model="m")
+    assert f"list at most {t2r.LONG_RECEIPT_MAX_ITEMS} items" in seen["prompt"]
+    assert "71 lines" in seen["prompt"]
+    assert seen["timeout"] > 120.0

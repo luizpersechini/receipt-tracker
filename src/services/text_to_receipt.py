@@ -142,9 +142,31 @@ Here is the receipt text:
 Return ONLY the JSON object."""
 
 
+# Long receipts: a 70-line hotel-buffet NFC-e makes the model emit 60+ item
+# objects, which on a local 8B model is 3+ minutes of generation — well past
+# the fixed timeout (measured: 212 s for 6.6k chars of OCR text). Two levers:
+# the timeout grows with the text, and past LONG_RECEIPT_LINES the prompt
+# asks for a capped item list (header/totals/payment stay complete).
+LONG_RECEIPT_LINES = 40
+LONG_RECEIPT_MAX_ITEMS = 15
+TIMEOUT_BASE_CHARS = 2000  # text up to this length gets the plain timeout
+TIMEOUT_STEP_CHARS = 1500  # +TIMEOUT_STEP_SECONDS per further step of chars
+TIMEOUT_STEP_SECONDS = 60.0
+
+
+def _structuring_timeout(text_len: int) -> float:
+    """`settings.ocr_timeout_seconds` for short text, scaled up for long."""
+    base = float(settings.ocr_timeout_seconds)
+    extra = max(0, text_len - TIMEOUT_BASE_CHARS)
+    steps = -(-extra // TIMEOUT_STEP_CHARS)  # ceil
+    return base + TIMEOUT_STEP_SECONDS * steps
+
+
 def _ollama_chat(model: str, prompt: str) -> dict:
-    """Call Ollama's /api/chat with a text-only prompt. Hard timeout."""
+    """Call Ollama's /api/chat with a text-only prompt. Hard timeout, scaled
+    by how much receipt text is in the prompt (see _structuring_timeout)."""
     host = (settings.ollama_host or OLLAMA_HOST_DEFAULT).rstrip("/")
+    timeout = _structuring_timeout(max(0, len(prompt) - len(PROMPT)))
     payload = {
         "model": model,
         "stream": False,
@@ -161,7 +183,7 @@ def _ollama_chat(model: str, prompt: str) -> dict:
     resp = requests.post(
         f"{host}/api/chat",
         json=payload,
-        timeout=settings.ocr_timeout_seconds,
+        timeout=timeout,
     )
     resp.raise_for_status()
     return resp.json()
@@ -208,6 +230,14 @@ def structure_text_as_receipt(
         return {"error": "no OCR text to structure"}
 
     prompt = PROMPT.replace("{text}", text)
+    n_lines = text.count("\n") + 1
+    if n_lines > LONG_RECEIPT_LINES:
+        prompt = prompt.replace(
+            "Return ONLY the JSON object.",
+            f"This receipt has {n_lines} lines. Keep every header, total and payment "
+            f"field complete, but list at most {LONG_RECEIPT_MAX_ITEMS} items "
+            "(the highest-amount ones).\nReturn ONLY the JSON object.",
+        )
     backend = (structure_backend or settings.structure_backend or "ollama").strip().lower()
     try:
         if backend == "anthropic":
@@ -217,7 +247,10 @@ def structure_text_as_receipt(
             response = _ollama_chat(ollama_model, prompt)
             raw = response.get("message", {}).get("content", "").strip()
     except requests.Timeout:
-        return {"error": f"Ollama text-model timed out after {settings.ocr_timeout_seconds}s"}
+        return {
+            "error": "Ollama text-model timed out after "
+            f"{_structuring_timeout(len(text)):.0f}s ({n_lines} OCR lines)"
+        }
     except requests.RequestException as e:
         return {"error": f"Ollama text-model request failed: {e}"}
     except Exception as e:  # noqa: BLE001 — anthropic SDK / import / transport errors
