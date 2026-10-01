@@ -149,7 +149,26 @@ came in sideways.
 ### `POST /api/receipts/{id}/reocr`
 
 Re-run OCR on the saved file and overwrite metadata. Doesn't touch
-the `description` field.
+the `description` field. The image is never re-split (one row = one receipt).
+
+Optional JSON body — per-call overrides, nothing persisted (the sidebar OCR
+config and `.env` stay as they are):
+
+```json
+{
+  "backend": "apple_vision | paddle_ocr | ollama_vision",
+  "vision_model": "glm-ocr:latest",
+  "text_model": "llama3.1:8b",
+  "structure_backend": "ollama | anthropic"
+}
+```
+
+Every key is optional; omitted ones use the global setting. `text_model` is
+the Ollama structuring model, or the Claude model when
+`structure_backend=anthropic`. Unknown values → 422. An OCR/structuring
+failure → 500 with the engine's message in `detail`, and the row is left
+unchanged. The UI exposes this as the per-row **OCR** button (and the
+"OCR failed · retry" link) → "Re-run OCR" modal.
 
 ### `POST /api/receipts/bulk-delete`
 

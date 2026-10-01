@@ -1877,6 +1877,50 @@
       </div>
     </div>
 
+    <!-- ── RE-RUN OCR (per receipt, one-off settings) ─────────────────────── -->
+    <div class="modal-overlay" id="reocrModal">
+      <div class="modal-box" style="width: 460px; max-width: 92vw">
+        <div class="modal-title">Re-run OCR</div>
+        <div class="modal-sub" id="reocrModalSub">—</div>
+
+        <div class="edit-grid">
+          <label
+            >OCR engine
+            <select id="reocrBackend">
+              <option value="apple_vision">Apple Vision (on-device)</option>
+              <option value="paddle_ocr">PaddleOCR (on-device)</option>
+              <option value="ollama_vision">Ollama vision model</option>
+            </select>
+          </label>
+          <label
+            >Structuring
+            <select id="reocrStructure">
+              <option value="ollama">Local Ollama text model</option>
+              <option value="anthropic">Claude API (text only)</option>
+            </select>
+          </label>
+          <label class="full" id="reocrTextModelWrap"
+            >Text model
+            <select id="reocrTextModel"></select>
+          </label>
+          <label class="full" id="reocrVisionModelWrap" style="display: none"
+            >Vision model
+            <select id="reocrVisionModel"></select>
+          </label>
+        </div>
+        <div class="modal-sub" style="margin-top: 8px">
+          Applies to this receipt only. The sidebar OCR setting and <code>.env</code>
+          are not changed. The row's fields are replaced by the new extraction.
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn btn-outline" id="reocrCancelBtn">Cancel</button>
+          <button class="btn btn-primary" id="reocrRunBtn">Run OCR</button>
+        </div>
+        <div class="status-msg" id="reocrStatus"></div>
+      </div>
+    </div>
+
     <!-- ── LIGHTBOX ────────────────────────────────────────────────────────────── -->
     <div id="lightbox" onclick="closeLightbox(event)">
       <div id="lbToolbar" onclick="event.stopPropagation()">

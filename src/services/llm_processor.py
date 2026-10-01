@@ -7,6 +7,7 @@ Handles HEIC images via pillow-heif.
 import base64
 import io
 import json
+import contextvars
 import logging
 import re
 from typing import Optional
@@ -98,6 +99,39 @@ def _list_available_models() -> dict:
         return {}
 
 
+
+# Per-call OCR setting overrides (re-OCR one receipt with a different
+# backend/model without touching the global sidebar config or .env). Set by
+# `process_with_segments(..., overrides=...)` / `ocr_crops(..., overrides=...)`
+# for the duration of that call; everything downstream reads through `_ov`.
+_OVERRIDES: contextvars.ContextVar = contextvars.ContextVar("ocr_overrides", default=None)
+OVERRIDE_KEYS = ("backend", "vision_model", "text_model", "structure_backend")
+
+
+def _ov(key: str):
+    cur = _OVERRIDES.get() or {}
+    val = cur.get(key)
+    return (str(val).strip() or None) if val is not None else None
+
+
+def _cfg_backend() -> str:
+    return _ov("backend") or ocr_settings.effective_backend()
+
+
+class _overrides:
+    """Context manager: apply `overrides` (dict or None) for the block."""
+
+    def __init__(self, overrides):
+        self.overrides = {k: v for k, v in (overrides or {}).items() if k in OVERRIDE_KEYS and v}
+
+    def __enter__(self):
+        self._token = _OVERRIDES.set(self.overrides)
+        return self.overrides
+
+    def __exit__(self, *exc):
+        _OVERRIDES.reset(self._token)
+        return False
+
 def _pick_model(available: Optional[dict] = None) -> str:
     """
     Return a safe vision model name, or raise OCRConfigError.
@@ -115,7 +149,7 @@ def _pick_model(available: Optional[dict] = None) -> str:
         )
 
     max_bytes = int(settings.ocr_max_model_gb * GB)
-    configured = ocr_settings.effective_vision_model()
+    configured = _ov("vision_model") or ocr_settings.effective_vision_model()
 
     # 1) explicit configured model wins if installed and within size cap
     if configured in available:
@@ -1305,7 +1339,9 @@ def _ocr_one_crop(model: str, image_bytes: bytes, prompt: Optional[str] = None) 
     return cleaned or _fail("Model returned no usable receipt objects")
 
 
-def process_with_segments(image_path: str, *, skip_segmentation: bool = False) -> list:
+def process_with_segments(
+    image_path: str, *, skip_segmentation: bool = False, overrides: Optional[dict] = None
+) -> list:
     """
     Process a receipt image and return a list of dicts:
         [{"metadata": <receipt_dict>, "crop": <PIL.Image | None>}, ...]
@@ -1326,6 +1362,10 @@ def process_with_segments(image_path: str, *, skip_segmentation: bool = False) -
     almost always digital documents with one receipt per page — running the
     segmenter on them tends to shred a single receipt into many fragments
     because of whitespace between text blocks.
+
+    `overrides` (keys: backend, vision_model, text_model, structure_backend)
+    apply to this call only — used by re-OCR to retry one receipt with a
+    different engine/model without changing the global config.
     """
 
     def _fail(msg: str) -> list:
@@ -1333,6 +1373,11 @@ def process_with_segments(image_path: str, *, skip_segmentation: bool = False) -
         empty["error"] = msg
         return [{"metadata": empty, "crop": None}]
 
+    with _overrides(overrides):
+        return _process_with_segments_impl(image_path, skip_segmentation, _fail)
+
+
+def _process_with_segments_impl(image_path: str, skip_segmentation: bool, _fail) -> list:
     try:
         if skip_segmentation:
             from .receipt_segmenter import _open_as_rgb
@@ -1343,7 +1388,7 @@ def process_with_segments(image_path: str, *, skip_segmentation: bool = False) -
 
             segments = segment_receipts(image_path)
         is_multi = len(segments) > 1
-        backend = ocr_settings.effective_backend()
+        backend = _cfg_backend()
         logger.info(
             "OCR: backend=%s segments=%d skip_seg=%s path=%s",
             backend,
@@ -1447,7 +1492,9 @@ def _process_via_text_extraction(segments: list, is_multi: bool, *, backend: str
             results.append({"metadata": empty, "crop": img if is_multi else None})
             continue
 
-        raw = structure_text_as_receipt(text)
+        raw = structure_text_as_receipt(
+            text, model=_ov("text_model"), structure_backend=_ov("structure_backend")
+        )
         # Always keep the raw OCR text — even when structuring fails (model not
         # installed, timeout, bad JSON) — so the extracted text isn't silently
         # lost and the row arrives with content to re-OCR or hand-edit instead
@@ -2070,7 +2117,7 @@ def process_receipt_image(image_path: str) -> list:
     return [item["metadata"] for item in process_with_segments(image_path)]
 
 
-def ocr_crops(crops: list) -> list:
+def ocr_crops(crops: list, *, overrides: Optional[dict] = None) -> list:
     """
     OCR a caller-provided list of PIL crops, in order. Returns a list of
     `{"metadata": <dict>, "crop": <PIL.Image>}` items — one per receipt
@@ -2092,10 +2139,11 @@ def ocr_crops(crops: list) -> list:
         empty["error"] = "no crops"
         return [{"metadata": empty, "crop": None}]
 
-    backend = ocr_settings.effective_backend()
-    logger.info("OCR (user-crops): backend=%s crops=%d", backend, len(crops))
-    if backend in ("apple_vision", "paddle_ocr"):
-        results = _process_via_text_extraction(crops, is_multi=True, backend=backend)
-    else:
-        results = _process_via_ollama_vision(crops, is_multi=True)
+    with _overrides(overrides):
+        backend = _cfg_backend()
+        logger.info("OCR (user-crops): backend=%s crops=%d", backend, len(crops))
+        if backend in ("apple_vision", "paddle_ocr"):
+            results = _process_via_text_extraction(crops, is_multi=True, backend=backend)
+        else:
+            results = _process_via_ollama_vision(crops, is_multi=True)
     return results or [{"metadata": _empty_receipt(), "crop": crops[0]}]

@@ -772,7 +772,7 @@ function renderReceipts(receipts) {
       const vendor = meta.vendor_name
         ? escHtml(meta.vendor_name)
         : hasErr
-          ? '<span style="color:var(--text-3);font-style:italic">OCR failed</span>'
+          ? `<a href="#" style="color:var(--text-3);font-style:italic" title="Re-run OCR with different settings" onclick="openReocrModal(${r.id});return false">OCR failed · retry</a>`
           : "—";
 
       const isSelected = selectedIds.has(r.id);
@@ -791,6 +791,7 @@ function renderReceipts(receipts) {
       <td><button class="type-toggle ${escHtml(r.expense_type || "corp_card")}" onclick="toggleExpenseType(${r.id}, '${escHtml(r.expense_type || "corp_card")}')">${r.expense_type === "reimbursement" ? "Reimburse" : "Corp Card"}</button></td>
       <td style="white-space:nowrap">
         <button class="btn btn-outline btn-sm" onclick="openEditModalById(${r.id})">Edit</button>
+        <button class="btn btn-ghost btn-sm" title="Re-run OCR on this receipt with different settings" onclick="openReocrModal(${r.id})">OCR</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteReceipt(${r.id})">Del</button>
       </td>
     </tr>`;
@@ -4861,6 +4862,116 @@ function closeEditModal() {
   $("editModal").classList.remove("open");
   editingReceiptId = null;
 }
+
+// ─── Re-run OCR modal (one receipt, one-off settings) ──────────────────────
+// Lets a row that OCR'd badly (or failed) be retried with a different engine /
+// model without touching the global sidebar setting. Pre-filled from
+// /api/ocr/config; POSTs overrides to /api/receipts/{id}/reocr.
+let reocrReceiptId = null;
+
+function _fillModelSelect(sel, models, current, { vision }) {
+  const list = (models || []).filter((m) => (vision ? m.vision : !m.vision && !m.ocr_only));
+  sel.innerHTML = list
+    .map(
+      (m) =>
+        `<option value="${_esc(m.name)}"${m.name === current ? " selected" : ""}>${_esc(m.name)} · ${m.size_gb} GB</option>`,
+    )
+    .join("");
+  if (current && ![...sel.options].some((o) => o.value === current)) {
+    sel.insertAdjacentHTML(
+      "afterbegin",
+      `<option value="${_esc(current)}" selected>${_esc(current)}</option>`,
+    );
+  }
+}
+
+function _syncReocrFields() {
+  const backend = $("reocrBackend").value;
+  const structure = $("reocrStructure").value;
+  const textOnly = backend !== "ollama_vision";
+  $("reocrVisionModelWrap").style.display = textOnly ? "none" : "";
+  $("reocrTextModelWrap").style.display = textOnly ? "" : "none";
+  $("reocrStructure").disabled = !textOnly;
+  if (textOnly && structure === "anthropic") {
+    const sel = $("reocrTextModel");
+    const m = (_ocrCfg && _ocrCfg.anthropic_model) || "claude-haiku-4-5";
+    sel.innerHTML = `<option value="${_esc(m)}" selected>${_esc(m)} (Claude API)</option>`;
+  } else if (textOnly) {
+    _fillModelSelect($("reocrTextModel"), _ocrCfg && _ocrCfg.models, _ocrCfg && _ocrCfg.text_model, {
+      vision: false,
+    });
+  }
+}
+
+async function openReocrModal(id) {
+  const r = allReceipts.find((x) => x.id === id);
+  if (!r) return;
+  reocrReceiptId = id;
+  const meta = parseMeta(r);
+  $("reocrModalSub").textContent =
+    (meta.vendor_name || r.filename || `Receipt #${id}`) + (meta.error ? " · " + meta.error : "");
+  $("reocrStatus").textContent = "";
+  $("reocrStatus").className = "status-msg";
+  if (!_ocrCfg) {
+    try {
+      _ocrCfg = await api("GET", "/api/ocr/config");
+    } catch (e) {
+      _ocrCfg = {};
+    }
+  }
+  const cfg = _ocrCfg || {};
+  $("reocrBackend").value = cfg.backend || "apple_vision";
+  if (!cfg.paddle_available) $("reocrBackend").querySelector('[value="paddle_ocr"]').disabled = true;
+  if (!cfg.ollama_reachable) $("reocrBackend").querySelector('[value="ollama_vision"]').disabled = true;
+  const anth = $("reocrStructure").querySelector('[value="anthropic"]');
+  anth.disabled = !cfg.anthropic_available;
+  anth.textContent = cfg.anthropic_available ? "Claude API (text only)" : "Claude API (no ANTHROPIC_API_KEY)";
+  $("reocrStructure").value = cfg.structure_backend || "ollama";
+  _fillModelSelect($("reocrVisionModel"), cfg.models, cfg.vision_model, { vision: true });
+  _syncReocrFields();
+  $("reocrModal").classList.add("open");
+}
+
+function closeReocrModal() {
+  $("reocrModal").classList.remove("open");
+  reocrReceiptId = null;
+}
+
+$("reocrBackend").addEventListener("change", _syncReocrFields);
+$("reocrStructure").addEventListener("change", _syncReocrFields);
+$("reocrCancelBtn").addEventListener("click", closeReocrModal);
+
+$("reocrRunBtn").addEventListener("click", async () => {
+  if (reocrReceiptId == null) return;
+  const btn = $("reocrRunBtn");
+  const status = $("reocrStatus");
+  const backend = $("reocrBackend").value;
+  const body = { backend };
+  if (backend === "ollama_vision") {
+    if ($("reocrVisionModel").value) body.vision_model = $("reocrVisionModel").value;
+  } else {
+    body.structure_backend = $("reocrStructure").value;
+    if ($("reocrTextModel").value) body.text_model = $("reocrTextModel").value;
+  }
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Running…';
+  status.textContent = "";
+  try {
+    const res = await api("POST", `/api/receipts/${reocrReceiptId}/reocr`, body);
+    const m = res.metadata || {};
+    status.textContent = `Done: ${m.vendor_name || "—"} · ${m.date || "—"} · ${m.total_amount ?? "—"} ${m.currency || ""}`;
+    status.className = "status-msg ok";
+    await loadReceipts();
+    await loadStats();
+    setTimeout(closeReocrModal, 900);
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.className = "status-msg err";
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "Run OCR";
+  }
+});
 
 // `<input type="date">` requires YYYY-MM-DD. Accept anything close and
 // fall back to empty if we can't parse it (the OCR sometimes returns

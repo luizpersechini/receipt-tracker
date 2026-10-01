@@ -64,6 +64,9 @@ async def get_ocr_config():
     return JSONResponse(
         {
             **cfg,
+            "structure_backend": (settings.structure_backend or "ollama").strip().lower(),
+            "anthropic_available": bool((settings.anthropic_api_key or "").strip()),
+            "anthropic_model": settings.anthropic_model,
             "ollama_reachable": reachable,
             "paddle_available": paddle_available,
             "max_model_gb": cap,

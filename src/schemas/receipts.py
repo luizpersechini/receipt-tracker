@@ -9,6 +9,17 @@ class ExpenseTypeUpdate(BaseModel):
     expense_type: Literal["corp_card", "reimbursement"]
 
 
+class ReocrRequest(BaseModel):
+    """Optional body for POST /api/receipts/{id}/reocr — per-call OCR
+    settings. Every field is optional; omitted ones use the global config.
+    Nothing here is persisted."""
+
+    backend: Optional[Literal["apple_vision", "paddle_ocr", "ollama_vision"]] = None
+    vision_model: Optional[str] = Field(None, max_length=120)
+    text_model: Optional[str] = Field(None, max_length=120)
+    structure_backend: Optional[Literal["ollama", "anthropic"]] = None
+
+
 class BulkDeleteRequest(BaseModel):
     ids: List[int] = Field(..., min_length=1, max_length=1000)
 

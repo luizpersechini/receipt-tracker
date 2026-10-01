@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -15,6 +16,7 @@ from ..schemas.receipts import (
     ExpenseTypeUpdate,
     ReceiptCommitRequest,
     ReceiptEdit,
+    ReocrRequest,
 )
 from ..services import review_queue
 from ..services.llm_processor import ocr_crops, process_with_segments
@@ -614,11 +616,16 @@ async def normalize_dates():
 
 
 @router.post("/receipts/{receipt_id}/reocr")
-async def reocr_receipt(receipt_id: int):
+async def reocr_receipt(receipt_id: int, body: Optional[ReocrRequest] = None):
     """
     Re-run OCR on the image already saved for this receipt and overwrite its
     metadata in place. Use after improving the OCR prompt / model or when you
     suspect a row's data is wrong but the image is fine. Receipt id is stable.
+
+    Optional JSON body (`ReocrRequest`) overrides the OCR backend, vision /
+    text model and structuring backend for THIS call only — the sidebar
+    config and .env are untouched, so one stubborn receipt can be retried
+    with a stronger model without changing the default for everyone else.
 
     Refuses Gmail-sourced rows (filepath="gmail://...") since they don't have
     a local image file in receipts_dir.
@@ -651,8 +658,9 @@ async def reocr_receipt(receipt_id: int):
         # segmenter can carve a footer (e.g. "Powered by Rede") into its own
         # bogus segment, and reocr would keep that 13-char strip instead of
         # the real receipt. OCR the whole image as one.
+        overrides = body.model_dump(exclude_none=True) if body else None
         items = await asyncio.to_thread(
-            process_with_segments, str(filepath), skip_segmentation=True
+            process_with_segments, str(filepath), skip_segmentation=True, overrides=overrides
         )
 
     if not items:
@@ -675,7 +683,9 @@ async def reocr_receipt(receipt_id: int):
     if not ok:
         raise HTTPException(status_code=500, detail="DB update failed")
 
-    return JSONResponse({"success": True, "receipt_id": receipt_id, "metadata": meta})
+    return JSONResponse(
+        {"success": True, "receipt_id": receipt_id, "metadata": meta, "overrides": overrides or {}}
+    )
 
 
 @router.post("/receipts/dedupe")

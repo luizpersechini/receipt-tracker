@@ -193,9 +193,13 @@ def _anthropic_chat(prompt: str, *, model: Optional[str] = None) -> str:
     return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
 
 
-def structure_text_as_receipt(text: str, *, model: Optional[str] = None) -> dict:
+def structure_text_as_receipt(
+    text: str, *, model: Optional[str] = None, structure_backend: Optional[str] = None
+) -> dict:
     """
-    Run the structuring step. `model` defaults to settings.ocr_text_model.
+    Run the structuring step. `model` defaults to settings.ocr_text_model
+    (Ollama) or settings.anthropic_model (anthropic); `structure_backend`
+    defaults to settings.structure_backend.
     Returns a metadata dict. Includes an "error" field if the LLM call or
     JSON parse failed — caller can decide to keep or discard.
     """
@@ -204,7 +208,7 @@ def structure_text_as_receipt(text: str, *, model: Optional[str] = None) -> dict
         return {"error": "no OCR text to structure"}
 
     prompt = PROMPT.replace("{text}", text)
-    backend = (settings.structure_backend or "ollama").strip().lower()
+    backend = (structure_backend or settings.structure_backend or "ollama").strip().lower()
     try:
         if backend == "anthropic":
             raw = _anthropic_chat(prompt, model=model)
