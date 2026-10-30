@@ -58,3 +58,4 @@ qa/last*.json
 qa/corpus_scoreboard.jsonl
 qa/diag_*.json
 qa/blind_out/
+_audit_scratch/

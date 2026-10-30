@@ -1,7 +1,10 @@
 [project]
 name = "receipt-tracker"
 version = "1.0.0"
-description = "FastAPI receipt OCR tracker using local Ollama LLM"
+description = "Local-first receipt OCR and corporate-card reconciliation (FastAPI, on-device OCR, Ollama)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Luiz Persechini" }]
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.104,<1.0",

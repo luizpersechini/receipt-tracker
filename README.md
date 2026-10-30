@@ -1,233 +1,140 @@
 # Receipt Tracker
 
-Local-first expense tracker for corporate-card reconciliation. Drop a
-receipt photo, scan it with on-device OCR, then drag it onto the
-matching transaction on your monthly statement. Nothing leaves the
-machine — vision + structuring run via Ollama, FX rates and Gmail are
-optional add-ons.
+Local-first expense tracking and corporate-card reconciliation. Photograph a
+receipt, let on-device OCR read it, drag it onto the matching line of your
+monthly card statement, and export the expense report. Everything runs on
+your machine by default.
 
-## Highlights
+[![CI](https://github.com/luizpersechini/receipt-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/luizpersechini/receipt-tracker/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-- **Photo / PDF / HEIC receipt OCR** via Apple Vision (on-device,
-  macOS) or PaddleOCR (on-device, cross-platform), with the OCR'd text
-  structured by a local Ollama text model or, opt-in, the Claude API —
-  all backends configurable. Multi-receipt scans on a single image get
-  auto-segmented and split into one row per receipt.
-- **Optional TypeSafe (Jev) assists** — two opt-in flags, both off by
-  default and both fail-safe to the local result: `CATEGORY_BACKEND=typesafe`
-  categorises receipts and statement lines with calibrated confidence
-  (keyword heuristic kept below the floor); `SEGMENT_BACKEND=typesafe`
-  decides which text blocks on a multi-receipt photo belong together, so
-  fiscal footers stay with their receipt and touching slips get split. One
-  batched call per statement / per photo. Measured on real data in
-  [`docs/typesafe-categorization-diagnostics.md`](docs/typesafe-categorization-diagnostics.md).
-- **Monthly statement parsing** — CSV (any layout pandas can read) or
-  Itaú-style PT-BR PDF. The PDF parser handles two-column layouts,
-  preserves native-currency amounts on international transactions,
-  rolls December purchases on a January statement back to the right
-  year, and captures **estornos/refunds as negative credit rows** (they
-  net the report and are excluded from matching / open-item counts).
-- **Drag-and-drop reconciliation** — Reconcile tab shows transactions
-  (left) and unmatched corp-card receipts (right). Drag a receipt
-  onto its transaction to pair them; smart-match ribbon hints at good
-  candidates. Currency-aware: a CAD 21.88 Uber receipt lines up with
-  the CAD 21.88 leg of a CAD/BRL international transaction. Per-pane
-  filters (search, date, amount, currency) and toggles to hide
-  matched rows on either side. Reimbursement receipts are excluded
-  automatically. **Cumulative matching**: several receipts can pay one
-  charge (hotel folio = room + restaurant + parking) with a progress
-  chip showing the running total vs the bill.
-- **Combined expense-report PDF** — one click on the reconcile header
-  builds the corporate "Prestação de Contas" form: a categorised
-  front-page summary with a signature footer, then receipt-image grid
-  pages packing ~9 readable receipts per page. Open items (charges with
-  no receipt) print a "sem comprovante — justificativa" line. A second
-  **reimbursement-only** variant (Receipts tab) builds the same form
-  from reimbursement-type receipts with no statement/matching. See
-  [`docs/reports.md`](docs/reports.md).
-- **Cardholder roster (Users tab)** — save report profiles per person
-  (name, cost centre, bank, CPF/RG). When you generate a report the
-  cardholder is auto-detected from the statement's name.
-- **Folder-scan inbox** — drop receipts in `data/inbox/` and hit "Scan
-  folder now" for batch processing. PDFs are rasterised page-by-page,
-  one receipt per page.
-- **Gmail ingest** — pull Uber e-receipts straight from your inbox
-  (optional, requires Google OAuth setup).
-- **Excel expense reports** — corp-card / reimbursement / all, in any
-  target currency with cached FX rates.
+## Features
+
+- **On-device receipt OCR.** Apple Vision on macOS, PaddleOCR elsewhere, for
+  photos, PDFs and HEIC. A local Ollama text model turns the OCR text into
+  structured fields (vendor, date, total, currency, category, line items).
+  Multi-receipt photos are segmented into one row per receipt, with a box
+  editor to confirm before OCR runs.
+- **Statement import.** CSV in any layout pandas can read, or Itaú-style
+  Brazilian PDF statements: two-column layout, native-currency amounts on
+  international lines, year rollover, refunds as negative credit rows,
+  password-protected files, and multi-cardholder statements split per holder.
+- **Drag-and-drop reconciliation.** Statement lines on the left, unmatched
+  receipts on the right, currency-aware match hints, cumulative matching for
+  split charges (hotel folio = room + restaurant + parking), per-pane filters.
+- **Expense reports.** One-click "Prestação de Contas" PDF with a categorised
+  summary, signature footer and receipt-image grid; reimbursement-only
+  variant; editable Excel front page; cardholder roster with auto-detection.
+- **Inboxes.** Folder scan for batch processing and optional Gmail ingest for
+  Uber e-receipts.
+- **Optional AI assists, all opt-in and fail-safe.** Claude API for
+  structuring when the machine is too small for a local model (text only,
+  never the image). TypeSafe (Jev) for calibrated expense categorisation and
+  for deciding which text blocks on a photo belong to the same receipt. Each
+  falls back to the local heuristic on any error or low confidence.
 
 ## Quick start
 
-The dependency pins require **Python 3.10+** (they close CVEs in
-Starlette and Pillow that only have fixes on the newer line — see
-[Security & dependencies](#security--dependencies)). The repo is
-developed and tested on 3.13 via a `uv` venv.
+Requires Python 3.10+ (developed on 3.13), [uv](https://github.com/astral-sh/uv),
+and [Ollama](https://ollama.com) listening on `:11434`.
 
 ```bash
-# Prereqs: Python 3.10+ (3.13 recommended), uv, Ollama on :11434
-
 git clone https://github.com/luizpersechini/receipt-tracker.git
 cd receipt-tracker
 
 uv venv --python 3.13
 uv pip sync requirements.lock        # exact, reproducible install
-# (or: uv pip install -r requirements.txt for the loose pins)
 
-cp .env.example .env  # edit as needed; defaults work for most cases
-ollama pull glm-ocr   # or llama3.2:3b if using apple_vision backend
+cp .env.example .env                 # defaults work for most setups
+ollama pull llama3.1:8b              # structuring model (8b ≫ 3b on totals)
 
 .venv/bin/python -m uvicorn src.main:app --reload
 # → http://localhost:8000
 ```
 
-`weasyprint` (PDF report) needs the system libs `pango`, `cairo`,
-`gdk-pixbuf` — `brew install pango` on macOS covers them.
+The PDF report uses WeasyPrint, which needs `pango`, `cairo` and `gdk-pixbuf`
+(`brew install pango` on macOS). On Windows, see
+[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md): PaddleOCR locally plus the
+Claude API for structuring, no Ollama needed.
 
-**On Windows?** See [`docs/WINDOWS_SETUP.md`](docs/WINDOWS_SETUP.md) — runs OCR
-locally via PaddleOCR with the Claude API for structuring, so no Ollama or local
-LLM is needed.
-
-Optional: macOS double-clickable launcher app —
-
-```bash
-scripts/build_mac_app.sh
-# → ~/Applications/Receipt Tracker.app
-```
-
-## Structure
-
-```
-src/
-  main.py                  FastAPI entry point (lifespan + routers)
-  config.py                pydantic-settings, loaded from .env
-  db/database.py           SQLite schema + CRUD
-  routers/                 HTTP layer, one file per resource
-    receipts.py            upload / list / edit / OCR retry / backfills
-    statements.py          upload / list / delete / reparse
-    matches.py             auto-match + manual pair + reconcile board API
-    watch.py               folder scan trigger + status
-    gmail.py / uber.py     optional ingestion sources
-    reports.py / fx.py     exports + currency rates
-  services/
-    llm_processor.py       OCR orchestration, prompt, normalisation,
-                           evidence-anchored total repair
-    text_to_receipt.py     text-model structuring (apple_vision backend)
-    apple_vision_ocr.py    macOS Vision framework backend
-    receipt_segmenter.py   multi-receipt detection on a page (EXIF-aware)
-    typesafe_categorizer.py  opt-in Jev categorisation (batched, confidence floor)
-    typesafe_segmenter.py    opt-in Jev same/different-receipt merge judgments
-    ocr_settings.py        runtime OCR backend/model picker (JSON)
-    statement_pdf_parser.py  Itaú PT-BR PDF parser (column-aware, credits)
-    statement_parser.py    CSV ⇄ PDF dispatcher + reparse index remap
-    matching_engine.py     currency-aware fuzzy match scorer (global
-                           best-first assignment)
-    money.py               shared locale-tolerant money parser
-    folder_watcher.py      inbox scan/watchdog + PDF rasterisation
-    pdf_render.py          PyMuPDF wrapper for PDF → PIL image
-    gmail_ingest.py        Gmail API client + Uber receipt parser
-    uber_csv.py            Uber trip-history CSV importer
-    fx_fetcher.py          AwesomeAPI FX rates with daily cache
-    report_generator.py    openpyxl expense-report generator
-    expense_report_pdf.py  statement + reimbursement Prestação de Contas PDFs
-    expense_report_xlsx.py editable front-page table as .xlsx
-    receipt_pdf.py         single-receipt PDF rendering
-    report_profile.py      global report front-page fields (JSON)
-    report_users.py        cardholder roster + name auto-detect
-    report_history.py      saved-report index (capped at 100, pruned)
-    review_queue.py        pages awaiting box review before OCR
-    statement_notes.py     per-transaction open-item justifications
-    statement_categories.py  per-transaction report-category overrides
-    statement_labels.py    per-transaction Detalhamento overrides
-    statement_costcenters.py per-transaction Centro de Custo overrides
-    json_store.py          atomic + locked JSON persistence shared by
-                           every sidecar store above
-    uploads.py             streaming upload helper (size cap, safe names)
-static/                    SPA frontend (vanilla JS, no build step)
-  index.html               single-page UI (Receipts/Reconcile/Statements/Users/Reports)
-  css/app.css              design tokens + components
-  js/app.js                all client logic
-  report_assets/logo.png   company logo for the report front page
-tests/                     pytest unit tests (373 passing)
-qa/                        end-to-end QA harness + scored OCR corpora
-scripts/                   one-shot utilities (mac app build, migrations)
-data/                      SQLite + uploads + reports + report_*.json (gitignored)
-docs/                      this folder
-```
-
-## Documentation
-
-- [`docs/architecture.md`](docs/architecture.md) — system overview, data
-  flow, key services
-- [`docs/api.md`](docs/api.md) — endpoint reference
-- [`docs/reconcile.md`](docs/reconcile.md) — how reconciliation works
-  (auto + manual + cumulative + currency awareness)
-- [`docs/statements.md`](docs/statements.md) — supported statement
-  formats and the Itaú PDF parser
-- [`docs/reports.md`](docs/reports.md) — the combined expense-report PDF
-  and the cardholder roster / name auto-detect
-- [`docs/WINDOWS_SETUP.md`](docs/WINDOWS_SETUP.md) — Windows install
-  (PaddleOCR + Claude API structuring, no local LLM needed)
-- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — empty-app /
-  lost-history / port-in-use fixes and the macOS launcher rebuild
-- [`docs/typesafe-categorization-diagnostics.md`](docs/typesafe-categorization-diagnostics.md)
-  — what the TypeSafe (Jev) categorisation and segmentation assists
-  measurably changed, the design decisions, and a recipe for other projects
+Optional macOS launcher app: `scripts/build_mac_app.sh` builds
+`~/Applications/Receipt Tracker.app`.
 
 ## Configuration
 
-All settings live in `.env`. See [`.env.example`](.env.example) for the
-full annotated list. The defaults assume:
+All settings live in `.env`; [`.env.example`](.env.example) documents every
+key. The ones that change behaviour:
 
-- OCR backend resolved per-platform (`apple_vision` on macOS,
-  `paddle_ocr` on Windows/Linux); structuring via local Ollama
-  (`llama3.2:3b`) unless `STRUCTURE_BACKEND=anthropic` is set
-- Categories from keyword heuristics and segmentation from the gap rule
-  unless `CATEGORY_BACKEND=typesafe` / `SEGMENT_BACKEND=typesafe` are set
-  (both need `TYPESAFE_API_KEY`, env var only; `TYPESAFE_MIN_CONFIDENCE`
-  defaults to 0.7). Read-only evaluation scripts before flipping either:
-  `scripts/compare_categories.py`, `scripts/compare_segments.py`,
-  `scripts/blind_segments.py` (side-by-side blind vote page)
-- SQLite at `data/receipt_tracker.db`
-- Inbox folder at `data/inbox/` (auto-created)
+| Variable                 | Default                          | Effect                                                                       |
+| ------------------------ | -------------------------------- | ---------------------------------------------------------------------------- |
+| `OCR_BACKEND`            | per OS (`apple_vision` on macOS) | Text extraction engine: `apple_vision`, `paddle_ocr`, `ollama_vision`        |
+| `OCR_TEXT_MODEL`         | `llama3.2:3b`                    | Ollama model that structures OCR text (also selectable in the sidebar)       |
+| `STRUCTURE_BACKEND`      | `ollama`                         | `anthropic` sends receipt text to the Claude API (needs `ANTHROPIC_API_KEY`) |
+| `CATEGORY_BACKEND`       | `keyword`                        | `typesafe` categorises with Jev above `TYPESAFE_MIN_CONFIDENCE` (0.7)        |
+| `SEGMENT_BACKEND`        | `local`                          | `typesafe` lets Jev decide text-cluster merges on multi-receipt photos       |
+| `TYPESAFE_API_KEY`       | unset                            | Required for either TypeSafe backend; environment variable only              |
+| `STATEMENT_PDF_PASSWORD` | unset                            | Opens password-protected statement PDFs                                      |
+| `MAX_UPLOAD_MB`          | `25`                             | Upload size cap                                                              |
 
-## Tests
+No external API is called unless one of the opt-in backends is enabled.
+Before enabling a TypeSafe backend, run the read-only comparison scripts
+(`scripts/compare_categories.py`, `scripts/compare_segments.py`,
+`scripts/blind_segments.py`) against your own data; the measured results
+for this project are in
+[docs/typesafe-categorization-diagnostics.md](docs/typesafe-categorization-diagnostics.md).
+
+## Documentation
+
+| Document                                                                                   | Covers                                                                 |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md)                                               | Layers, data model, OCR pipeline, repository layout, where to look     |
+| [docs/api.md](docs/api.md)                                                                 | Endpoint reference                                                     |
+| [docs/reconcile.md](docs/reconcile.md)                                                     | Matching: auto, manual, cumulative, currency awareness                 |
+| [docs/statements.md](docs/statements.md)                                                   | Statement formats and the Itaú PDF parser                              |
+| [docs/reports.md](docs/reports.md)                                                         | Expense-report PDF, cardholder roster, name auto-detection             |
+| [docs/typesafe-categorization-diagnostics.md](docs/typesafe-categorization-diagnostics.md) | What the TypeSafe assists changed, measured, plus a reusable recipe    |
+| [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)                                             | Windows install                                                        |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)                                         | Empty app, port in use, stale server, launcher rebuild, AI assists off |
+
+## Development
 
 ```bash
-.venv/bin/python -m pytest
-# 453 passing in ~20s
+.venv/bin/python -m pytest                          # unit suite, ~20 s, fully offline
+.venv/bin/python qa/run_qa.py --ocr mock            # end-to-end smoke on a throwaway sandbox
+.venv/bin/python qa/run_qa.py --corpus 8 --corpus-seed 7   # scored OCR accuracy run
 ```
 
-The PDF statement parser, OCR normalisation helpers, money parsing,
-folder scan, matching engine, expense-report builder, and cardholder
-roster all have unit coverage. UI changes are smoke-tested manually via
-the preview MCP — see commit messages for what was verified.
+Unit tests cover the statement parser, OCR normalisation, money parsing,
+matching engine, report builders, the box-review flow and both TypeSafe
+clients (mocked at a single HTTP seam; the default backends are asserted to
+never call out). The [QA harness](qa/README.md) boots the real app against a
+sandbox and tracks total-extraction accuracy on a Portuguese receipt corpus
+and the public SROIE English set. CI runs both on every push.
 
-End-to-end QA lives in [`qa/`](qa/README.md): `run_qa.py` boots the app
-against a throwaway sandbox and drives the real flows, plus two **scored
-OCR corpora** (your own BRL receipts + the public SROIE English set)
-that track total-extraction accuracy per run in
-`qa/corpus_scoreboard.jsonl`:
+Dependencies are pinned in `uv.lock` (hash-pinned) with `requirements.lock`
+exported for `uv pip sync`. After any `uv lock` change, regenerate it:
 
 ```bash
-.venv/bin/python qa/run_qa.py --ocr mock          # fast gate (seconds)
-.venv/bin/python qa/run_qa.py --corpus 8 --corpus-seed 7   # scored OCR run
+uv export --format requirements-txt --no-hashes --no-emit-project -o requirements.lock
 ```
 
-## Security & dependencies
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and
+[SECURITY.md](SECURITY.md) for the data-handling model and how to report a
+vulnerability.
 
-- **Python 3.10+ required.** The pins close CVE-2026-48710 (Starlette
-  host-header auth bypass) and CVE-2026-42308–11 (Pillow buffer overflow
-  on untrusted image input); the fixed versions only ship on the newer
-  line, which needs ≥3.10. Developed on 3.13.
-- `requirements.lock` is the reproducible install (`uv pip sync`);
-  `requirements.txt` holds the loose minimum-version pins.
-- All third-party libraries that have py3.13 wheels are pinned at
-  versions with those wheels, so a fresh `uv pip sync` never falls back
-  to building from source.
-- `data/` (DB, uploads, generated reports, `report_profile.json`,
-  `report_users.json`) is gitignored — it holds receipts, bank details
-  and CPF/RG.
+## Security and privacy
+
+- Receipts, statements, the SQLite database, generated reports and the
+  cardholder roster live under `data/`, which is gitignored. They contain
+  bank details and personal identifiers; keep them out of any remote.
+- The dependency pins require Python 3.10+ because the fixed versions of
+  Starlette (CVE-2026-48710) and Pillow (CVE-2026-42308 to 42311) only ship
+  on that line.
+- API keys are read from the environment or `.env` only and are never
+  logged. A gitleaks pre-commit hook is recommended (see CONTRIBUTING.md).
 
 ## License
 
-Private repo — no public license declared. Ask before forking.
+[MIT](LICENSE) © 2026 Luiz Persechini.

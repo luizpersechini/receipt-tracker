@@ -43,6 +43,66 @@ laptop — no external API calls except optional Gmail.
    └────────────────────┘              └─────────────────────┘
 ```
 
+## Repository layout
+
+```
+src/
+  main.py                  FastAPI entry point (lifespan + routers)
+  config.py                pydantic-settings, loaded from .env
+  db/database.py           SQLite schema + CRUD
+  routers/                 HTTP layer, one file per resource
+    receipts.py            upload / list / edit / OCR retry / backfills
+    statements.py          upload / list / delete / reparse
+    matches.py             auto-match + manual pair + reconcile board API
+    watch.py               folder scan trigger + status
+    gmail.py / uber.py     optional ingestion sources
+    reports.py / fx.py     exports + currency rates
+  services/
+    llm_processor.py       OCR orchestration, prompt, normalisation,
+                           evidence-anchored total repair
+    text_to_receipt.py     text-model structuring (apple_vision backend)
+    apple_vision_ocr.py    macOS Vision framework backend
+    receipt_segmenter.py   multi-receipt detection on a page (EXIF-aware)
+    typesafe_categorizer.py  opt-in Jev categorisation (batched, confidence floor)
+    typesafe_segmenter.py    opt-in Jev same/different-receipt merge judgments
+    ocr_settings.py        runtime OCR backend/model picker (JSON)
+    statement_pdf_parser.py  Itaú PT-BR PDF parser (column-aware, credits)
+    statement_parser.py    CSV ⇄ PDF dispatcher + reparse index remap
+    matching_engine.py     currency-aware fuzzy match scorer (global
+                           best-first assignment)
+    money.py               shared locale-tolerant money parser
+    folder_watcher.py      inbox scan/watchdog + PDF rasterisation
+    pdf_render.py          PyMuPDF wrapper for PDF → PIL image
+    gmail_ingest.py        Gmail API client + Uber receipt parser
+    uber_csv.py            Uber trip-history CSV importer
+    fx_fetcher.py          AwesomeAPI FX rates with daily cache
+    report_generator.py    openpyxl expense-report generator
+    expense_report_pdf.py  statement + reimbursement Prestação de Contas PDFs
+    expense_report_xlsx.py editable front-page table as .xlsx
+    receipt_pdf.py         single-receipt PDF rendering
+    report_profile.py      global report front-page fields (JSON)
+    report_users.py        cardholder roster + name auto-detect
+    report_history.py      saved-report index (capped at 100, pruned)
+    review_queue.py        pages awaiting box review before OCR
+    statement_notes.py     per-transaction open-item justifications
+    statement_categories.py  per-transaction report-category overrides
+    statement_labels.py    per-transaction Detalhamento overrides
+    statement_costcenters.py per-transaction Centro de Custo overrides
+    json_store.py          atomic + locked JSON persistence shared by
+                           every sidecar store above
+    uploads.py             streaming upload helper (size cap, safe names)
+static/                    SPA frontend (vanilla JS, no build step)
+  index.html               single-page UI (Receipts/Reconcile/Statements/Users/Reports)
+  css/app.css              design tokens + components
+  js/app.js                all client logic
+  report_assets/logo.png   company logo for the report front page
+tests/                     pytest unit tests (373 passing)
+qa/                        end-to-end QA harness + scored OCR corpora
+scripts/                   one-shot utilities (mac app build, migrations)
+data/                      SQLite + uploads + reports + report_*.json (gitignored)
+docs/                      this folder
+```
+
 ## Data model
 
 Five tables. Schema lives in `src/db/database.py:init_db()`.

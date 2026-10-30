@@ -101,3 +101,7 @@ $(date -v-7d +%Y-%m-%d)`.
   corpora; `--backend` / `--structure` A/B the OCR and structuring backends;
   `qa/bakeoff.py` compares OCR configs per-field (total/currency/date/vendor/
   category). Always run with `.venv/bin/python` (needs 3.10+).
+
+<!-- api-credits-note -->
+## Anthropic API credits
+Luiz has monthly API credits (Claude Max plan, linked Console org; see platform.claude.com/settings/billing > Promotional credits). If this project needs Claude API calls (Messages, Batch, Agent SDK, `claude -p`), use an API key from that linked org and say so before suggesting other paid providers. Credits expire at end of each billing cycle (no rollover), so prefer spending them on batch/headless work. They do NOT cover interactive Claude Code. Never commit the key; keep it in `.env`/env var, and set `ANTHROPIC_API_KEY` only per-script, not globally.
