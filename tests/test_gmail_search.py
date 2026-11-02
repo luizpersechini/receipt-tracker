@@ -222,3 +222,95 @@ def test_router_search_and_import(env, monkeypatch):
     r = c.post("/api/gmail/import", json={"message_id": "m1", "attachment_ids": ["a"]})
     assert r.status_code == 200 and r.json()["ids"] == ["a"]
     assert c.post("/api/gmail/import", json={}).status_code == 422
+
+
+# ─── per-transaction finder ──────────────────────────────────────────────────
+
+
+def _txn(desc, amount, date="2026-09-08", **raw):
+    return {"date": date, "description": desc, "amount": amount, "raw_data": raw}
+
+
+def test_score_exact_amount_date_vendor_attachment():
+    s = {"date": "2026-09-08", "from": "invoice@mail.anthropic.com", "subject": "Your receipt from Anthropic", "snippet": "Total R$580.44", "attachments": [{"id": "a"}]}
+    score, reasons = gs.score_candidate(_txn("ANTHROPIC* CLAUDE SUB", 580.44), s, "")
+    assert score == 1.0
+    assert any("580.44 found" in r for r in reasons) and any("anthropic" in r for r in reasons)
+
+
+def test_score_amount_within_iof_tolerance():
+    s = {"date": "2026-09-07", "from": "x@y", "subject": "Receipt", "snippet": "", "attachments": []}
+    score, reasons = gs.score_candidate(_txn("ANTHROPIC* CLAUDE SUB", 580.44), s, "Amount paid R$550.00")
+    assert score == 0.5  # 0.3 near + 0.2 date
+    assert any("within 7%" in r for r in reasons)
+
+
+def test_score_native_amount_and_wrong_amount():
+    s = {"date": "2026-09-20", "from": "billing@metalpriceapi.com", "subject": "Invoice", "snippet": "USD 11.99", "attachments": []}
+    score, _ = gs.score_candidate(_txn("METALPRICEAPI.COM", 65.59, "2026-09-17", original_amount=11.99), s, "")
+    assert score == 0.8  # exact native + 3 days + vendor
+    s2 = {**s, "snippet": "USD 99.00", "from": "a@b", "subject": "hi"}
+    assert gs.score_candidate(_txn("METALPRICEAPI.COM", 65.59, "2026-09-17"), s2, "")[0] == 0.1
+
+
+def test_find_for_transactions_shares_fetches_and_ranks(monkeypatch):
+    m1 = _msg("m1", subject="Ollama receipt", html="<p>Total R$ 113,33</p>")
+    m2 = _msg("m2", subject="Ollama usage", html="<p>nothing</p>")
+    svc = FakeGmail([m1, m2])
+    fetches = []
+    orig = gs.gmail_ingest.fetch_message
+    monkeypatch.setattr(gs.gmail_ingest, "fetch_message", lambda s, mid: (fetches.append(mid), orig(s, mid))[1])
+    st = {"id": 1, "transactions": [_txn("OLLAMA", 113.33, "2026-09-06"), _txn("OLLAMA", 512.08, "2026-09-10"), _txn("X", 1.0)]}
+    out = gs.find_for_transactions(st, [0, 1, 99], max_per_txn=1, service=svc)
+    assert [r["index"] for r in out] == [0, 1]
+    assert out[0]["candidates"][0]["id"] == "m1" and out[0]["candidates"][0]["score"] >= 0.7
+    assert "after:2026/09/02" in out[0]["query"] and "-category:promotions" in out[0]["query"]
+    assert sorted(fetches) == ["m1", "m2"]  # fetched once, reused for line 1
+
+
+def test_import_and_match_creates_manual_match(env, monkeypatch):
+    db = env
+    sid = db.save_statement("s.pdf", "s.pdf", [_txn("ANTHROPIC* CLAUDE SUB", 580.44)])
+    svc = FakeGmail([_msg("m1", subject="Anthropic", atts=[("r.pdf", "application/pdf")])], attachments={("m1", "att0"): b"%PDF"})
+    monkeypatch.setattr(gs, "_ocr", lambda p: [{"metadata": {"vendor_name": "Anthropic", "total_amount": 550.0}, "crop": None}])
+    out = gs.import_and_match(sid, 0, "m1", service=svc)
+    assert out["match_id"]
+    ms = db.get_matches_for_statement(sid)
+    assert len(ms) == 1 and ms[0]["transaction_index"] == 0 and ms[0]["match_kind"] == "manual"
+    assert db.get_receipt_by_id(out["receipts"][0]["receipt_id"])["match_status"] == "matched"
+    with pytest.raises(LookupError):
+        gs.import_and_match(sid, 5, "m1", service=svc)
+
+
+def test_router_find_receipts_skips_matched_credit_and_cancelled(env, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from src.main import app
+    from src.services import gmail_ingest
+
+    db = env
+    sid = db.save_statement(
+        "s.pdf",
+        "s.pdf",
+        [
+            _txn("A", 10.0),
+            _txn("B", 20.0),
+            _txn("B", -20.0, credit=True),
+            _txn("C", 30.0),
+        ],
+    )
+    rid = db.save_receipt("r.png", "r.png", {})
+    db.save_match(rid, sid, {}, None, match_kind="manual", transaction_index=3)
+    monkeypatch.setattr(gmail_ingest, "is_configured", lambda: True)
+    seen = {}
+    monkeypatch.setattr(gs, "find_for_transactions", lambda st, idx, max_per_txn=3: (seen.update(idx=idx), [])[1])
+    c = TestClient(app)
+    r = c.post("/api/gmail/find-receipts", json={"statement_id": sid})
+    assert r.status_code == 200 and seen["idx"] == [0]  # B cancelled by its estorno, C matched
+    r = c.post("/api/gmail/find-receipts", json={"statement_id": sid, "indices": [1, 3]})
+    assert seen["idx"] == []
+    assert c.post("/api/gmail/find-receipts", json={"statement_id": 999}).status_code == 404
+
+    monkeypatch.setattr(gs, "import_and_match", lambda s, i, m, a: {"match_id": 7, "receipts": []})
+    r = c.post("/api/gmail/import-and-match", json={"statement_id": sid, "transaction_index": 0, "message_id": "m"})
+    assert r.status_code == 200 and r.json()["match_id"] == 7

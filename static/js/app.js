@@ -2062,8 +2062,8 @@ const Reconcile = (() => {
   function _renderGmailFind(t) {
     if (!window.gmailSearchAvailable) return "";
     return `
-      <button class="recon-note-add recon-gmail-find" data-index="${t.index}" title="Search Gmail for this charge's receipt">
-        Find in Gmail
+      <button class="recon-note-add recon-gmail-find" data-index="${t.index}" title="Search Gmail for this charge's receipt (amount + date ranked)">
+        Find receipt
       </button>`;
   }
 
@@ -2394,11 +2394,7 @@ const Reconcile = (() => {
       el.addEventListener("click", () => _onUnlink(+el.dataset.match));
     });
     document.querySelectorAll(".recon-gmail-find").forEach((el) => {
-      el.addEventListener("click", () => {
-        const t = reconState.txns.find((x) => x.index === +el.dataset.index);
-        if (t && window.gmailSearchFromRecon)
-          window.gmailSearchFromRecon(_gmailQueryForTxn(t));
-      });
+      el.addEventListener("click", () => _openGmailFind([+el.dataset.index]));
     });
     // Justification editor (open items).
     document.querySelectorAll(".recon-note-trigger").forEach((el) => {
@@ -2760,7 +2756,160 @@ const Reconcile = (() => {
       await _selectStatement(reconState.statementId);
   }
 
-  return { init, reload, renderTopbar, state: reconState };
+  // ── Find receipts in Gmail ────────────────────────────────────────────────
+  // Per-line Gmail candidates ranked by amount/date/vendor evidence. Nothing
+  // is imported until the user ticks candidates and confirms; each import
+  // creates the receipt row(s) and a manual match to its line.
+  const gmailFind = { results: [], busy: false };
+
+  async function _openGmailFind(indices) {
+    if (!reconState.statementId) return;
+    const modal = $("gmailFindModal");
+    const list = $("gmailFindList");
+    const status = $("gmailFindStatus");
+    const sub = $("gmailFindSub");
+    gmailFind.results = [];
+    list.innerHTML = "";
+    sub.textContent = indices
+      ? `${indices.length} line(s)`
+      : "All open lines of this statement";
+    status.textContent = "Searching Gmail…";
+    status.className = "status-msg load";
+    $("gmailFindImportBtn").disabled = true;
+    modal.classList.add("open");
+    try {
+      const res = await api("POST", "/api/gmail/find-receipts", {
+        statement_id: reconState.statementId,
+        indices: indices || null,
+        max_per_txn: 3,
+      });
+      gmailFind.results = res.results || [];
+      _renderGmailFindModal();
+      const withCands = gmailFind.results.filter((r) => r.candidates.length).length;
+      status.textContent = gmailFind.results.length
+        ? `${withCands} of ${gmailFind.results.length} line(s) have candidates. Tick the right email and confirm.`
+        : "No open lines to search.";
+      status.className = "status-msg";
+    } catch (e) {
+      status.textContent = e.message;
+      status.className = "status-msg err";
+    }
+  }
+
+  function _renderGmailFindModal() {
+    const list = $("gmailFindList");
+    const byIdx = Object.fromEntries(reconState.txns.map((t) => [t.index, t]));
+    list.innerHTML = gmailFind.results
+      .map((r) => {
+        const t = byIdx[r.index] || {};
+        const amt = t.original_currency && t.original_amount != null
+          ? `${_fmt.money(t.original_amount, t.original_currency)} · ${_fmt.money(t.amount, "BRL")}`
+          : _fmt.money(t.amount, "BRL");
+        const cands = r.candidates.length
+          ? r.candidates
+              .map((c, k) => {
+                const cls = c.score >= 0.7 ? "hi" : c.score >= 0.4 ? "mid" : "lo";
+                // Pre-tick only strong evidence: a near-amount hit alone
+                // (delivery notices quoting a similar price) stays unticked.
+                const pre = k === 0 && c.score >= 0.7 && !c.imported ? "checked" : "";
+                const att = c.attachments.length
+                  ? c.attachments.map((a) => a.filename).join(", ")
+                  : c.has_html ? "email body → PDF" : "no content";
+                return `<label class="gf-cand ${c.imported ? "done" : ""}">
+                  <input type="radio" name="gf-${r.index}" value="${_esc(c.id)}" ${pre} ${c.imported || (!c.attachments.length && !c.has_html) ? "disabled" : ""} />
+                  <span class="gf-subj" title="${_esc(c.subject || "")}">${_esc(c.subject || "(no subject)")}${c.imported ? " · already imported" : ""}</span>
+                  <span class="gf-score ${cls}">${Math.round(c.score * 100)}%</span>
+                  <span class="gf-meta">${_esc(c.date || "")} · ${_esc(c.from || "")} · ${_esc(att)}</span>
+                  <span class="gf-why">${_esc((c.reasons || []).join(" · ") || "no evidence")}</span>
+                </label>`;
+              })
+              .join("")
+          : `<div class="gf-none">No email found for <code>${_esc(r.query)}</code>${r.error ? ` · ${_esc(r.error)}` : ""}</div>`;
+        return `<div class="gf-line" data-index="${r.index}">
+          <div class="gf-line-head">
+            <span class="gf-date">${_fmt.date(t.date)}</span>
+            <span class="gf-desc" title="${_esc(t.description || "")}">${_esc(t.description || `line ${r.index}`)}</span>
+            <span class="gf-amt">${amt}</span>
+          </div>
+          ${cands}
+          ${r.candidates.length ? `<label class="gf-cand"><input type="radio" name="gf-${r.index}" value="" /> <span class="gf-subj">None of these</span></label>` : ""}
+        </div>`;
+      })
+      .join("");
+    _syncGmailFindBtn();
+    list.querySelectorAll("input[type=radio]").forEach((el) =>
+      el.addEventListener("change", _syncGmailFindBtn),
+    );
+  }
+
+  function _gmailFindSelection() {
+    return gmailFind.results
+      .map((r) => {
+        const el = document.querySelector(`input[name="gf-${r.index}"]:checked`);
+        if (!el || !el.value) return null;
+        const c = r.candidates.find((x) => x.id === el.value);
+        return c ? { index: r.index, cand: c } : null;
+      })
+      .filter(Boolean);
+  }
+
+  function _syncGmailFindBtn() {
+    $("gmailFindImportBtn").disabled = gmailFind.busy || !_gmailFindSelection().length;
+  }
+
+  async function _importGmailFind() {
+    const picks = _gmailFindSelection();
+    if (!picks.length || gmailFind.busy) return;
+    gmailFind.busy = true;
+    _syncGmailFindBtn();
+    const status = $("gmailFindStatus");
+    let ok = 0;
+    const errors = [];
+    for (let i = 0; i < picks.length; i++) {
+      const { index, cand } = picks[i];
+      status.textContent = `Importing ${i + 1}/${picks.length} (OCR)…`;
+      status.className = "status-msg load";
+      try {
+        await api("POST", "/api/gmail/import-and-match", {
+          statement_id: reconState.statementId,
+          transaction_index: index,
+          message_id: cand.id,
+          attachment_ids: cand.attachments.length ? null : [],
+        });
+        ok++;
+        cand.imported = true;
+      } catch (e) {
+        errors.push(`${cand.subject || cand.id}: ${e.message}`);
+      }
+    }
+    gmailFind.busy = false;
+    status.textContent =
+      `Imported and matched ${ok} receipt(s).` +
+      (errors.length ? ` Failed: ${errors.join(" · ")}` : "");
+    status.className = errors.length ? "status-msg warn" : "status-msg ok";
+    await reload();
+    // Drop the lines that got matched; keep the rest for another pick.
+    const matchedIdx = new Set(
+      reconState.txns.filter((t) => _txnMatches(t).length).map((t) => t.index),
+    );
+    gmailFind.results = gmailFind.results.filter((r) => !matchedIdx.has(r.index));
+    _renderGmailFindModal();
+    if (!gmailFind.results.length && !errors.length) $("gmailFindModal").classList.remove("open");
+  }
+
+  $("reconGmailBtn").addEventListener("click", () => _openGmailFind(null));
+  $("gmailFindCancelBtn").addEventListener("click", () =>
+    $("gmailFindModal").classList.remove("open"),
+  );
+  $("gmailFindImportBtn").addEventListener("click", _importGmailFind);
+
+  return {
+    init,
+    reload,
+    renderTopbar,
+    rerender: _renderTxnList,
+    state: reconState,
+  };
 })();
 
 // ─── Users (cardholder roster) ─────────────────────────────────────────────
@@ -5745,6 +5894,11 @@ async function loadGmailStatus() {
   // The ad-hoc search card needs a working token too.
   window.gmailSearchAvailable = !!st.configured;
   $("gmailSearchCard").style.display = st.configured ? "" : "none";
+  $("reconGmailBtn").style.display = st.configured ? "" : "none";
+  // The board may have rendered before this status arrived — repaint so the
+  // per-line "Find receipt" buttons appear.
+  if (typeof Reconcile !== "undefined" && Reconcile.state.txns.length)
+    Reconcile.rerender();
 
   if (st.configured) {
     badge.textContent = "Connected";

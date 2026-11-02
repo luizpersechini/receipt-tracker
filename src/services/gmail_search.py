@@ -270,3 +270,176 @@ def _mark_processed(service, msg_id: str) -> None:
         ).execute()
     except Exception as e:  # noqa: BLE001
         logger.warning("could not label %s as processed: %s", msg_id, e)
+
+
+# ─── Per-transaction receipt finder ──────────────────────────────────────────
+#
+# "Find receipts in Gmail" on the reconcile board: for each open statement
+# line run the charge query, score every email by amount / date / vendor /
+# attachment evidence, and hand back ranked candidates. Import + match is a
+# separate, explicit step (`import_and_match`).
+
+_NUM_RE = re.compile(r"(?<![\w.,])\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})(?![\w])|(?<![\w.,])\d+[.,]\d{2}(?![\w])")
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+AMOUNT_TOLERANCE = 0.07  # IOF + FX spread between the email and the card line
+DATE_WINDOW_BEFORE = 4
+DATE_WINDOW_AFTER = 7
+
+
+def _body_text(message: dict) -> str:
+    text = gmail_ingest.extract_plain_body(message)
+    if not text:
+        html_ = gmail_ingest.extract_html_body(message) or ""
+        import html as _html
+
+        text = _html.unescape(_TAG_RE.sub(" ", html_))
+    return _WS_RE.sub(" ", text or "")
+
+
+def _numbers_in(text: str) -> list[float]:
+    from .money import parse_money
+
+    out = []
+    for m in _NUM_RE.finditer(text or ""):
+        v = parse_money(m.group(0))
+        if v is not None and v > 0:
+            out.append(float(v))
+    return out
+
+
+def _targets(txn: dict) -> list[float]:
+    raw = txn.get("raw_data") or {}
+    vals = []
+    for v in (txn.get("amount"), raw.get("original_amount")):
+        try:
+            f = abs(float(v))
+            if f > 0:
+                vals.append(f)
+        except (TypeError, ValueError):
+            pass
+    return vals
+
+
+def score_candidate(txn: dict, summary: dict, body: str) -> tuple[float, list[str]]:
+    """Evidence score in [0, 1] with human-readable reasons."""
+    score = 0.0
+    reasons: list[str] = []
+    nums = _numbers_in(f"{summary.get('subject') or ''} {summary.get('snippet') or ''} {body}")
+    best = None
+    for t in _targets(txn):
+        for n in nums:
+            if abs(n - t) < 0.005:
+                best = ("exact", t)
+                break
+            if abs(n - t) / t <= AMOUNT_TOLERANCE and (best is None or best[0] != "exact"):
+                best = ("near", n)
+        if best and best[0] == "exact":
+            break
+    if best and best[0] == "exact":
+        score += 0.5
+        reasons.append(f"amount {best[1]:.2f} found")
+    elif best:
+        score += 0.3
+        reasons.append(f"amount {best[1]:.2f} within {int(AMOUNT_TOLERANCE * 100)}%")
+
+    try:
+        from datetime import date
+
+        gap = abs((date.fromisoformat((summary.get("date") or "")[:10]) - date.fromisoformat((txn.get("date") or "")[:10])).days)
+        if gap <= 2:
+            score += 0.2
+            reasons.append(f"{gap} day(s) apart")
+        elif gap <= DATE_WINDOW_AFTER:
+            score += 0.1
+            reasons.append(f"{gap} days apart")
+    except ValueError:
+        pass
+
+    words = [w.lower() for w in _DROP_TOKENS.split(txn.get("description") or "") if len(w) >= 3]
+    hay = f"{summary.get('from') or ''} {summary.get('subject') or ''}".lower()
+    hit = next((w for w in words if w in hay), None)
+    if hit:
+        score += 0.2
+        reasons.append(f'"{hit}" in sender/subject')
+
+    if summary.get("attachments"):
+        score += 0.1
+        reasons.append("has attachment")
+    return min(1.0, round(score, 2)), reasons
+
+
+def find_for_transactions(
+    statement: dict,
+    indices: list[int],
+    *,
+    max_per_txn: int = 3,
+    max_messages: int = 15,
+    service=None,
+) -> list[dict]:
+    """[{index, query, candidates:[summary + score + reasons]}] per line.
+    Messages are fetched once per run and shared between lines."""
+    service = service or gmail_ingest.get_service()
+    if service is None:
+        raise RuntimeError("Gmail isn't connected")
+    txns = statement.get("transactions") or []
+    label_id = _find_label_id(service, settings.gmail_processed_label)
+    cache: dict[str, tuple[dict, str]] = {}
+    out = []
+    for i in indices:
+        if i < 0 or i >= len(txns):
+            continue
+        t = txns[i]
+        q = build_query(query_for_charge(t.get("description") or "", t.get("date")))
+        try:
+            ids = gmail_ingest.list_message_ids(service, q, max_messages)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("gmail find failed for line %s: %s", i, e)
+            out.append({"index": i, "query": q, "candidates": [], "error": str(e)})
+            continue
+        cands = []
+        for mid in ids:
+            if mid not in cache:
+                msg = gmail_ingest.fetch_message(service, mid)
+                cache[mid] = (summarize(msg, label_id), _body_text(msg))
+            summary, body = cache[mid]
+            score, reasons = score_candidate(t, summary, body)
+            cands.append({**summary, "score": score, "reasons": reasons})
+        cands.sort(key=lambda c: (-c["score"], c.get("date") or ""))
+        out.append({"index": i, "query": q, "candidates": cands[:max_per_txn]})
+    return out
+
+
+def import_and_match(
+    statement_id: int,
+    transaction_index: int,
+    message_id: str,
+    attachment_ids: Optional[list[str]] = None,
+    *,
+    service=None,
+) -> dict:
+    """Import the email, then pair its first usable receipt row with the
+    statement line as a manual match. Extra rows (multi-receipt pages)
+    stay unmatched on the board."""
+    statement = db.get_statement_by_id(statement_id)
+    if not statement:
+        raise LookupError("Statement not found")
+    txns = statement.get("transactions") or []
+    if transaction_index < 0 or transaction_index >= len(txns):
+        raise LookupError("transaction_index out of range")
+    result = import_message(message_id, attachment_ids, service=service)
+    rows = result.get("receipts") or []
+    usable = [r for r in rows if not (r.get("metadata") or {}).get("error")] or rows
+    match_id = None
+    if usable:
+        rid = usable[0]["receipt_id"]
+        match_id = db.save_match(
+            rid,
+            statement_id,
+            txns[transaction_index],
+            None,
+            match_kind="manual",
+            transaction_index=transaction_index,
+        )
+        db.update_receipt_match_status(rid, "matched")
+    return {**result, "statement_id": statement_id, "transaction_index": transaction_index, "match_id": match_id}

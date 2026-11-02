@@ -632,6 +632,24 @@ body is rendered to a PDF (WeasyPrint) instead. Each file is saved under
 receipt_id, filename, metadata}]}`. 422 when the email has neither an
 importable attachment nor an HTML body. Logic in `services/gmail_search.py`.
 
+### `POST /api/gmail/find-receipts`
+
+Body `{statement_id, indices?, max_per_txn?=3}`. Read-only. For each open
+line (no match, not a credit, not cancelled by an estorno; intersected
+with `indices` when given) runs the charge query and returns
+`{statement_id, results:[{index, query, candidates:[<search message
+fields> + score (0–1), reasons:[str]]}]}`, candidates ranked by score.
+Scoring rules in `docs/reconcile.md`. 404 unknown statement, 400 when
+Gmail isn't connected, 502 on a Gmail API error.
+
+### `POST /api/gmail/import-and-match`
+
+Body `{statement_id, transaction_index, message_id, attachment_ids?}`.
+Runs the same import as `/import`, then pairs the first receipt row without
+an OCR error (else the first row) with the line as a `manual` match and
+flips it to `matched`. Returns the import result plus `match_id`. 404 for
+an unknown statement or index.
+
 ### `POST /api/gmail/render-pdfs`
 
 Re-render PDFs for rows with `filepath="gmail://..."`. Useful after

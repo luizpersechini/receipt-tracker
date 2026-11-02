@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=38" />
+    <link rel="stylesheet" href="/static/css/app.css?v=39" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -837,6 +837,14 @@
                     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                   </svg>
                   Auto-match
+                </button>
+                <button
+                  class="btn btn-outline"
+                  id="reconGmailBtn"
+                  style="display: none"
+                  title="Search the connected Gmail for a receipt of every open line"
+                >
+                  Find receipts in Gmail
                 </button>
 
                 <div class="recon-counts">
@@ -1900,6 +1908,22 @@
       </div>
     </div>
 
+    <!-- ── FIND RECEIPTS IN GMAIL (per statement line) ─────────────────────── -->
+    <div class="modal-overlay" id="gmailFindModal">
+      <div class="modal-box" style="width: 720px; max-width: 94vw">
+        <div class="modal-title">Receipts in Gmail</div>
+        <div class="modal-sub" id="gmailFindSub">—</div>
+        <div id="gmailFindList" class="gmail-find-list"></div>
+        <div class="status-msg" id="gmailFindStatus"></div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="gmailFindCancelBtn">Close</button>
+          <button class="btn btn-primary" id="gmailFindImportBtn" disabled>
+            Import and match selected
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── RE-RUN OCR (per receipt, one-off settings) ─────────────────────── -->
     <div class="modal-overlay" id="reocrModal">
       <div class="modal-box" style="width: 460px; max-width: 92vw">
@@ -2002,6 +2026,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=69"></script>
+    <script src="/static/js/app.js?v=72"></script>
   </body>
 </html>

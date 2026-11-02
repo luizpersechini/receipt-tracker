@@ -3789,3 +3789,79 @@ tr.stmt-archived:hover {
 .recon-gmail-find {
   margin-left: 6px;
 }
+
+/* ─── Find receipts in Gmail (modal) ─────────────────────────────────────── */
+.gmail-find-list {
+  max-height: 62vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0;
+}
+.gf-line {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.gf-line-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.gf-line-head .gf-date {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.gf-line-head .gf-desc {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gf-line-head .gf-amt {
+  font-variant-numeric: tabular-nums;
+}
+.gf-none {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.gf-cand {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  gap: 2px 8px;
+  align-items: start;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.gf-cand:hover {
+  background: var(--bg-2, rgba(0, 0, 0, 0.03));
+}
+.gf-cand.done {
+  opacity: 0.55;
+}
+.gf-cand .gf-subj {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gf-cand .gf-meta,
+.gf-cand .gf-why {
+  grid-column: 2;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.gf-cand .gf-score {
+  grid-row: 1 / span 3;
+  grid-column: 3;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.gf-cand .gf-score.hi { color: var(--green); }
+.gf-cand .gf-score.mid { color: var(--amber); }
+.gf-cand .gf-score.lo { color: var(--text-3); }

@@ -9,7 +9,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..config import settings
-from ..schemas.gmail import GmailImportRequest
+from ..schemas.gmail import FindReceiptsRequest, GmailImportRequest, ImportMatchRequest
 from ..services import gmail_ingest
 
 router = APIRouter(prefix="/api/gmail", tags=["gmail"])
@@ -240,5 +240,75 @@ async def gmail_import(body: GmailImportRequest):
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:  # noqa: BLE001
         logger.exception("gmail import failed")
+        raise HTTPException(status_code=502, detail=f"Gmail import failed: {e}")
+    return JSONResponse({"success": True, **result})
+
+
+@router.post("/find-receipts")
+async def gmail_find_receipts(body: FindReceiptsRequest):
+    """Rank Gmail candidates for each open line of a statement. Read-only:
+    nothing is imported or matched until `/import-and-match`."""
+    if not gmail_ingest.is_configured():
+        raise HTTPException(status_code=400, detail="Gmail isn't connected.")
+    from ..db import database as db
+    from ..services import gmail_search as gs
+    from ..services import statement_cancellations as sc
+
+    statement = await asyncio.to_thread(db.get_statement_by_id, body.statement_id)
+    if not statement:
+        raise HTTPException(status_code=404, detail="Statement not found")
+    txns = statement.get("transactions") or []
+    matched = {
+        m.get("transaction_index")
+        for m in await asyncio.to_thread(db.get_matches_for_statement, body.statement_id)
+    }
+    all_statements = await asyncio.to_thread(db.get_all_statements)
+    all_matches = await asyncio.to_thread(db.get_all_matches)
+    cancelled = sc.find_cancellations(all_statements, sc.locked_from_matches(all_matches))
+
+    def _open(i: int, t: dict) -> bool:
+        try:
+            amt = float(t.get("amount") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        credit = amt < 0 or bool((t.get("raw_data") or {}).get("credit"))
+        return not credit and i not in matched and (body.statement_id, i) not in cancelled
+
+    wanted = set(body.indices) if body.indices is not None else None
+    indices = [i for i, t in enumerate(txns) if _open(i, t) and (wanted is None or i in wanted)]
+    try:
+        results = await asyncio.to_thread(
+            gs.find_for_transactions, statement, indices, max_per_txn=body.max_per_txn
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("gmail find-receipts failed")
+        raise HTTPException(status_code=502, detail=f"Gmail search failed: {e}")
+    return JSONResponse({"statement_id": body.statement_id, "results": results})
+
+
+@router.post("/import-and-match")
+async def gmail_import_and_match(body: ImportMatchRequest):
+    """Import one email as receipt row(s) and pair the first usable row with
+    the given statement line (manual match)."""
+    if not gmail_ingest.is_configured():
+        raise HTTPException(status_code=400, detail="Gmail isn't connected.")
+    from ..services import gmail_search as gs
+    from .receipts import _ocr_semaphore
+
+    try:
+        async with _ocr_semaphore:
+            result = await asyncio.to_thread(
+                gs.import_and_match,
+                body.statement_id,
+                body.transaction_index,
+                body.message_id,
+                body.attachment_ids,
+            )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("gmail import-and-match failed")
         raise HTTPException(status_code=502, detail=f"Gmail import failed: {e}")
     return JSONResponse({"success": True, **result})

@@ -208,17 +208,33 @@ receipt on the Receipts tab. Overrides persist per `(statement,
 transaction)` in `data/statement_categories.json`. See
 [reports.md](reports.md#editing-a-charges-category).
 
-## Finding a receipt in Gmail
+## Finding receipts in Gmail
 
-Open items show a **Find in Gmail** button next to the justification one
-(only when the Gmail connection from the Receipts side panel is working).
-It jumps to the Receipts tab and runs a search built from the charge: the
-first three alphabetic words of the descriptor, OR-ed, plus a window from
-four days before to seven days after the posting date (`(ANTHROPIC OR
-CLAUDE OR SUB) after:2026/09/04 before:2026/09/15`). Promotions and social mail are
-excluded and already-imported messages are hidden. Tick the emails (and
-which attachments) to import; emails without a PDF/image are rendered from
-their HTML body. Imported rows land in the receipts pane for drag-and-drop.
+**Find receipts in Gmail** (next to Auto-match; shown only when the Gmail
+connection from the Receipts side panel is working) searches the mailbox
+for every open line of the statement: no receipt, not a credit, not
+cancelled by an estorno. Each open item also has a **Find receipt** button
+for just that line.
+
+Per line the query is the first three alphabetic words of the descriptor,
+OR-ed, plus a window from four days before to seven days after the posting
+date (`(ANTHROPIC OR CLAUDE OR SUB) after:2026/09/04 before:2026/09/15`),
+with promotions/social excluded. Every email found is scored: +0.5 when the
+line's BRL amount (or the native amount on international lines) appears in
+the subject, snippet or body, +0.3 when a number within 7% does (IOF/FX
+spread, e.g. Anthropic R$550 vs the R$580.44 card line), +0.2 / +0.1 for a
+posting-date gap of ≤2 / ≤7 days, +0.2 when a descriptor word appears in
+the sender or subject, +0.1 for a PDF/image attachment. Messages are
+fetched once per run and shared between lines of the same vendor.
+
+The modal lists each line with its top three candidates, score and
+reasons; the best one is pre-ticked when it scores ≥70%. **Import and
+match selected** imports each ticked email (attachments, else the HTML
+body rendered to PDF), runs OCR, creates a manual match between the first
+usable receipt row and the line, labels the message processed, and
+reloads the board. Lines you leave on "None of these" are untouched. The
+free-text **Search Gmail** card on the Receipts side panel remains for
+manual digging; it imports without matching.
 
 ## Justifying open items (no receipt)
 

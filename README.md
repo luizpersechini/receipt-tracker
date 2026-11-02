@@ -30,7 +30,9 @@ your machine by default.
 - **Inboxes.** Folder scan for batch processing and optional Gmail: automatic
   ingest of Uber e-receipts, plus an ad-hoc Gmail search that imports any
   vendor's receipt email (PDF/image attachments, or the rendered body) through
-  the same OCR pipeline. Open statement lines get a "Find in Gmail" shortcut.
+  the same OCR pipeline. On the reconcile board, "Find receipts in Gmail"
+  searches per open statement line, ranks emails by amount and date evidence,
+  and imports + matches the ones you confirm.
 - **Optional AI assists, all opt-in and fail-safe.** Claude API for
   structuring when the machine is too small for a local model (text only,
   never the image). TypeSafe (Jev) for calibrated expense categorisation and
