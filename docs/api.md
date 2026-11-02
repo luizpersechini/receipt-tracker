@@ -647,8 +647,11 @@ Gmail isn't connected, 502 on a Gmail API error.
 Body `{statement_id, transaction_index, message_id, attachment_ids?}`.
 Runs the same import as `/import`, then pairs the first receipt row without
 an OCR error (else the first row) with the line as a `manual` match and
-flips it to `matched`. Returns the import result plus `match_id`. 404 for
-an unknown statement or index.
+flips it to `matched`. Returns the import result plus `match_id`. When OCR
+failed on every imported row, the rows are kept (re-run OCR from the
+receipts table) but no match is made: `match_id` is null and `warning`
+says why. 404 for an unknown statement or index. PDFs are rasterised
+(first page) by the pipeline, so e-mailed PDF receipts OCR like photos.
 
 ### `POST /api/gmail/render-pdfs`
 

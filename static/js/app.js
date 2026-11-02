@@ -2870,14 +2870,15 @@ const Reconcile = (() => {
       status.textContent = `Importing ${i + 1}/${picks.length} (OCR)…`;
       status.className = "status-msg load";
       try {
-        await api("POST", "/api/gmail/import-and-match", {
+        const res = await api("POST", "/api/gmail/import-and-match", {
           statement_id: reconState.statementId,
           transaction_index: index,
           message_id: cand.id,
           attachment_ids: cand.attachments.length ? null : [],
         });
-        ok++;
         cand.imported = true;
+        if (res.match_id) ok++;
+        else errors.push(`${cand.subject || cand.id}: ${res.warning || "not matched"}`);
       } catch (e) {
         errors.push(`${cand.subject || cand.id}: ${e.message}`);
       }

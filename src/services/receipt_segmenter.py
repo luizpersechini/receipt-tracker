@@ -458,6 +458,15 @@ def _text_cluster_boxes(image_path: str, image_size: tuple) -> list:
 
 
 def _open_as_rgb(image_path: str) -> Image.Image:
+    # PDFs (e-mailed receipts, rendered email bodies) are rasterised on the
+    # fly — first page only; multi-page uploads are split per page upstream.
+    from .pdf_render import is_pdf, render_pdf_to_images
+
+    if is_pdf(image_path):
+        pages = render_pdf_to_images(image_path, max_pages=1)
+        if not pages:
+            raise ValueError(f"PDF has no pages: {image_path}")
+        return pages[0].convert("RGB")
     img = Image.open(image_path)
     # Apply the EXIF orientation FIRST: browsers display the rotated image
     # (image-orientation: from-image), so segmentation boxes and image_size

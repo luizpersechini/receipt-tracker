@@ -198,8 +198,11 @@ def _save_rows(filename: str, filepath: Path, items: list[dict], description: st
 
 def _ocr(filepath: Path) -> list[dict]:
     from .llm_processor import process_with_segments
+    from .pdf_render import is_pdf
 
-    return process_with_segments(str(filepath))
+    # An e-mailed PDF is one receipt per page (page 1 is rasterised by the
+    # pipeline); photos go through the segmenter like any upload.
+    return process_with_segments(str(filepath), skip_segmentation=is_pdf(str(filepath)))
 
 
 def import_message(
@@ -429,8 +432,13 @@ def import_and_match(
         raise LookupError("transaction_index out of range")
     result = import_message(message_id, attachment_ids, service=service)
     rows = result.get("receipts") or []
-    usable = [r for r in rows if not (r.get("metadata") or {}).get("error")] or rows
+    usable = [r for r in rows if not (r.get("metadata") or {}).get("error")]
     match_id = None
+    warning = None
+    if not usable and rows:
+        # OCR failed on every row: keep the rows (re-run OCR from the table)
+        # but don't pin a broken receipt to the line.
+        warning = f"imported but not matched — OCR error: {rows[0]['metadata'].get('error')}"
     if usable:
         rid = usable[0]["receipt_id"]
         match_id = db.save_match(
@@ -442,4 +450,10 @@ def import_and_match(
             transaction_index=transaction_index,
         )
         db.update_receipt_match_status(rid, "matched")
-    return {**result, "statement_id": statement_id, "transaction_index": transaction_index, "match_id": match_id}
+    return {
+        **result,
+        "statement_id": statement_id,
+        "transaction_index": transaction_index,
+        "match_id": match_id,
+        "warning": warning,
+    }

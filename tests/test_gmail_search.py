@@ -268,6 +268,50 @@ def test_find_for_transactions_shares_fetches_and_ranks(monkeypatch):
     assert sorted(fetches) == ["m1", "m2"]  # fetched once, reused for line 1
 
 
+def _tiny_pdf(text="Receipt R$ 550,00") -> bytes:
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page(width=300, height=200)
+    page.insert_text((20, 60), text, fontsize=14)
+    return doc.tobytes()
+
+
+def test_open_as_rgb_rasterises_pdf(tmp_path):
+    from src.services.receipt_segmenter import _open_as_rgb
+
+    f = tmp_path / "r.pdf"
+    f.write_bytes(_tiny_pdf())
+    img = _open_as_rgb(str(f))
+    assert img.mode == "RGB" and img.width > 300  # rendered above 72 dpi
+
+
+def test_import_pdf_attachment_goes_through_pipeline_without_segmentation(env, monkeypatch):
+    svc = FakeGmail([_msg("m9", atts=[("r.pdf", "application/pdf")])], attachments={("m9", "att0"): _tiny_pdf()})
+    seen = {}
+    from src.services import llm_processor
+
+    def fake_pws(path, *, skip_segmentation=False, overrides=None):
+        seen.update(path=path, skip=skip_segmentation)
+        return [{"metadata": {"vendor_name": "PDF"}, "crop": None}]
+
+    monkeypatch.setattr(llm_processor, "process_with_segments", fake_pws)
+    out = gs.import_message("m9", service=svc)
+    assert seen["skip"] is True and seen["path"].endswith("_r.pdf")
+    assert out["receipts"][0]["metadata"]["vendor_name"] == "PDF"
+
+
+def test_import_and_match_skips_match_when_every_row_errored(env, monkeypatch):
+    db = env
+    sid = db.save_statement("s.pdf", "s.pdf", [_txn("X", 1.0)])
+    svc = FakeGmail([_msg("m8", atts=[("r.pdf", "application/pdf")])], attachments={("m8", "att0"): b"%PDF"})
+    monkeypatch.setattr(gs, "_ocr", lambda p: [{"metadata": {"vendor_name": "Unknown", "error": "cannot identify image file"}, "crop": None}])
+    out = gs.import_and_match(sid, 0, "m8", service=svc)
+    assert out["match_id"] is None and "OCR error" in out["warning"]
+    assert db.get_matches_for_statement(sid) == []
+    assert out["receipts"]  # row kept for a manual re-OCR
+
+
 def test_import_and_match_creates_manual_match(env, monkeypatch):
     db = env
     sid = db.save_statement("s.pdf", "s.pdf", [_txn("ANTHROPIC* CLAUDE SUB", 580.44)])
