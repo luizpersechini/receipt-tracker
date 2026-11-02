@@ -27,8 +27,10 @@ your machine by default.
 - **Expense reports.** One-click "Prestação de Contas" PDF with a categorised
   summary, signature footer and receipt-image grid; reimbursement-only
   variant; editable Excel front page; cardholder roster with auto-detection.
-- **Inboxes.** Folder scan for batch processing and optional Gmail ingest for
-  Uber e-receipts.
+- **Inboxes.** Folder scan for batch processing and optional Gmail: automatic
+  ingest of Uber e-receipts, plus an ad-hoc Gmail search that imports any
+  vendor's receipt email (PDF/image attachments, or the rendered body) through
+  the same OCR pipeline. Open statement lines get a "Find in Gmail" shortcut.
 - **Optional AI assists, all opt-in and fail-safe.** Claude API for
   structuring when the machine is too small for a local model (text only,
   never the image). TypeSafe (Jev) for calibrated expense categorisation and

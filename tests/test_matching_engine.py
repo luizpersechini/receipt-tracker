@@ -126,3 +126,18 @@ def test_credit_transactions_never_auto_match():
     result = match_receipts_to_statements(receipts, statements)
     assert result["matches"] == []
     assert len(result["unmatched_receipts"]) == 1
+
+
+def test_cancelled_charge_is_not_offered_to_the_matcher():
+    """A charge netted by an exact estorno needs no receipt — a same-vendor
+    receipt must not be paired with it (and the row isn't 'unmatched')."""
+    receipts = [_receipt(1, date="2026-09-08", vendor="Booking.com", amount=1920.60)]
+    statements = [_statement(10, [
+        {"date": "2026-09-08", "description": "EBN*BOOKING COM", "amount": 1920.60},
+        {"date": "2026-09-08", "description": "EBN*BOOKING COM", "amount": -1920.60,
+         "raw_data": {"credit": True}},
+    ])]
+    result = match_receipts_to_statements(receipts, statements)
+    assert result["matches"] == []
+    assert [r["id"] for r in result["unmatched_receipts"]] == [1]
+    assert result["unmatched_transactions"] == []

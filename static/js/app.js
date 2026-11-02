@@ -980,7 +980,12 @@ async function loadStatements() {
       // matched/open arithmetic (the bill total above still nets them).
       const isCredit = (t) =>
         parseFloat(t.amount) < 0 || !!(t.raw_data && t.raw_data.credit);
-      const expectable = txns.filter((t) => !isCredit(t)).length;
+      // Charges netted by an exact estorno (server-computed, may pair with a
+      // refund on another bill) don't expect a receipt either.
+      const cancelled = new Set(s.cancelled_indices || []);
+      const expectable = txns.filter(
+        (t, i) => !isCredit(t) && !cancelled.has(i),
+      ).length;
       const matched = matchedCount[s.id] || 0;
       const matchedChip =
         matched === 0
@@ -1709,9 +1714,10 @@ const Reconcile = (() => {
   }
 
   function _renderHeaderCounts() {
-    // Credits/estornos never get receipts — keep them out of the
-    // paired/open arithmetic so a statement with refunds can read complete.
-    const countable = reconState.txns.filter((t) => !t.credit);
+    // Credits/estornos and charges cancelled by one never get receipts —
+    // keep them out of the paired/open arithmetic so a statement with
+    // refunds can read complete.
+    const countable = reconState.txns.filter((t) => !t.settled);
     const total = countable.length;
     const matched = countable.filter((t) => _txnMatches(t).length).length;
     $("reconPairedNum").textContent = matched;
@@ -1748,7 +1754,7 @@ const Reconcile = (() => {
       $("progressChips").innerHTML = "";
       return;
     }
-    const countable = reconState.txns.filter((t) => !t.credit);
+    const countable = reconState.txns.filter((t) => !t.settled);
     const matched = countable.filter((t) => _txnMatches(t).length).length;
     const justified = countable.filter(
       (t) => !_txnMatches(t).length && t.note,
@@ -1847,11 +1853,12 @@ const Reconcile = (() => {
     // search / date / amount filters.
     const filtered = reconState.txns
       .filter((t) =>
-        // Credits behave like matched rows for the focus toggle — they
-        // don't need pairing, so hide them from the "still open" view.
+        // Credits and cancelled charges behave like matched rows for the
+        // focus toggle — they don't need pairing, so hide them from the
+        // "still open" view.
         reconState.showMatchedTxns
           ? true
-          : _txnMatches(t).length === 0 && !t.credit,
+          : _txnMatches(t).length === 0 && !t.settled,
       )
       .filter((t) => _matchesTxnFilter(t, reconState.txnFilter));
     if (!reconState.txns.length) {
@@ -1869,7 +1876,7 @@ const Reconcile = (() => {
     if (
       !filtered.length &&
       !reconState.showMatchedTxns &&
-      reconState.txns.every((t) => t.credit || _txnMatches(t).length > 0)
+      reconState.txns.every((t) => t.settled || _txnMatches(t).length > 0)
     ) {
       host.innerHTML = `
         <div class="recon-empty-small recon-all-matched">
@@ -1901,6 +1908,21 @@ const Reconcile = (() => {
     const ms = _txnMatches(t);
     const isMatched = ms.length > 0;
     const cls = ["recon-txn", isMatched ? "matched" : ""].join(" ");
+    // Other side of an exact charge ↔ estorno pair. On the charge it means
+    // "no receipt needed"; on the credit it just says what it refunds.
+    const cb = t.cancelled_by;
+    const cbWhere = cb
+      ? `${_fmt.date(cb.date)}${
+          cb.statement_id !== reconState.statementId
+            ? ` · ${_esc(cb.statement_filename || "outra fatura")}`
+            : ""
+        }`
+      : "";
+    const cancelHtml = !cb
+      ? ""
+      : t.credit
+        ? `<span class="badge badge-gray" title="Estorna o lançamento de ${cbWhere}">Estorna lançamento</span>`
+        : `<span class="badge badge-gray" title="Cancelado pelo estorno de ${cbWhere} — não precisa de comprovante">Cancelado · estorno ${cbWhere}</span>`;
     // International rows: show the native amount as the headline (matches
     // what the user's receipt shows) and the BRL bill total as a smaller
     // secondary line. Domestic rows stay single-line BRL.
@@ -1943,11 +1965,12 @@ const Reconcile = (() => {
           ${t.city ? `<span class="recon-city">${_esc(t.city)}</span>` : ""}
           ${isIntl ? `<span class="badge badge-accent recon-cur">${_esc(t.original_currency)}</span>` : ""}
           ${t.credit ? `<span class="badge badge-green" title="Crédito/estorno — não precisa de comprovante">Estorno</span>` : ""}
+          ${cancelHtml}
           ${progressHtml}
         </div>
         ${_renderFormFields(t)}
         ${ms.map(_renderMatchTag).join("")}
-        ${isMatched ? "" : _renderNoteArea(t)}
+        ${isMatched || (cb && !t.credit) ? "" : _renderNoteArea(t)}
       </div>
     `;
   }
@@ -2030,7 +2053,40 @@ const Reconcile = (() => {
     return `
       <button class="recon-note-add recon-note-trigger" data-index="${t.index}">
         + justification (no receipt)
+      </button>${_renderGmailFind(t)}`;
+  }
+
+  // Open-item helper: search the connected Gmail for this charge's receipt
+  // (vendor words + a date window around the posting date). Hidden until
+  // the Gmail status call reports a working token.
+  function _renderGmailFind(t) {
+    if (!window.gmailSearchAvailable) return "";
+    return `
+      <button class="recon-note-add recon-gmail-find" data-index="${t.index}" title="Search Gmail for this charge's receipt">
+        Find in Gmail
       </button>`;
+  }
+
+  function _gmailQueryForTxn(t) {
+    const words = (t.description || "")
+      .split(/[^A-Za-zÀ-ÿ]+/)
+      .filter((w) => w.length >= 3)
+      .slice(0, 3);
+    // OR the words: descriptors carry noise ("SUB", "COM") that the email
+    // rarely contains; the date window below keeps the OR narrow.
+    let q =
+      words.length > 1
+        ? `(${words.join(" OR ")})`
+        : words[0] || (t.description || "").trim();
+    if (t.date) {
+      const d = new Date(t.date + "T00:00:00");
+      const f = (x) =>
+        `${x.getFullYear()}/${String(x.getMonth() + 1).padStart(2, "0")}/${String(x.getDate()).padStart(2, "0")}`;
+      const a = new Date(d.getTime() - 4 * 864e5);
+      const b = new Date(d.getTime() + 7 * 864e5);
+      q += ` after:${f(a)} before:${f(b)}`;
+    }
+    return q;
   }
 
   function _renderMatchTag(m) {
@@ -2336,6 +2392,13 @@ const Reconcile = (() => {
     });
     document.querySelectorAll(".recon-unlink").forEach((el) => {
       el.addEventListener("click", () => _onUnlink(+el.dataset.match));
+    });
+    document.querySelectorAll(".recon-gmail-find").forEach((el) => {
+      el.addEventListener("click", () => {
+        const t = reconState.txns.find((x) => x.index === +el.dataset.index);
+        if (t && window.gmailSearchFromRecon)
+          window.gmailSearchFromRecon(_gmailQueryForTxn(t));
+      });
     });
     // Justification editor (open items).
     document.querySelectorAll(".recon-note-trigger").forEach((el) => {
@@ -5088,6 +5151,135 @@ document.querySelectorAll(".nav-item[data-tab]").forEach((btn) => {
   });
 });
 
+// ─── Gmail search (any vendor) ────────────────────────────────────────────────
+// Read-only search over the connected mailbox (promotions/social excluded,
+// imported messages hidden by default) and a per-message import that runs
+// the picked attachments — or the rendered email body — through OCR.
+const gmailSearch = {
+  messages: [],
+};
+
+function _gmailRenderResults() {
+  const host = $("gmailSearchResults");
+  const actions = $("gmailSearchActions");
+  if (!gmailSearch.messages.length) {
+    host.innerHTML = `<div class="status-msg">No matching emails.</div>`;
+    actions.style.display = "none";
+    return;
+  }
+  host.innerHTML = gmailSearch.messages
+    .map((m) => {
+      const atts = m.attachments.length
+        ? `<div class="gm-atts">${m.attachments
+            .map(
+              (a) =>
+                `<label title="${escHtml(a.mime)} · ${Math.round(a.size / 1024)} KB"><input type="checkbox" class="gm-att" data-msg="${escHtml(m.id)}" value="${escHtml(a.id)}" checked /> ${escHtml(a.filename)}</label>`,
+            )
+            .join("")}</div>`
+        : `<div class="gm-atts"><span class="badge badge-gray" title="No PDF/image attached — the email body will be rendered to a PDF">${m.has_html ? "email body" : "no content"}</span></div>`;
+      return `<div class="gmail-msg ${m.imported ? "imported" : ""}" data-id="${escHtml(m.id)}">
+        <input type="checkbox" class="gm-pick" value="${escHtml(m.id)}" ${m.imported || (!m.attachments.length && !m.has_html) ? "" : "checked"} />
+        <div class="gm-top"><span class="gm-date">${escHtml(m.date || "")}</span><span class="gm-subject" title="${escHtml(m.subject || "")}">${escHtml(m.subject || "(no subject)")}</span>${m.imported ? `<span class="badge badge-gray">imported</span>` : ""}</div>
+        <div class="gm-from">${escHtml(m.from || "")}</div>
+        ${atts}
+        <div class="gm-snippet">${escHtml(m.snippet || "")}</div>
+      </div>`;
+    })
+    .join("");
+  actions.style.display = "";
+}
+
+async function runGmailSearch(query) {
+  const q = (query != null ? query : $("gmailSearchQ").value).trim();
+  if (q.length < 2) return;
+  $("gmailSearchQ").value = q;
+  const btn = $("gmailSearchBtn");
+  const status = $("gmailSearchStatus");
+  btn.disabled = true;
+  status.textContent = "Searching…";
+  status.className = "status-msg load";
+  try {
+    const qs = new URLSearchParams({
+      q,
+      max_results: 25,
+      include_imported: $("gmailSearchIncludeImported").checked,
+    });
+    const res = await api("GET", `/api/gmail/search?${qs}`);
+    gmailSearch.messages = res.messages || [];
+    _gmailRenderResults();
+    status.textContent = `${gmailSearch.messages.length} email(s) · ${res.query}`;
+    status.className = "status-msg";
+  } catch (e) {
+    status.textContent = e.message;
+    status.className = "status-msg err";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function importGmailSelection() {
+  const picked = [...document.querySelectorAll(".gm-pick:checked")].map(
+    (el) => el.value,
+  );
+  if (!picked.length) return;
+  const btn = $("gmailImportBtn");
+  const status = $("gmailSearchStatus");
+  btn.disabled = true;
+  let done = 0;
+  let rows = 0;
+  const errors = [];
+  for (const id of picked) {
+    const m = gmailSearch.messages.find((x) => x.id === id);
+    const ticked = [
+      ...document.querySelectorAll(`.gm-att[data-msg="${CSS.escape(id)}"]:checked`),
+    ].map((el) => el.value);
+    // No attachments at all → null (server renders the body); some
+    // attachments but none ticked → [] (server renders the body too).
+    const attachment_ids = m && m.attachments.length ? ticked : null;
+    status.textContent = `Importing ${done + 1}/${picked.length}… (OCR)`;
+    status.className = "status-msg load";
+    try {
+      const res = await api("POST", "/api/gmail/import", {
+        message_id: id,
+        attachment_ids,
+      });
+      rows += (res.receipts || []).length;
+      if (m) m.imported = true;
+      done++;
+    } catch (e) {
+      errors.push(`${(m && m.subject) || id}: ${e.message}`);
+    }
+  }
+  btn.disabled = false;
+  _gmailRenderResults();
+  status.textContent =
+    `Imported ${done} email(s) → ${rows} receipt row(s).` +
+    (errors.length ? ` Failed: ${errors.join(" · ")}` : "");
+  status.className = errors.length ? "status-msg warn" : "status-msg ok";
+  if (rows) {
+    loadReceipts();
+    loadStats();
+  }
+}
+
+$("gmailSearchBtn").addEventListener("click", () => runGmailSearch());
+$("gmailSearchQ").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runGmailSearch();
+});
+$("gmailSearchIncludeImported").addEventListener("change", () => {
+  if (gmailSearch.messages.length) runGmailSearch();
+});
+$("gmailImportBtn").addEventListener("click", importGmailSelection);
+
+// Entry point from the reconcile board: jump to Receipts (where the side
+// panel lives) and run the search for that charge.
+window.gmailSearchFromRecon = (query) => {
+  const nav = document.querySelector('.nav-item[data-tab="receipts"]');
+  if (nav) nav.click();
+  runGmailSearch(query);
+  $("gmailSearchCard").scrollIntoView({ behavior: "smooth", block: "start" });
+};
+
 // ─── Upload receipt ───────────────────────────────────────────────────────────
 // Holds the full FileList the user selected. Bulk-aware: any length ≥ 1
 // flows through the same queue runner below.
@@ -5549,6 +5741,10 @@ async function loadGmailStatus() {
   const hint = $("gmailHint");
   const connectBtn = $("gmailConnectBtn");
   const syncGroup = $("gmailConnectedGroup");
+
+  // The ad-hoc search card needs a working token too.
+  window.gmailSearchAvailable = !!st.configured;
+  $("gmailSearchCard").style.display = st.configured ? "" : "none";
 
   if (st.configured) {
     badge.textContent = "Connected";

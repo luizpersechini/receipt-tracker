@@ -208,6 +208,18 @@ receipt on the Receipts tab. Overrides persist per `(statement,
 transaction)` in `data/statement_categories.json`. See
 [reports.md](reports.md#editing-a-charges-category).
 
+## Finding a receipt in Gmail
+
+Open items show a **Find in Gmail** button next to the justification one
+(only when the Gmail connection from the Receipts side panel is working).
+It jumps to the Receipts tab and runs a search built from the charge: the
+first three alphabetic words of the descriptor, OR-ed, plus a window from
+four days before to seven days after the posting date (`(ANTHROPIC OR
+CLAUDE OR SUB) after:2026/09/04 before:2026/09/15`). Promotions and social mail are
+excluded and already-imported messages are hidden. Tick the emails (and
+which attachments) to import; emails without a PDF/image are rendered from
+their HTML body. Imported rows land in the receipts pane for drag-and-drop.
+
 ## Justifying open items (no receipt)
 
 When a transaction has no receipt and you can't match one — you lost it,
@@ -247,6 +259,15 @@ manually. Real matches are usually 0.8+.
   get a green "Estorno" badge, are hidden from the "still needs
   pairing" view, and don't count toward paired/open — a statement
   containing refunds can read complete without them.
+- **A charge and its exact refund cancel each other.** When a credit has
+  the same description and the same amount (to the cent, opposite sign)
+  as a charge within 60 days, the pair nets to zero: the charge gets a
+  gray "Cancelado · estorno <date>" badge, needs no receipt, is hidden
+  with the matched rows, and leaves the open count. The refund may sit
+  on a later statement (the badge then names that file). Pairing is
+  computed on read from the parsed rows — nothing is stored — and a
+  charge that already has a receipt matched is never cancelled. Logic in
+  `services/statement_cancellations.py`.
 - **PDF statement re-parses preserve matches by content.** The reparse
   endpoint replaces `statements.transactions` and remaps matches +
   per-line overrides through a (date + amount + description) mapping

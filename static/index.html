@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/css/app.css?v=36" />
+    <link rel="stylesheet" href="/static/css/app.css?v=38" />
   </head>
   <body>
     <!-- ── NAV ────────────────────────────────────────────────────────────────── -->
@@ -568,6 +568,29 @@
               </details>
             </div>
             <div class="status-msg" id="gmailStatus"></div>
+          </div>
+
+          <!-- Ad-hoc Gmail search: find any vendor's receipt email and import it -->
+          <div class="card" id="gmailSearchCard" style="display: none">
+            <div class="card-head">Search Gmail</div>
+            <div class="gmail-search-row">
+              <input
+                type="text"
+                id="gmailSearchQ"
+                placeholder="vendor words, e.g. anthropic receipt after:2026/09/04"
+                autocomplete="off"
+              />
+              <button class="btn btn-primary btn-sm" id="gmailSearchBtn">Search</button>
+            </div>
+            <label class="opt-check">
+              <input type="checkbox" id="gmailSearchIncludeImported" />
+              Include already imported
+            </label>
+            <div id="gmailSearchResults" class="gmail-results"></div>
+            <div class="gmail-search-actions" id="gmailSearchActions" style="display: none">
+              <button class="btn btn-primary btn-sm" id="gmailImportBtn">Import selected</button>
+            </div>
+            <div class="status-msg" id="gmailSearchStatus"></div>
           </div>
 
           <!-- Folder scan -->
@@ -1979,6 +2002,6 @@
       <img id="lbImg" alt="Receipt" style="display: none" />
     </div>
 
-    <script src="/static/js/app.js?v=67"></script>
+    <script src="/static/js/app.js?v=69"></script>
   </body>
 </html>

@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from difflib import SequenceMatcher
 
+from . import statement_cancellations
+
 
 def match_receipts_to_statements(
     receipts: list,
@@ -26,6 +28,12 @@ def match_receipts_to_statements(
       }
     """
     locked_txns = locked_txns or {}
+    # Charges netted by an exact estorno need no receipt — leave them out
+    # of the pool so a same-vendor receipt isn't offered for a cancelled row.
+    cancelled = statement_cancellations.find_cancellations(
+        statements,
+        {(sid, i) for sid, idxs in locked_txns.items() for i in idxs},
+    )
     all_transactions = []
     for statement in statements:
         # Preserve the txn's position inside its parent statement so the
@@ -35,6 +43,8 @@ def match_receipts_to_statements(
         for txn_index, txn in enumerate(statement.get("transactions", [])):
             if txn_index in locked:
                 continue  # already paired manually — don't offer it
+            if (statement["id"], txn_index) in cancelled:
+                continue  # charge cancelled by its estorno — no receipt expected
             try:
                 if float(txn.get("amount") or 0) < 0:
                     # Credit/estorno — money coming back, no receipt expected.

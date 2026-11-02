@@ -37,6 +37,7 @@ from ..db import database as db
 from . import (
     report_profile,
     report_users,
+    statement_cancellations,
     statement_categories,
     statement_costcenters,
     statement_labels,
@@ -324,6 +325,13 @@ def _assemble(statement_id: int) -> dict[str, Any]:
         raise ValueError(f"Statement {statement_id} not found")
 
     matches = db.get_matches_for_statement(statement_id)
+    # Charges netted by an exact estorno (same or a later bill): no receipt
+    # and no justification blank — the row prints "(cancelado por estorno)".
+    all_statements = db.get_all_statements()
+    cancelled = statement_cancellations.find_cancellations(
+        all_statements, statement_cancellations.locked_from_matches(db.get_all_matches())
+    )
+    statements_by_id = {s["id"]: s for s in all_statements}
     notes = statement_notes.get_notes(statement_id)
     cat_overrides = statement_categories.get_categories(statement_id)
     label_overrides = statement_labels.get_labels(statement_id)
@@ -359,10 +367,19 @@ def _assemble(statement_id: int) -> dict[str, Any]:
         col = _bucket(category, label)
 
         is_credit = amount < 0 or bool((t.get("raw_data") or {}).get("credit"))
+        partner = (
+            None
+            if is_credit
+            else statement_cancellations.partner_info(
+                cancelled.get((statement_id, i)), statements_by_id
+            )
+        )
         row = {
             "index": i,  # transaction_index — used by the editable-table modal
             "receipt_ids": [m.get("receipt_id") for m in ms],
             "credit": is_credit,
+            # Charge netted by an estorno → date of the refund (None otherwise).
+            "cancelled_by": _fmt_date_br(partner["date"]) if partner else None,
             "date": _fmt_date_br(t.get("date")),
             "conta": "",  # filled from profile below
             # Detalhamento: per-line override → meaningful matched-receipt
@@ -474,6 +491,11 @@ def _front_page_html(data: dict, profile: dict) -> str:
             # Refund — money back. No receipt is expected, so no
             # justification blank; the negative amount nets the column.
             detalhe += ' <span class="noreceipt">(estorno / crédito)</span>'
+        elif r.get("cancelled_by"):
+            # Netted by a refund — nothing to justify; the pair sums to zero.
+            detalhe += (
+                f' <span class="noreceipt">(cancelado por estorno em {escape(r["cancelled_by"])})</span>'
+            )
         elif not r["matched"]:
             note = (r.get("note") or "").strip()
             if note:
@@ -631,7 +653,11 @@ def _open_items_html(data: dict) -> str:
     """A page listing the card charges with no receipt, each with its
     justification below. Sits between the front-page spreadsheet and the
     receipt-image grid. Renders nothing when every charge is matched."""
-    open_rows = [r for r in data.get("rows", []) if not r.get("matched") and not r.get("credit")]
+    open_rows = [
+        r
+        for r in data.get("rows", [])
+        if not r.get("matched") and not r.get("credit") and not r.get("cancelled_by")
+    ]
     if not open_rows:
         return ""
 
@@ -900,6 +926,7 @@ def report_rows_view(
                 "receipt_ids": r["receipt_ids"],
                 "matched": r["matched"],
                 "credit": r.get("credit", False),
+                "cancelled_by": r.get("cancelled_by"),
                 "date": r["date"],
                 "cost_center": r["cost_center"],  # raw (receipt-joined or override)
                 "cost_center_effective": r["cost_center"] or default_cc,

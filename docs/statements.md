@@ -49,6 +49,14 @@ TOTAL, print as `(estorno / crédito)` instead of a justification blank,
 and are excluded from auto-matching and from the board's open-item
 counts — a refund never expects a receipt.
 
+When a credit exactly offsets a charge (same normalised description,
+same absolute amount, within 60 days, on this or any other statement),
+the **charge** is cancelled too: it leaves the open-item counts, the
+matcher skips it, and the report prints `(cancelado por estorno em
+DD/MM/AAAA)` in place of the justification blank. See
+`services/statement_cancellations.py`; the board and the statements
+list read the pairing from `cancelled_by` / `cancelled_indices`.
+
 ## The Itaú PDF parser
 
 ### Why it's not trivial

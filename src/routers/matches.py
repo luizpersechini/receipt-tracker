@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ..db import database as db
 from ..services import (
+    statement_cancellations,
     statement_categories,
     statement_costcenters,
     statement_labels,
@@ -171,6 +172,14 @@ async def get_statement_transactions(statement_id: int):
     cat_overrides = await asyncio.to_thread(statement_categories.get_categories, statement_id)
     label_overrides = await asyncio.to_thread(statement_labels.get_labels, statement_id)
     cc_overrides = await asyncio.to_thread(statement_costcenters.get_cost_centers, statement_id)
+    # Charge ↔ estorno pairs net to zero and need no receipt. A refund can
+    # post on a later bill, so pair across every statement.
+    all_statements = await asyncio.to_thread(db.get_all_statements)
+    all_matches = await asyncio.to_thread(db.get_all_matches)
+    cancelled = statement_cancellations.find_cancellations(
+        all_statements, statement_cancellations.locked_from_matches(all_matches)
+    )
+    statements_by_id = {s["id"]: s for s in all_statements}
     # Group matches by transaction_index — N:1 is allowed now (multiple
     # receipts cumulatively pay one statement charge, e.g. hotel folio
     # split into room + restaurant + parking receipts).
@@ -236,6 +245,15 @@ async def get_statement_transactions(statement_id: int):
             # Estorno/refund rows: negative amount, no receipt expected. The
             # board styles them and leaves them out of the open-item counts.
             "credit": bool(raw.get("credit")) or _is_negative(t.get("amount")),
+            # Other side of an exact charge ↔ estorno pair (None when not
+            # cancelled). `settled` = nothing to pair: a credit, or a charge
+            # netted by its refund — the board counts it like a matched row.
+            "cancelled_by": statement_cancellations.partner_info(
+                cancelled.get((statement_id, i)), statements_by_id
+            ),
+            "settled": bool(raw.get("credit"))
+            or _is_negative(t.get("amount"))
+            or (statement_id, i) in cancelled,
             "currency": "BRL",
             "category": category,
             "category_locked": category_locked,

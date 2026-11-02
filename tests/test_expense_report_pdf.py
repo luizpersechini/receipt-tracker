@@ -812,3 +812,34 @@ def test_update_receipts_match_status_bulk(report_env):
     assert db.update_receipts_match_status([r1], "pending") == 1
     assert db.get_receipt_by_id(r1)["match_status"] == "pending"
     assert db.update_receipts_match_status([], "reimbursed") == 0
+
+
+def test_cancelled_charge_prints_without_justification(report_env):
+    """A charge netted by its exact estorno (here on a LATER statement) has
+    no receipt to show and nothing to justify: it prints '(cancelado por
+    estorno em …)' and stays off the open-items page."""
+    db = report_env
+    sid = db.save_statement(
+        "setembro.pdf",
+        "setembro.pdf",
+        [
+            {"date": "2026-09-08", "description": "EBN*BOOKING COM", "amount": 1920.60, "category": "lodging", "raw_data": {}},
+            {"date": "2026-09-09", "description": "PADARIA", "amount": 12.0, "category": "meals", "raw_data": {}},
+        ],
+    )
+    db.save_statement(
+        "outubro.pdf",
+        "outubro.pdf",
+        [{"date": "2026-10-02", "description": "EBN*BOOKING COM", "amount": -1920.60, "category": "lodging", "raw_data": {"credit": True}}],
+    )
+    data = erp._assemble(sid)
+    by_idx = {r["index"]: r for r in data["rows"]}
+    assert by_idx[0]["cancelled_by"] == "02/10/2026"
+    assert by_idx[1]["cancelled_by"] is None
+
+    front = erp._front_page_html(data, {"expense_kind": "cartao"})
+    assert "cancelado por estorno em 02/10/2026" in front
+    assert front.count("sem comprovante") == 1  # only the PADARIA line
+    open_html = erp._open_items_html(data)
+    assert "PADARIA" in open_html and "BOOKING" not in open_html
+    assert erp.report_rows_view(sid, None, None)["rows"][0]["cancelled_by"] == "02/10/2026"

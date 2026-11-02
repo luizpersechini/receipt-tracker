@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..config import settings
+from ..schemas.gmail import GmailImportRequest
 from ..services import gmail_ingest
 
 router = APIRouter(prefix="/api/gmail", tags=["gmail"])
@@ -197,3 +198,47 @@ async def reset_labels(only_unimported: bool = Query(True)):
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Reset failed"))
     return JSONResponse(result)
+
+
+# ─── Ad-hoc search + import (any vendor) ─────────────────────────────────────
+
+
+@router.get("/search")
+async def gmail_search(
+    q: str = Query(..., min_length=2, max_length=500, description="Gmail query"),
+    max_results: int = Query(25, ge=1, le=100),
+    include_imported: bool = Query(False, description="Also list messages already imported"),
+):
+    """Read-only Gmail search. Promotions/social are excluded and messages
+    already labelled as processed are hidden unless `include_imported`."""
+    if not gmail_ingest.is_configured():
+        raise HTTPException(status_code=400, detail="Gmail isn't connected.")
+    from ..services import gmail_search as gs
+
+    try:
+        return JSONResponse(
+            await asyncio.to_thread(gs.search, q, max_results, include_imported=include_imported)
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("gmail search failed")
+        raise HTTPException(status_code=502, detail=f"Gmail search failed: {e}")
+
+
+@router.post("/import")
+async def gmail_import(body: GmailImportRequest):
+    """Import one email as receipt row(s) through the OCR pipeline. See
+    `gmail_search.import_message` for the attachment / body rules."""
+    if not gmail_ingest.is_configured():
+        raise HTTPException(status_code=400, detail="Gmail isn't connected.")
+    from ..services import gmail_search as gs
+    from .receipts import _ocr_semaphore
+
+    try:
+        async with _ocr_semaphore:
+            result = await asyncio.to_thread(gs.import_message, body.message_id, body.attachment_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("gmail import failed")
+        raise HTTPException(status_code=502, detail=f"Gmail import failed: {e}")
+    return JSONResponse({"success": True, **result})

@@ -213,8 +213,12 @@ Response: `{statement_id, filename, transaction_count}`.
 
 ### `GET /api/statements`
 
-List of `{id, filename, filepath, transactions, uploaded_at}`. Note:
-`transactions` is a parsed array, not a JSON string.
+List of `{id, filename, filepath, transactions, uploaded_at,
+cancelled_indices}`. Note: `transactions` is a parsed array, not a JSON
+string. `cancelled_indices` lists the transaction indices (charges and
+credits) that belong to an exact charge ↔ estorno pair, possibly with the
+other side on another statement; the list UI skips them when counting
+receipts expected.
 
 ### `DELETE /api/statements/{id}`
 
@@ -253,7 +257,11 @@ matches. A transaction can hold **multiple** matches (cumulative
 pairing), so read `matches` (array). `match` is the first entry,
 retained for older callers. `credit` is true for estorno/refund rows
 (negative `amount` — no receipt expected; the board badges them and
-keeps them out of the open-item counts). `category` is the
+keeps them out of the open-item counts). `cancelled_by` is
+`{statement_id, index, date, statement_filename}` for the other side of
+an exact charge ↔ estorno pair (same description and amount within 60
+days, any statement), else `null`; `settled` is true when the row needs
+no receipt (a credit, or a charge cancelled by its refund). `category` is the
 **effective** category
 (matched → receipt's; else override; else parser) and `category_locked`
 is true when a receipt is driving it; `note` is the open-item
@@ -602,6 +610,27 @@ never collapsed. Logic in `gmail_ingest.sync_new_receipts`.
 
 Returns `{success, imported, upgraded, skipped, scanned, errors,
 unmatched, business_only, attach_only}`.
+
+### `GET /api/gmail/search`
+
+Query: `q` (Gmail query, required), `max_results` (1–100, default 25),
+`include_imported` (default false). Read-only. The server appends
+`-category:promotions -category:social` and, unless `include_imported`,
+`-label:<GMAIL_PROCESSED_LABEL>`. Returns `{query, messages:[{id,
+thread_id, date, from, subject, snippet, attachments:[{id, filename, mime,
+size}], has_html, imported}]}`. Only PDF/JPEG/PNG/HEIC/WebP attachments are
+listed. 400 when Gmail isn't connected, 502 on a Gmail API error.
+
+### `POST /api/gmail/import`
+
+Body `{message_id, attachment_ids}`. `attachment_ids` omitted/null → every
+listed attachment is imported; `[]` → attachments are ignored and the HTML
+body is rendered to a PDF (WeasyPrint) instead. Each file is saved under
+`data/receipts/` and run through the OCR pipeline exactly like an upload
+(multi-receipt pages become one row per crop). The message is then labelled
+`GMAIL_PROCESSED_LABEL`. Returns `{success, message_id, files, receipts:[{
+receipt_id, filename, metadata}]}`. 422 when the email has neither an
+importable attachment nor an HTML body. Logic in `services/gmail_search.py`.
 
 ### `POST /api/gmail/render-pdfs`
 

@@ -103,6 +103,16 @@ async def upload_statement(file: UploadFile = File(...)):
 @router.get("/statements")
 async def get_statements():
     statements = await asyncio.to_thread(db.get_all_statements)
+    # Charges cancelled by an exact estorno (possibly on another bill) don't
+    # expect a receipt — the list's "matched / expectable" chip skips them.
+    from ..services import statement_cancellations
+
+    matches = await asyncio.to_thread(db.get_all_matches)
+    cancelled = statement_cancellations.find_cancellations(
+        statements, statement_cancellations.locked_from_matches(matches)
+    )
+    for s in statements:
+        s["cancelled_indices"] = sorted(i for (sid, i) in cancelled if sid == s["id"])
     return JSONResponse({"statements": statements})
 
 
