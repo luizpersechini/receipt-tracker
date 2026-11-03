@@ -623,9 +623,13 @@ listed. 400 when Gmail isn't connected, 502 on a Gmail API error.
 
 ### `POST /api/gmail/import`
 
-Body `{message_id, attachment_ids}`. `attachment_ids` omitted/null → every
-listed attachment is imported; `[]` → attachments are ignored and the HTML
-body is rendered to a PDF (WeasyPrint) instead. Each file is saved under
+Body `{message_id, attachment_ids}`. `attachment_ids` omitted/null → one
+attachment is imported: the file named like a receipt (`receipt`,
+`recibo`, `comprovante`), else an invoice-ish name, else the first (an
+Anthropic email carries invoice + receipt PDFs for one charge; importing
+both made duplicate rows). Pass explicit ids to import several. `[]` →
+attachments are ignored and the HTML body is rendered to a PDF
+(WeasyPrint) instead. Each file is saved under
 `data/receipts/` and run through the OCR pipeline exactly like an upload
 (multi-receipt pages become one row per crop). The message is then labelled
 `GMAIL_PROCESSED_LABEL`. Returns `{success, message_id, files, receipts:[{

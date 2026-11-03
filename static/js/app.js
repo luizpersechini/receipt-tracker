@@ -1187,7 +1187,7 @@ function _renderStmtDetail() {
              </div>`
           : t.note
             ? `<span class="stmt-note-trigger" data-idx="${t.index}" style="cursor:pointer" title="Click to edit">${_esc(t.note)}</span>`
-            : `<span class="stmt-note-trigger" data-idx="${t.index}" style="cursor:pointer;color:var(--text-3)">+ comment</span>`;
+            : `<span class="stmt-note-trigger stmt-note-add" data-idx="${t.index}" style="cursor:pointer;color:var(--text-3)">+ comment</span>`;
       return `<tr>
         <td class="col-date">${fmt.date(t.date)}</td>
         <td class="col-desc" title="${_esc(t.description)}">${_esc(t.description)}</td>
@@ -5319,11 +5319,17 @@ function _gmailRenderResults() {
   }
   host.innerHTML = gmailSearch.messages
     .map((m) => {
+      // One receipt per email by default: tick the "receipt"-named file
+      // (then invoice-ish), else the first; the rest stay available.
+      const preferred =
+        m.attachments.find((a) => /receipt|recibo|comprovante/i.test(a.filename)) ||
+        m.attachments.find((a) => /nota|nf-?e|fatura|invoice/i.test(a.filename)) ||
+        m.attachments[0];
       const atts = m.attachments.length
         ? `<div class="gm-atts">${m.attachments
             .map(
               (a) =>
-                `<label title="${escHtml(a.mime)} · ${Math.round(a.size / 1024)} KB"><input type="checkbox" class="gm-att" data-msg="${escHtml(m.id)}" value="${escHtml(a.id)}" checked /> ${escHtml(a.filename)}</label>`,
+                `<label title="${escHtml(a.mime)} · ${Math.round(a.size / 1024)} KB"><input type="checkbox" class="gm-att" data-msg="${escHtml(m.id)}" value="${escHtml(a.id)}" ${a === preferred ? "checked" : ""} /> ${escHtml(a.filename)}</label>`,
             )
             .join("")}</div>`
         : `<div class="gm-atts"><span class="badge badge-gray" title="No PDF/image attached — the email body will be rendered to a PDF">${m.has_html ? "email body" : "no content"}</span></div>`;

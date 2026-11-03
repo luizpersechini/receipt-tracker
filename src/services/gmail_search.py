@@ -159,6 +159,23 @@ def search(q: str, max_results: int = 25, *, include_imported: bool = False, ser
 # ─── Import ──────────────────────────────────────────────────────────────────
 
 
+_PREFERRED_NAME = re.compile(r"receipt|recibo|comprovante|nota|nf-?e|fatura|invoice", re.I)
+
+
+def preferred_attachment(atts: list[dict]) -> Optional[dict]:
+    """One email, one receipt: when a message carries several importable
+    files (Anthropic sends invoice + receipt PDFs for the same charge), pick
+    the one whose name says "receipt" (then invoice-ish names), else the
+    first. Callers that want more pass explicit attachment ids."""
+    if not atts:
+        return None
+    for pat in (r"receipt|recibo|comprovante", r"nota|nf-?e|fatura|invoice"):
+        for a in atts:
+            if re.search(pat, a.get("filename") or "", re.I):
+                return a
+    return atts[0]
+
+
 def fetch_attachment(service, msg_id: str, att_id: str) -> bytes:
     res = (
         service.users()
@@ -227,6 +244,10 @@ def import_message(
     if attachment_ids is not None:
         wanted = set(attachment_ids)
         atts = [a for a in atts if a["id"] in wanted]
+    else:
+        # Default = one receipt per email, not every file it carries.
+        pick = preferred_attachment(atts)
+        atts = [pick] if pick else []
 
     saved: list[dict] = []
     files: list[str] = []

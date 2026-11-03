@@ -137,6 +137,27 @@ def test_search_requires_connection(monkeypatch):
         gs.search("x")
 
 
+def test_preferred_attachment_one_receipt_per_email():
+    atts = [{"id": "1", "filename": "Invoice-NNU4NMUN-0020.pdf"}, {"id": "2", "filename": "Receipt-2105-7013-0745.pdf"}]
+    assert gs.preferred_attachment(atts)["id"] == "2"
+    assert gs.preferred_attachment([atts[0], {"id": "3", "filename": "logo.png"}])["id"] == "1"
+    assert gs.preferred_attachment([{"id": "9", "filename": "scan.jpg"}])["id"] == "9"
+    assert gs.preferred_attachment([]) is None
+
+
+def test_import_default_takes_only_the_preferred_attachment(env, monkeypatch):
+    svc = FakeGmail(
+        [_msg("m7", atts=[("Invoice-1.pdf", "application/pdf"), ("Receipt-1.pdf", "application/pdf")])],
+        attachments={("m7", "att0"): b"I", ("m7", "att1"): b"R"},
+    )
+    monkeypatch.setattr(gs, "_ocr", lambda p: [{"metadata": {"vendor_name": "A"}, "crop": None}])
+    out = gs.import_message("m7", service=svc)
+    assert len(out["files"]) == 1 and out["files"][0].endswith("_Receipt-1.pdf")
+    # explicit ids still import both
+    out2 = gs.import_message("m7", ["att0", "att1"], service=svc)
+    assert len(out2["files"]) == 2
+
+
 def test_import_attachment_runs_ocr_and_labels(env, monkeypatch):
     db = env
     pdf = b"%PDF-1.4 fake"

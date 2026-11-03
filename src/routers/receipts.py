@@ -678,6 +678,9 @@ async def reocr_receipt(receipt_id: int, body: Optional[ReocrRequest] = None):
     # for keys the new extraction left empty. update_receipt drops None keys
     # so stale values from the previous OCR don't survive.
     metadata_patch = {f: meta.get(f) for f in METADATA_FIELDS}
+    # A successful re-run clears the previous attempt's failure marker (it is
+    # not a METADATA_FIELD, so it used to survive and keep the row flagged).
+    metadata_patch["error"] = None
 
     ok = await asyncio.to_thread(db.update_receipt, receipt_id, {}, metadata_patch)
     if not ok:

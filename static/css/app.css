@@ -921,8 +921,26 @@ tr.data-row:hover td {
   padding: 28px 32px;
   width: 380px;
   max-width: 90vw;
+  /* Never taller than the window: tall modals scroll inside, so the action
+     row can't end up off-screen. Boxes with their own scroll area (bbox,
+     statement detail, report edit) are flex columns and keep working. */
+  max-height: 92vh;
+  overflow-y: auto;
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--border);
+}
+/* Shared action row (re-OCR, Gmail finder, …): right-aligned, natural-width
+   buttons. Was referenced by markup but never defined. */
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+.modal-actions .btn {
+  flex: 0 0 auto;
+  width: auto;
 }
 .modal-title {
   font-size: 16px;
@@ -2597,6 +2615,15 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  table-layout: fixed;
+}
+.report-edit-table th:nth-child(1) { width: 86px; }
+.report-edit-table th:nth-child(2) { width: 168px; }
+.report-edit-table th:nth-child(3) { width: 78px; }
+.report-edit-table th:nth-child(5) { width: 150px; }
+.report-edit-table th:nth-child(6) { width: 104px; }
+.report-edit-table tbody td {
+  overflow: hidden;
 }
 .report-edit-table thead th {
   position: sticky;
@@ -3052,7 +3079,7 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
 
 /* ─── Statement detail modal (browse all parsed transactions) ────────── */
 .stmt-detail-box {
-  width: 880px;
+  width: min(980px, 94vw);
   max-width: 94vw;
   max-height: 88vh;
   display: flex;
@@ -3144,7 +3171,7 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
 }
 .stmt-detail-table .col-desc {
   font-weight: 500;
-  max-width: 280px;
+  max-width: 210px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3170,7 +3197,7 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
 .stmt-detail-table .col-city {
   color: var(--text-3);
   font-size: 11.5px;
-  max-width: 140px;
+  max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3179,6 +3206,20 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   color: var(--green);
   font-weight: 600;
   font-size: 11.5px;
+}
+/* Give the match and comment columns room: vendor names wrapped to three
+   lines and "+ comment" broke across two. */
+.stmt-detail-table td:nth-child(6) {
+  min-width: 140px;
+}
+.stmt-detail-table .col-note {
+  min-width: 110px;
+}
+.stmt-note-trigger.stmt-note-add {
+  white-space: nowrap;
+}
+.stmt-cat-select {
+  width: 128px;
 }
 .stmt-detail-table .col-match.unmatched {
   color: var(--text-3);
@@ -3194,12 +3235,22 @@ body.recon-drag-in-flight .recon-txn.good-match::after {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
+  flex-shrink: 0;
+}
+/* Buttons keep their natural width (the primary used to stretch across the
+   spacer) and the anchor-styled Download sits on the same baseline. */
+.stmt-detail-foot .btn {
+  flex: 0 0 auto;
+  width: auto;
+  display: inline-flex;
+  align-items: center;
 }
 .stmt-detail-sum {
   font-size: 12.5px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .stmt-detail-sum strong {
   color: var(--text);

@@ -81,6 +81,17 @@ def test_reocr_overrides_reach_pipeline_and_are_not_persisted(client, monkeypatc
     assert (settings.structure_backend or "ollama") != "anthropic"
 
 
+def test_reocr_success_clears_previous_error(client, monkeypatch):
+    c, receipts, database = client
+    p = receipts / "bad.png"
+    Image.new("RGB", (50, 50), "white").save(p)
+    rid = database.save_receipt("bad.png", str(p), {"vendor_name": "Unknown", "error": "cannot identify image file"})
+    _stub(monkeypatch, {})
+    assert c.post(f"/api/receipts/{rid}/reocr").status_code == 200
+    meta = json.loads(database.get_receipt_by_id(rid)["metadata"])
+    assert "error" not in meta and meta["vendor_name"] == "NEW"
+
+
 def test_reocr_rejects_unknown_backend(client, monkeypatch):
     c, receipts, database = client
     rid = _row(receipts, database)
